@@ -1,0 +1,15 @@
+{
+  "name": "frisco",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "web": "node build.mjs && npx --yes serve@14.2.6 dist -l 3000",
+    "db": "npm --prefix server run db",
+    "migrate": "npm --prefix server run migrate:local",
+    "seed": "npm --prefix server run seed:local",
+    "enrol:owner": "npm --prefix server run enrol:owner:local",
+    "api": "npm --prefix server run start:local",
+    "test": "npm --prefix server test"
+  }
+}

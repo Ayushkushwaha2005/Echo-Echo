@@ -1,0 +1,34 @@
+{
+  "name": "@quad/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "migrate": "node src/db/migrate.js",
+    "seed": "node src/db/seed.js",
+    "test": "node runtests.mjs",
+    "test:init": "node test/helpers/db.mjs init",
+    "enrol:owner": "node src/db/enrol-owner.js",
+    "db": "node scripts/dev-db.mjs",
+    "start:local": "node --env-file=.env src/index.js",
+    "migrate:local": "node --env-file=.env src/db/migrate.js",
+    "seed:local": "node --env-file=.env src/db/seed.js",
+    "enrol:owner:local": "node --env-file=.env src/db/enrol-owner.js",
+    "check:db": "node --env-file=.env scripts/ops-check.mjs db",
+    "check:storage": "node --env-file=.env scripts/ops-check.mjs storage",
+    "check:email": "node --env-file=.env scripts/ops-check.mjs email",
+    "admin:invite":"node src/db/admin-passkey-invite.js",
+    "admin:invite:local": "node --env-file=.env src/db/admin-passkey-invite.js"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/multipart": "^9.0.1",
+    "@fastify/rate-limit": "^10.2.0",
+    "fastify": "^5.2.0",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "embedded-postgres": "^18.4.0-beta.17"
+  }
+}

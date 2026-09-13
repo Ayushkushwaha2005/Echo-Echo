@@ -1,0 +1,226 @@
+/* ==========================================================================
+   FRISCO — DESIGN TOKENS
+   The single source of truth for colour, type, space, radius, elevation.
+   Nothing downstream may declare a raw colour. Components read tokens only.
+   ========================================================================== */
+
+:root {
+  /* ---- Brand ramp: warm blush rose ------------------------------------- */
+  --rose-50:  #FDF1F3;
+  --rose-100: #FADDE2;
+  --rose-200: #F4C2CB;
+  --rose-300: #EA9BAB;
+  --rose-400: #DC6F87;
+  --rose-500: #C8425F;   /* primary action */
+  --rose-600: #AC3350;   /* pressed / text-on-cream */
+  --rose-700: #8A2740;
+
+  /* ---- Warm neutrals (hue-biased toward the rose, never pure grey) ------ */
+  --cream-50:  #FFFBF8;
+  --cream-100: #FFF6F1;
+  --cream-200: #F9EDE7;
+  --cream-300: #F0E0D9;
+  --cream-400: #E2CEC6;
+
+  --ink-900: #1A1416;   /* warm near-black */
+  --ink-800: #2A2124;
+  --ink-700: #3D3134;
+  --ink-500: #6E5D61;
+  --ink-400: #8C7A7E;
+
+  /* ---- Coral: the second accent. Used sparingly, never with rose ------- */
+  --coral-400: #F08A5D;
+  --coral-500: #E2703F;
+
+  /* ---- Semantic (separate from brand; never doubles as the accent) ----- */
+  --open-500:   #2E7D57;
+  --open-100:   #DFF0E7;
+  --warn-500:   #A8760A;
+  --warn-100:   #F8EED3;
+  --closed-500: #B03A2E;
+  --closed-100: #F8E2DE;
+  --veg-500:    #1F7A3D;
+  --nonveg-500: #8A3324;
+
+  /* ======================= SEMANTIC SURFACE TOKENS ======================= */
+  --bg:            var(--cream-100);
+  --bg-sunken:     var(--cream-200);
+  --surface:       #FFFFFF;
+  --surface-2:     var(--cream-50);
+  --surface-blush: var(--rose-50);
+  --surface-ink:   var(--ink-900);   /* inverted panels */
+
+  --text:          var(--ink-900);
+  --text-2:        var(--ink-700);
+  --text-muted:    var(--ink-500);
+  --text-faint:    var(--ink-400);
+  --text-on-rose:  #FFF7F8;
+  --text-on-ink:   var(--cream-100);
+
+  --line:          var(--cream-300);
+  --line-strong:   var(--cream-400);
+  --line-ink:      rgba(26,20,22,.14);
+
+  --accent:        var(--rose-500);
+  --accent-hover:  var(--rose-600);
+  --accent-soft:   var(--rose-100);
+  --accent-faint:  var(--rose-50);
+  --accent-text:   var(--rose-600);
+  --accent-ring:   rgba(200,66,95,.32);
+
+  --ok:      var(--open-500);   --ok-bg:     var(--open-100);
+  --warn:    var(--warn-500);   --warn-bg:   var(--warn-100);
+  --danger:  var(--closed-500); --danger-bg: var(--closed-100);
+
+  /* Campus motif — the dotted survey grid used behind poster surfaces */
+  --grid-dot: rgba(26,20,22,.10);
+
+  /* ---- Elevation: warm, low, never a generic grey blur ----------------- */
+  --shadow-1: 0 1px 2px rgba(74,44,50,.06), 0 1px 1px rgba(74,44,50,.04);
+  --shadow-2: 0 2px 6px rgba(74,44,50,.07), 0 6px 18px rgba(74,44,50,.06);
+  --shadow-3: 0 8px 26px rgba(74,44,50,.12), 0 2px 6px rgba(74,44,50,.06);
+  --shadow-sheet: 0 -10px 40px rgba(74,44,50,.18);
+  --shadow-press: inset 0 2px 4px rgba(74,44,50,.10);
+
+  /* ======================= TYPOGRAPHY =================================== */
+  --font-display: "Bricolage Grotesque", "Trebuchet MS", Georgia, serif;
+  --font-ui: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --t-hero:    clamp(2.6rem, 11vw, 4rem);
+  --t-display: clamp(2rem, 7.5vw, 2.75rem);
+  --t-h1:      1.6rem;
+  --t-h2:      1.22rem;
+  --t-h3:      1.02rem;
+  --t-body:    0.95rem;
+  --t-sm:      0.85rem;
+  --t-xs:      0.76rem;
+  --t-label:   0.67rem;   /* uppercase mono UI labels */
+
+  --lh-tight: 1.02;
+  --lh-snug:  1.22;
+  --lh-body:  1.55;
+  --ls-tight: -0.03em;
+  --ls-label: 0.12em;
+
+  /* ======================= SPACE (4pt) ================================== */
+  --s-1: 4px;   --s-2: 8px;   --s-3: 12px;  --s-4: 16px;
+  --s-5: 20px;  --s-6: 24px;  --s-7: 32px;  --s-8: 40px;
+  --s-9: 56px;  --s-10: 72px;
+
+  /* ======================= RADIUS ======================================= */
+  /* Deliberately varied by role — not one radius stamped on everything. */
+  --r-chip:   999px;   /* pills, chips, avatars */
+  --r-btn:    12px;    /* rectangular buttons */
+  --r-input:  12px;
+  --r-card:   18px;    /* content cards */
+  --r-tile:   14px;    /* dense tiles, list rows */
+  --r-sheet:  26px;    /* bottom sheets, hero blocks */
+  --r-sm:     8px;
+
+  /* ======================= MOTION ======================================= */
+  --e-out:   cubic-bezier(.22,.9,.28,1);
+  --e-in-out:cubic-bezier(.6,.02,.2,1);
+  --e-spring:cubic-bezier(.34,1.4,.5,1);
+  --d-fast:  140ms;
+  --d-base:  240ms;
+  --d-slow:  420ms;
+
+  /* ======================= LAYOUT ======================================= */
+  --app-max: 460px;      /* the mobile canvas — this is a phone product */
+  --nav-h: 68px;
+  --z-nav: 40; --z-sheet: 60; --z-toast: 80; --z-modal: 70;
+}
+
+/* ==========================================================================
+   DARK — a separately designed warm charcoal world, not an inversion.
+   Surfaces climb toward the rose; the accent desaturates so it reads as
+   "muted rose" rather than a neon pink on black.
+   ========================================================================== */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:            #141011;
+    --bg-sunken:     #100C0D;
+    --surface:       #1D1719;
+    --surface-2:     #241C1F;
+    --surface-blush: #2B1E23;
+    --surface-ink:   #2E2429;
+
+    --text:          #F6ECEA;
+    --text-2:        #E0D2D2;
+    --text-muted:    #A59497;
+    --text-faint:    #7E6E72;
+    --text-on-rose:  #21151A;
+    --text-on-ink:   #F6ECEA;
+
+    --line:          #302629;
+    --line-strong:   #3E3134;
+    --line-ink:      rgba(246,236,234,.16);
+
+    --accent:        #EE8CA3;
+    --accent-hover:  #F5A2B5;
+    --accent-soft:   #3A2229;
+    --accent-faint:  #2A1C21;
+    --accent-text:   #F097AC;
+    --accent-ring:   rgba(238,140,163,.34);
+
+    --coral-400:     #E89A72;
+    --coral-500:     #DE8557;
+
+    --ok:      #6FC49A;  --ok-bg:     #16291F;
+    --warn:    #DCAF52;  --warn-bg:   #2A2214;
+    --danger:  #E58579;  --danger-bg: #2E1A17;
+    --veg-500: #6FC49A;  --nonveg-500:#D8877A;
+
+    --grid-dot: rgba(246,236,234,.09);
+
+    --shadow-1: 0 1px 2px rgba(0,0,0,.45);
+    --shadow-2: 0 2px 8px rgba(0,0,0,.45), 0 8px 22px rgba(0,0,0,.35);
+    --shadow-3: 0 10px 30px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+    --shadow-sheet: 0 -10px 40px rgba(0,0,0,.6);
+    --shadow-press: inset 0 2px 4px rgba(0,0,0,.4);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg:            #141011;
+  --bg-sunken:     #100C0D;
+  --surface:       #1D1719;
+  --surface-2:     #241C1F;
+  --surface-blush: #2B1E23;
+  --surface-ink:   #2E2429;
+
+  --text:          #F6ECEA;
+  --text-2:        #E0D2D2;
+  --text-muted:    #A59497;
+  --text-faint:    #7E6E72;
+  --text-on-rose:  #21151A;
+  --text-on-ink:   #F6ECEA;
+
+  --line:          #302629;
+  --line-strong:   #3E3134;
+  --line-ink:      rgba(246,236,234,.16);
+
+  --accent:        #EE8CA3;
+  --accent-hover:  #F5A2B5;
+  --accent-soft:   #3A2229;
+  --accent-faint:  #2A1C21;
+  --accent-text:   #F097AC;
+  --accent-ring:   rgba(238,140,163,.34);
+
+  --coral-400:     #E89A72;
+  --coral-500:     #DE8557;
+
+  --ok:      #6FC49A;  --ok-bg:     #16291F;
+  --warn:    #DCAF52;  --warn-bg:   #2A2214;
+  --danger:  #E58579;  --danger-bg: #2E1A17;
+  --veg-500: #6FC49A;  --nonveg-500:#D8877A;
+
+  --grid-dot: rgba(246,236,234,.09);
+
+  --shadow-1: 0 1px 2px rgba(0,0,0,.45);
+  --shadow-2: 0 2px 8px rgba(0,0,0,.45), 0 8px 22px rgba(0,0,0,.35);
+  --shadow-3: 0 10px 30px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+  --shadow-sheet: 0 -10px 40px rgba(0,0,0,.6);
+  --shadow-press: inset 0 2px 4px rgba(0,0,0,.4);
+}

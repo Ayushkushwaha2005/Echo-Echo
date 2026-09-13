@@ -1,0 +1,510 @@
+/* ==========================================================================
+   FRISCO — WEB LAYER  (additive only)
+   Desktop/tablet layout primitives for the website, admin portal and
+   shopkeeper portal. This file introduces NEW class names only. It never
+   redefines a class from components.css, so the approved app rendering is
+   bit-for-bit unaffected. Every value still reads from tokens.css.
+   ========================================================================== */
+
+/* ---------- Web frame: rail + content ------------------------------------ */
+.appframe {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 1fr;
+  background: var(--bg);
+}
+.rail { display: none; }
+
+@media (min-width: 1024px) {
+  .appframe { grid-template-columns: 232px 1fr; }
+  .appframe.narrow-rail { grid-template-columns: 76px 1fr; }
+  .rail {
+    display: flex; flex-direction: column; gap: var(--s-2);
+    padding: var(--s-5) var(--s-4);
+    border-right: 1px solid var(--line);
+    background: var(--surface);
+    position: sticky; top: 0; height: 100dvh; overflow-y: auto;
+  }
+}
+.rail-brand { display: flex; align-items: center; gap: 9px; padding: 0 var(--s-2) var(--s-5); }
+.rail-brand .bm {
+  font-family: var(--font-display); font-weight: 800; font-size: 1.3rem;
+  letter-spacing: -.04em; color: var(--text);
+}
+.rail-brand .bm-sub {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--text-faint); display: block; margin-top: -2px;
+}
+.railbtn {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: 10px var(--s-3); border-radius: var(--r-btn);
+  color: var(--text-2); font-size: var(--t-sm); font-weight: 700;
+  text-align: left; width: 100%;
+  transition: background var(--d-fast), color var(--d-fast);
+}
+.railbtn svg { width: 19px; height: 19px; flex: none; }
+.railbtn:hover { background: var(--bg-sunken); color: var(--text); }
+.railbtn[aria-current="page"] { background: var(--accent-soft); color: var(--accent-text); }
+.railbtn .rb-count {
+  margin-left: auto; font-family: var(--font-mono); font-size: var(--t-label);
+  background: var(--accent); color: var(--text-on-rose);
+  padding: 2px 7px; border-radius: var(--r-chip);
+}
+.rail-sep { height: 1px; background: var(--line); margin: var(--s-3) var(--s-2); }
+.rail-foot { margin-top: auto; padding-top: var(--s-4); }
+
+/* ---------- Page canvas --------------------------------------------------- */
+.webmain { min-width: 0; display: flex; flex-direction: column; }
+.webhead {
+  position: sticky; top: 0; z-index: 30;
+  display: flex; align-items: center; gap: var(--s-4);
+  padding: var(--s-4) var(--s-5);
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.webhead-title { display: flex; flex-direction: column; min-width: 0; }
+.webbody { padding: var(--s-5); }
+@media (min-width: 1024px) { .webbody { padding: var(--s-6) var(--s-7); } }
+.wrapmax { max-width: 1180px; margin: 0 auto; width: 100%; }
+.wrapnarrow { max-width: 760px; margin: 0 auto; width: 100%; }
+
+/* Mobile: the web surfaces fall back to the app's own bottom nav pattern */
+.webnav-mobile { display: flex; }
+@media (min-width: 1024px) { .webnav-mobile { display: none; } }
+/* ---------- Responsive grids --------------------------------------------- */
+.grid-auto { display: grid; gap: var(--s-4); grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.grid-auto-sm { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.grid-kpi { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+/* Two tiles a row on a phone instead of one, so a dashboard is not a long scroll of single numbers. */
+@media (max-width: 520px) { .grid-kpi { grid-template-columns: 1fr 1fr; } }
+/* A short explanatory note directly under a section label. */
+.card > .t-label + .t-xs.faint { margin: 2px 0 var(--s-3); }
+
+/* Menu + order pages: content column with a sticky companion panel */
+.split-main { display: grid; gap: var(--s-5); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 900px)  { .split-main { grid-template-columns: 1fr 320px; gap: var(--s-6); } }
+@media (min-width: 1280px) { .split-main { grid-template-columns: 1fr 360px; } }
+.sticky-panel { position: sticky; top: calc(var(--s-7) + 40px); display: flex; flex-direction: column; gap: var(--s-4); }
+
+/* Menu category rail (desktop only) */
+.catrail { display: none; }
+@media (min-width: 1024px) {
+  .catrail {
+    display: flex; flex-direction: column; gap: 2px;
+    position: sticky; top: calc(var(--s-7) + 40px);
+  }
+  .catrail button {
+    text-align: left; padding: 8px var(--s-3); border-radius: var(--r-btn);
+    font-size: var(--t-sm); font-weight: 700; color: var(--text-muted);
+  }
+  .catrail button:hover { background: var(--bg-sunken); color: var(--text); }
+  .catrail button[aria-pressed="true"] { background: var(--surface-blush); color: var(--accent-text); }
+  .menu-3col { display: grid; grid-template-columns: 180px 1fr; gap: var(--s-6); align-items: start; }
+}
+
+/* ---------- Data table (admin / shop) ------------------------------------ */
+.dtable-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
+.dtable { width: 100%; border-collapse: collapse; min-width: 640px; }
+.dtable th {
+  text-align: left; padding: 11px var(--s-4);
+  font-family: var(--font-mono); font-size: var(--t-label); letter-spacing: var(--ls-label);
+  text-transform: uppercase; color: var(--text-muted); font-weight: 500;
+  background: var(--bg-sunken); border-bottom: 1px solid var(--line);
+  white-space: nowrap; position: sticky; top: 0;
+}
+.dtable td { padding: 12px var(--s-4); border-bottom: 1px solid var(--line); vertical-align: middle; font-size: var(--t-sm); }
+.dtable tbody tr:last-child td { border-bottom: 0; }
+.dtable tbody tr:hover { background: var(--bg-sunken); }
+.dtable .num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.dtable .actions { display: flex; gap: var(--s-2); justify-content: flex-end; }
+.rowmuted td { opacity: .55; }
+
+/* ---------- Forms --------------------------------------------------------- */
+.formgrid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; }
+@media (min-width: 720px) { .formgrid.two { grid-template-columns: 1fr 1fr; } }
+.formrow { display: flex; flex-direction: column; gap: 6px; }
+.formrow label { font-family: var(--font-mono); font-size: var(--t-label); letter-spacing: var(--ls-label); text-transform: uppercase; color: var(--text-muted); }
+.formrow .hint { font-size: var(--t-xs); color: var(--text-faint); }
+select.input { appearance: none; background-image: none; }
+textarea.input { resize: vertical; min-height: 72px; }
+
+/* Segmented control */
+.seg { display: inline-flex; background: var(--bg-sunken); padding: 3px; border-radius: var(--r-chip); gap: 2px; }
+.seg button {
+  padding: 7px 15px; border-radius: var(--r-chip); font-size: var(--t-sm);
+  font-weight: 700; color: var(--text-muted); white-space: nowrap;
+}
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-1); }
+
+/* ---------- Modal (centred, for admin CRUD) ------------------------------- */
+.modalwrap { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-4); }
+.modalwrap .scrim-fixed { position: absolute; inset: 0; background: rgba(26,20,22,.55); backdrop-filter: blur(3px); animation: fade var(--d-base) var(--e-out) both; }
+.modal {
+  position: relative; width: 100%; max-width: 560px; max-height: 88dvh;
+  background: var(--bg); border-radius: var(--r-sheet); box-shadow: var(--shadow-3);
+  display: flex; flex-direction: column; overflow: hidden;
+  animation: modalin var(--d-base) var(--e-out) both;
+}
+@keyframes modalin { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+.modal-head { padding: var(--s-5) var(--s-5) var(--s-3); display: flex; align-items: flex-start; gap: var(--s-3); }
+.modal-body { padding: 0 var(--s-5) var(--s-5); overflow-y: auto; display: flex; flex-direction: column; gap: var(--s-4); }
+.modal-foot { padding: var(--s-4) var(--s-5); border-top: 1px solid var(--line); background: var(--surface); display: flex; gap: var(--s-3); justify-content: flex-end; }
+
+/* ---------- Location tree ------------------------------------------------- */
+.tree { display: flex; flex-direction: column; gap: 2px; }
+.treenode {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: 9px var(--s-3); border-radius: var(--r-btn); width: 100%; text-align: left;
+  transition: background var(--d-fast);
+}
+.treenode:hover { background: var(--bg-sunken); }
+.treenode[aria-selected="true"] { background: var(--surface-blush); }
+.treenode .tw { width: 20px; display: grid; place-items: center; color: var(--text-faint); flex: none; }
+.tree-kind {
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--text-faint);
+  border: 1px solid var(--line-strong); padding: 1px 6px; border-radius: var(--r-chip);
+}
+.tree-children { padding-left: var(--s-5); border-left: 1px dashed var(--line-strong); margin-left: 15px; display: flex; flex-direction: column; gap: 2px; }
+
+/* Breadcrumb for the picked location */
+.crumb { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.crumb span { font-size: var(--t-sm); font-weight: 700; }
+.crumb i { color: var(--text-faint); font-style: normal; }
+
+/* ---------- Login surfaces (admin / shop have their own front door) ------- */
+.loginwrap { min-height: 100dvh; display: grid; grid-template-columns: 1fr; }
+@media (min-width: 900px) { .loginwrap { grid-template-columns: 1.05fr .95fr; } }
+.login-poster {
+  display: none; position: relative; overflow: hidden;
+  background: var(--surface-blush); padding: var(--s-9) var(--s-8);
+  flex-direction: column; justify-content: flex-end; gap: var(--s-4);
+}
+@media (min-width: 900px) { .login-poster { display: flex; } }
+.login-form { display: flex; flex-direction: column; justify-content: center; padding: var(--s-7) var(--s-5); background: var(--bg); }
+.login-card { width: 100%; max-width: 380px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--s-5); }
+.userpick {
+  display: flex; align-items: center; gap: var(--s-3); width: 100%; text-align: left;
+  padding: var(--s-3) var(--s-4); border-radius: var(--r-tile);
+  border: 1.5px solid var(--line); background: var(--surface);
+  transition: border-color var(--d-fast), background var(--d-fast);
+}
+.userpick:hover { border-color: var(--accent); background: var(--accent-faint); }
+
+/* ---------- Status board (shopkeeper, tablet-first) ---------------------- */
+.board { display: grid; gap: var(--s-4); grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 760px)  { .board { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 1180px) { .board { grid-template-columns: repeat(4, 1fr); } }
+.boardcol { display: flex; flex-direction: column; gap: var(--s-3); min-width: 0; }
+.boardcol-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-2);
+  padding: 10px var(--s-3); border-radius: var(--r-tile);
+  background: var(--surface); border: 1px solid var(--line);
+  position: sticky; top: calc(var(--s-6) + 44px); z-index: 5;
+}
+.boardcol-head .n {
+  font-family: var(--font-display); font-weight: 800; font-size: 1.15rem;
+  letter-spacing: -.03em; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Permission denial (visible proof of server-side enforcement) -- */
+.denied {
+  display: flex; gap: var(--s-3); align-items: flex-start;
+  padding: var(--s-4); border-radius: var(--r-tile);
+  background: var(--danger-bg); border: 1px solid var(--danger);
+}
+.auditline {
+  display: grid; grid-template-columns: auto auto 1fr auto; gap: var(--s-3);
+  padding: 7px var(--s-3); border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono); font-size: var(--t-xs); align-items: center;
+}
+.auditline:last-child { border-bottom: 0; }
+
+/* ---------- Live location ------------------------------------------------- */
+.geopanel {
+  position: relative; overflow: hidden;
+  border-radius: var(--r-card); border: 1px solid var(--line);
+  background: var(--surface); padding: var(--s-5);
+  display: flex; flex-direction: column; gap: var(--s-3); align-items: center; text-align: center;
+}
+.geopulse {
+  width: 66px; height: 66px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--accent-text); font-size: 1.6rem;
+  position: relative;
+}
+.geopulse.searching::after {
+  content: ""; position: absolute; inset: -8px; border-radius: 50%;
+  border: 2px solid var(--accent); opacity: .5;
+  animation: ripple 1.6s var(--e-out) infinite;
+}
+@keyframes ripple { from { transform: scale(.85); opacity: .55 } to { transform: scale(1.25); opacity: 0 } }
+
+/* Campus mini-map: schematic, not a literal map ---------------------------- */
+.minimap { width: 100%; border-radius: var(--r-tile); background: var(--bg-sunken); overflow: hidden; }
+.minimap svg { width: 100%; height: auto; display: block; }
+
+/* ---------- Utility ------------------------------------------------------- */
+.hide-mobile { display: none; }
+@media (min-width: 768px) { .hide-mobile { display: initial; } .hide-desktop { display: none; } }
+.scroll-y { overflow-y: auto; }
+.divide > * + * { border-top: 1px solid var(--line); }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* ---------- Food photos (additive) ---------------------------------------
+   An item with a photo renders it inside the SAME .item-thumb box the app
+   already uses; an item without one keeps the emoji glyph exactly as before.
+   Nothing above this block is modified.                                    */
+.thumb-photo { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-drop {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-3); border-radius: var(--r-tile);
+  border: 1.5px dashed var(--line-strong); background: var(--bg-sunken);
+  cursor: pointer; transition: border-color var(--d-fast), background var(--d-fast);
+}
+.photo-drop:hover { border-color: var(--accent); background: var(--accent-faint); }
+.photo-preview {
+  width: 68px; height: 68px; border-radius: var(--r-tile); flex: none;
+  overflow: hidden; background: var(--surface); display: grid; place-items: center;
+  font-size: 1.7rem; border: 1px solid var(--line);
+}
+.photo-preview img { width: 100%; height: 100%; object-fit: cover; }
+
+/* ---------- Auth surfaces ------------------------------------------------ */
+.authnote {
+  display: flex; gap: var(--s-3); align-items: flex-start;
+  padding: var(--s-3) var(--s-4); border-radius: var(--r-tile);
+  background: var(--bg-sunken); border: 1px dashed var(--line-strong);
+}
+.authnote code {
+  font-family: var(--font-mono); font-size: .78rem;
+  background: var(--surface); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line);
+}
+
+/* ==========================================================================
+   QUAD — LOGIN GATEWAY
+   Additive: new class names only, nothing above is redefined. Uses the
+   existing tokens so the gateway is recognisably the same product as the
+   surfaces behind it.
+   ========================================================================== */
+.auth-screen{min-height:100dvh;display:grid;place-items:center;padding:24px;
+  background:var(--bg,#FFF6F1)}
+.auth-card{width:100%;max-width:380px;background:var(--surface,#fff);
+  border:1px solid var(--line,rgba(28,25,23,.09));border-radius:18px;
+  padding:32px 28px 26px;display:flex;flex-direction:column;gap:14px;
+  box-shadow:0 1px 2px rgba(28,25,23,.04),0 12px 32px -12px rgba(28,25,23,.10)}
+.auth-title{font-family:'Bricolage Grotesque',system-ui,sans-serif;font-weight:800;
+  font-size:26px;letter-spacing:-.02em;margin:10px 0 0;color:var(--text,#1C1917)}
+.auth-sub{margin:0;font-size:14px;line-height:1.5;color:var(--text-2,#6B6360)}
+.auth-field{display:flex;flex-direction:column;gap:7px;margin-top:6px}
+.auth-label{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--text-muted,#6B6360)}
+.auth-phone{display:flex;align-items:center;border:1px solid var(--line,rgba(28,25,23,.14));
+  border-radius:11px;overflow:hidden;background:var(--bg-sunken,#FFFBF8)}
+.auth-phone:focus-within{border-color:var(--rose-500,#E0567A);
+  box-shadow:0 0 0 3px rgba(224,86,122,.13)}
+.auth-cc{padding:0 12px;font-family:'DM Mono',monospace;font-size:15px;
+  color:var(--text-muted,#6B6360);border-right:1px solid var(--line,rgba(28,25,23,.10));
+  align-self:stretch;display:flex;align-items:center}
+.auth-input{flex:1;border:0;background:transparent;padding:13px 12px;font:inherit;
+  font-size:16px;color:var(--text,#1C1917);outline:none;min-width:0}
+.auth-code{border:1px solid var(--line,rgba(28,25,23,.14));border-radius:11px;
+  background:var(--bg-sunken,#FFFBF8);font-family:'DM Mono',monospace;
+  font-size:26px;letter-spacing:.42em;text-align:center;padding:14px 12px}
+.auth-code:focus{border-color:var(--rose-500,#E0567A);
+  box-shadow:0 0 0 3px rgba(224,86,122,.13)}
+.auth-btn{margin-top:8px;border:0;border-radius:11px;padding:14px;font:inherit;
+  font-weight:700;font-size:15px;cursor:pointer;color:#fff;
+  background:var(--ink-900,#1C1917);transition:opacity .15s}
+.auth-btn:hover{opacity:.88}
+.auth-btn:disabled{opacity:.5;cursor:default}
+.auth-error{margin:0;font-size:13.5px;line-height:1.45;color:#A8324E;
+  background:rgba(224,86,122,.08);border:1px solid rgba(224,86,122,.20);
+  border-radius:9px;padding:10px 12px}
+.auth-fine{margin:0;font-size:12.5px;color:var(--text-faint,#8A827E);text-align:center}
+.auth-alt{display:flex;justify-content:space-between;gap:12px;margin-top:2px}
+.auth-link{border:0;background:none;padding:4px 0;font:inherit;font-size:13px;
+  font-weight:600;color:var(--text-2,#6B6360);cursor:pointer;text-decoration:underline;
+  text-underline-offset:3px}
+.auth-link:disabled{opacity:.45;cursor:default;text-decoration:none}
+.auth-link:not(:disabled):hover{color:var(--rose-600,#C7405F)}
+/* Truthful unavailable state — a configuration notice, not a dead form. */
+.auth-config{border:1px solid var(--line,rgba(28,25,23,.10));border-radius:11px;
+  background:var(--bg-sunken,#FFFBF8);padding:13px 14px;display:flex;
+  flex-direction:column;gap:5px}
+.auth-config-title{margin:0 0 3px;font-size:11.5px;font-weight:700;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--text-faint,#8A827E)}
+.auth-config code{font-family:'DM Mono',monospace;font-size:12.5px;
+  color:var(--text-2,#3B3633);word-break:break-all}
+@media (prefers-color-scheme:dark){
+  .auth-screen{background:var(--bg,#17140F)}
+  .auth-btn{background:var(--rose-500,#E0567A)}
+}
+
+/* Enrolment code entry — grouped like the code it displays, so a code read
+   aloud is easy to check as it is typed. */
+.auth-enrol{border:1px solid var(--line,rgba(28,25,23,.14));border-radius:11px;
+  background:var(--bg-sunken,#FFFBF8);font-family:'DM Mono',monospace;
+  font-size:19px;letter-spacing:.14em;text-align:center;text-transform:uppercase;
+  padding:13px 12px}
+.auth-enrol:focus{border-color:var(--rose-500,#E0567A);
+  box-shadow:0 0 0 3px rgba(224,86,122,.13)}
+.enrolcode{font-family:'DM Mono',monospace;font-size:26px;letter-spacing:.16em;
+  text-align:center;padding:16px 12px;border-radius:12px;
+  background:var(--bg-sunken,#FFFBF8);border:1px dashed var(--rose-500,#E0567A);
+  color:var(--text,#1C1917);user-select:all}
+
+/* ==========================================================================
+   CUSTOMER WEBSITE FRAME  (additive — scoped to .site)
+   The customer screens keep their components exactly; this section only
+   changes the frame around them: a real page with a header instead of a
+   phone canvas on a stage. Desktop gets width (grids, a side column);
+   below 1024px it falls back to the app's own bottom-nav layout.
+   ========================================================================== */
+.site { min-height: 100dvh; display: flex; flex-direction: column; background: var(--bg); }
+
+/* ---------- header ------------------------------------------------------- */
+.site-head {
+  position: sticky; top: 0; z-index: var(--z-nav);
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+.site-head-in {
+  max-width: 1180px; margin: 0 auto; height: 60px;
+  display: flex; align-items: center; gap: var(--s-6);
+  padding: 0 var(--s-4);
+}
+.site-brand {
+  display: flex; align-items: center; gap: 9px;
+  font-family: var(--font-display); font-weight: 800; font-size: 1.15rem;
+  letter-spacing: -.03em; color: var(--text); white-space: nowrap;
+}
+.site-nav { display: none; gap: 2px; }
+.site-nav button {
+  padding: 8px 14px; border-radius: var(--r-chip);
+  font-size: var(--t-sm); font-weight: 700; color: var(--text-muted);
+  transition: color var(--d-fast), background var(--d-fast);
+}
+.site-nav button:hover { color: var(--text); }
+.site-nav button[aria-current="page"] { color: var(--text); background: var(--bg-sunken); }
+.site-actions { margin-left: auto; display: flex; align-items: center; gap: var(--s-2); }
+.site-icon {
+  width: 38px; height: 38px; border-radius: var(--r-chip);
+  display: grid; place-items: center; color: var(--text-2);
+  border: 1px solid var(--line); background: var(--surface);
+}
+.site-icon:hover { color: var(--text); border-color: var(--line-strong); }
+.site-cartbtn {
+  display: flex; align-items: center; gap: var(--s-2);
+  padding: 8px 14px 8px 12px; border-radius: var(--r-chip);
+  background: var(--surface-ink); color: var(--text-on-ink);
+  font-size: var(--t-sm); font-weight: 700;
+}
+.site-cartbtn svg { width: 17px; height: 17px; }
+.site-cartbtn .count {
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: var(--r-chip);
+  background: var(--accent); color: var(--text-on-rose);
+  font-size: 11px; display: grid; place-items: center;
+}
+
+/* ---------- page --------------------------------------------------------- */
+.site-main { flex: 1; width: 100%; max-width: 1180px; margin: 0 auto; }
+/* The footer below already clears the fixed bottom nav, so the screen itself
+   only needs ordinary breathing room; reserving the nav height in both places
+   left a doubled empty band at the bottom of every mobile page. */
+.site .screen { overflow: visible; padding-bottom: var(--s-6); }
+/* A list filter shows which view is active. */
+.btn-ghost[aria-pressed="true"] { background: var(--bg-sunken); color: var(--text); }
+.site .topbar { position: static; background: transparent; }
+.site .bottomnav { position: fixed; }
+.site .scrim { position: fixed; }
+.site .sheet { position: fixed; }
+.site .toast { position: fixed; }
+.site-foot {
+  border-top: 1px solid var(--line);
+  padding: var(--s-6) var(--s-4) calc(var(--nav-h) + var(--s-6));
+  text-align: center; color: var(--text-faint); font-size: var(--t-xs);
+}
+.site .only-lg { display: none; }
+
+/* Layout helpers used by the customer screens. Single column on phones. */
+.cafgrid, .menugrid, .livegrid { display: grid; gap: var(--s-3); }
+.menugrid { gap: 0; }
+.site-split { display: grid; gap: var(--s-4); align-items: start; }
+.narrow { max-width: 640px; margin-inline: auto; width: 100%; }
+.reading { max-width: 760px; margin-inline: auto; width: 100%; }
+
+@media (min-width: 720px) {
+  .cafgrid { grid-template-columns: repeat(2, 1fr); gap: var(--s-4); }
+  .livegrid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (min-width: 1024px) {
+  .site-head-in { height: 68px; padding: 0 var(--s-6); }
+  .site-nav { display: flex; }
+  .site .bottomnav { display: none; }
+  .site .only-lg { display: revert; }
+  .site .hide-lg { display: none !important; }
+  .site .screen { padding-bottom: var(--s-9); }
+  .site .pad { padding-inline: var(--s-6); }
+  .site .topbar { padding: var(--s-7) var(--s-6) var(--s-4); }
+  .site .topbar .t-h2 { font-size: var(--t-h1); }
+  .site-foot { padding-bottom: var(--s-6); }
+
+  .cafgrid { grid-template-columns: repeat(3, 1fr); }
+  .menugrid { grid-template-columns: 1fr 1fr; column-gap: var(--s-7); }
+  .menugrid > .item:nth-last-child(2):nth-child(odd) { border-bottom: 0; }
+  .site-split { grid-template-columns: minmax(0, 1fr) 360px; gap: var(--s-6); }
+  .site-split > aside { position: sticky; top: calc(68px + var(--s-5)); }
+  .site-split > aside .actionbar { position: static; background: none; padding: 0; }
+  .site .actionbar.cart-mobile { display: none; }
+
+  /* Heroes are page-width banners with the same tint and type. */
+  .site .poster.hero-band { border-radius: var(--r-sheet) !important; margin: var(--s-6) var(--s-6) 0; padding: var(--s-7) var(--s-7) var(--s-7); }
+  .site .welcome { display: grid !important; grid-template-columns: 1.25fr .75fr; gap: var(--s-6); padding: var(--s-7) var(--s-6) var(--s-9); min-height: calc(100dvh - 68px - 70px); }
+  .site .welcome > .poster { border-radius: var(--r-sheet) !important; }
+  .site .welcome > .welcome-cta { align-self: center; padding: var(--s-6) !important; }
+
+  /* Sheets become centred dialogs. */
+  .site .sheet {
+    left: 50%; right: auto; top: 50%; bottom: auto;
+    width: min(560px, 92vw); max-height: 82vh;
+    border-radius: var(--r-sheet);
+    transform: translate(-50%, -50%);
+    animation: dialogin var(--d-base) var(--e-out) both;
+  }
+  .site .sheet-grab { display: none; }
+  .site .sheet-foot { border-radius: 0 0 var(--r-sheet) var(--r-sheet); }
+  .site .toast { bottom: var(--s-7); }
+}
+@keyframes dialogin {
+  from { opacity: 0; transform: translate(-50%, -46%); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+/* Icons in the slots emoji glyphs used to fill, and the dish monogram tile. */
+.site .ico { display: inline-grid; place-items: center; flex: none; color: var(--accent-text); }
+.site .ico svg { width: 100%; height: 100%; }
+.site .toast .ico { color: inherit; }
+.site .adminrow .ico, .site .tile .ico { color: var(--text-2); }
+.site .empty-art .ico { color: var(--accent-text); }
+.site .loccard[aria-pressed="true"] .ico { color: inherit; }
+.site .campusnote .ico { margin-top: 1px; }
+.site .dish-mono {
+  font-family: var(--font-display); font-weight: 800; font-size: 1.2rem;
+  letter-spacing: -.03em; color: var(--accent-text); opacity: .9;
+}
+.site .item-thumb { background: var(--surface-blush); }
+
+@media (min-width: 1024px) {
+  .site .welcome > .welcome-cta {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r-card); box-shadow: var(--shadow-1);
+  }
+}
+@media (min-width: 1024px) {
+  .site .partner-hero { border-radius: var(--r-sheet); margin: var(--s-6) var(--s-6) 0; }
+}
+/* On phones the status card (and its one action) comes before the explainer. */
+@media (max-width: 1023.98px) { .site .site-split > aside.first-mobile { order: -1; } }

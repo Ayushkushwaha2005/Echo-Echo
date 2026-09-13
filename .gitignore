@@ -1,0 +1,11 @@
+# dependencies and local state
+node_modules/
+server/var/
+*.log
+# secrets: only the documented template is tracked
+.env
+.env.*
+!.env.example
+# build output is reproducible from `node build.mjs`
+dist/
+!prototype/dist/

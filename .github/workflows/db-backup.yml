@@ -1,0 +1,53 @@
+# Daily off-site PostgreSQL backup: Neon -> encrypted dump -> Backblaze B2.
+#
+# Neon Free keeps only 6 hours of history, which is not a backup. This job
+# takes a logical dump every day, encrypts it with a passphrase only you hold,
+# and uploads it to a SEPARATE private B2 bucket.
+#
+# Repository secrets required (Settings -> Secrets and variables -> Actions):
+#   BACKUP_DATABASE_URL      Neon DIRECT connection string, sslmode=require
+#   BACKUP_PASSPHRASE        long random passphrase (store it in your password manager too)
+#   B2_BACKUP_BUCKET         e.g. echoecho-prod-backups (private, separate from assets)
+#   B2_BACKUP_KEY_ID         application key restricted to that bucket
+#   B2_BACKUP_APP_KEY
+#   B2_BACKUP_ENDPOINT       e.g. https://s3.us-west-004.backblazeb2.com
+#   B2_BACKUP_REGION         e.g. us-west-004
+#
+# Cost: ~1-2 minutes per run. Private repos include 2,000 minutes/month and
+# jobs are blocked (not billed) at the quota without a payment method. Set a
+# B2 lifecycle rule on the backup bucket to keep 30 days of files.
+name: db-backup
+on:
+  schedule:
+    - cron: '30 21 * * *'   # 03:00 IST
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-17
+      - name: Dump, encrypt, upload
+        env:
+          DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.B2_BACKUP_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_BACKUP_APP_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.B2_BACKUP_REGION }}
+          ENDPOINT: ${{ secrets.B2_BACKUP_ENDPOINT }}
+          BUCKET: ${{ secrets.B2_BACKUP_BUCKET }}
+        run: |
+          set -euo pipefail
+          name="echoecho-$(date -u +%Y-%m-%dT%H%MZ).dump.gpg"
+          /usr/lib/postgresql/17/bin/pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL" \
+            | gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$name"
+          test -s "$name"
+          aws s3 cp "$name" "s3://$BUCKET/$name" --endpoint-url "$ENDPOINT" --only-show-errors
+          echo "uploaded $name ($(stat -c%s "$name") bytes)"
