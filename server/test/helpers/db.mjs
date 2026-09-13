@@ -335,7 +335,20 @@ export async function shutdownCluster() {
   await unlink(portFile).catch(() => {});
 }
 
+/* Some routes finish work after replying (notifyAsync writes a notification
+   in the background). The next test's TRUNCATE takes exclusive locks on every
+   table and can collide with that in-flight insert; Postgres resolves it as a
+   deadlock (40P01). Production never truncates, so retrying here is correct. */
 export async function truncateAll(pool) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await truncateOnce(pool); } catch (e) {
+      if (e.code !== '40P01' || attempt >= 5) throw e;
+      await new Promise((r) => setTimeout(r, 50 * attempt));
+    }
+  }
+}
+
+async function truncateOnce(pool) {
   await pool.query(`
     TRUNCATE audit_log, notification, support_message, support_case,
              refund_allocation, refund,
