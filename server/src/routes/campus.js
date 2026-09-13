@@ -9,6 +9,7 @@ import { authorize, can, BadRequest, NotFound, Conflict } from '../auth/rbac.js'
 import * as campus from '../services/campus.js';
 import { audit } from '../audit.js';
 import { assertRecentPasskey } from '../auth/passkey-policy.js';
+import { PLACE_TYPES, VERIFICATION_METHODS } from '../services/geo-import.js';
 
 const KINDS = ['campus', 'zone', 'building', 'floor', 'room', 'spot'];
 
@@ -103,12 +104,25 @@ export default async function campusRoutes(app) {
     }
   };
 
+  const geoFields = (b) => {
+    if (b.placeType !== undefined && b.placeType !== null && !PLACE_TYPES.includes(b.placeType)) {
+      throw BadRequest(`Type must be one of: ${PLACE_TYPES.join(', ')}`);
+    }
+    if (b.verificationMethod !== undefined && b.verificationMethod !== null && !VERIFICATION_METHODS.includes(b.verificationMethod)) {
+      throw BadRequest(`Verification method must be one of: ${VERIFICATION_METHODS.join(', ')}`);
+    }
+    if (b.gpsAccuracyM !== undefined && b.gpsAccuracyM !== null && !(Number(b.gpsAccuracyM) >= 0)) {
+      throw BadRequest('GPS accuracy must be a number of metres');
+    }
+  };
+
   app.post('/campus/nodes', async (req) => {
     authorize(req.actor, 'campus.create');
     const b = req.body || {};
     if (!b.name || !String(b.name).trim()) throw BadRequest('Give the location a name');
     if (!KINDS.includes(b.kind)) throw BadRequest(`Kind must be one of: ${KINDS.join(', ')}`);
     validCoords(b);
+    geoFields(b);
     /* The campus comes from the parent when there is one. */
     let campusId = b.campusSiteId || null;
     if (b.parentId) {
@@ -124,12 +138,13 @@ export default async function campusRoutes(app) {
     const row = await one(
       `INSERT INTO campus_node (parent_id, kind, name, detail, aliases, deliverable,
                                 delivery_enabled, lat, lng, radius_m, source, source_note, sort,
-                                campus_site_id, instructions)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'admin',$11,$12,$13,$14) RETURNING *`,
+                                campus_site_id, instructions, place_type, verification_method, gps_accuracy_m)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'admin',$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
       [b.parentId || null, b.kind, String(b.name).trim().slice(0, 120), b.detail || null,
        b.aliases || [], !!b.deliverable, b.deliveryEnabled !== false,
        b.lat ?? null, b.lng ?? null, b.radiusM ?? null, b.sourceNote || null, b.sort || 0,
-       campusId, b.instructions ? String(b.instructions).slice(0, 300) : null]);
+       campusId, b.instructions ? String(b.instructions).slice(0, 300) : null,
+       b.placeType ?? null, b.verificationMethod ?? (b.lat != null ? 'admin_entry' : null), b.gpsAccuracyM ?? null]);
     await audit(req, { action: 'campus.create', resource: 'campus_node', resourceId: row.id,
                        outcome: 'ok', detail: { name: row.name } });
     return row;
@@ -140,10 +155,12 @@ export default async function campusRoutes(app) {
     const b = req.body || {};
     if (b.kind !== undefined && !KINDS.includes(b.kind)) throw BadRequest('Unknown location kind');
     validCoords(b);
+    geoFields(b);
     const fields = { parent_id: b.parentId, name: b.name, detail: b.detail, aliases: b.aliases,
                      deliverable: b.deliverable, delivery_enabled: b.deliveryEnabled, kind: b.kind,
                      lat: b.lat, lng: b.lng, radius_m: b.radiusM, sort: b.sort, active: b.active,
-                     instructions: b.instructions, source_note: b.sourceNote };
+                     instructions: b.instructions, source_note: b.sourceNote,
+                     place_type: b.placeType, verification_method: b.verificationMethod, gps_accuracy_m: b.gpsAccuracyM };
     const set = [], vals = [];
     for (const [k, v] of Object.entries(fields)) {
       if (v !== undefined) { vals.push(v); set.push(`${k} = $${vals.length}`); }
@@ -154,6 +171,16 @@ export default async function campusRoutes(app) {
     if (b.deliverable === true && before.verification === 'pending') {
       throw Conflict('Confirm this location before enabling delivery to it',
         'It came from a public map and has not been checked on the ground. Use Confirm location.');
+    }
+    /* Moving a confirmed point changes where deliveries go and which side of
+       the boundary it is on: a fresh passkey and the evidence are required. */
+    const moved = (b.lat !== undefined && Number(b.lat) !== Number(before.lat)) ||
+                  (b.lng !== undefined && Number(b.lng) !== Number(before.lng));
+    if (moved && before.verification === 'confirmed' && before.lat != null) {
+      assertRecentPasskey(req.actor, 'moving a confirmed location');
+      if (!b.verificationMethod) {
+        throw BadRequest('Say how the new position was established', 'Choose a verification method, e.g. GPS on site.');
+      }
     }
     vals.push(req.params.id);
     const row = await one(
@@ -172,10 +199,14 @@ export default async function campusRoutes(app) {
     assertRecentPasskey(req.actor, 'confirming a delivery location');
     const note = String(req.body?.confirmation || '').trim();
     if (note.length < 10) throw BadRequest('Record how you confirmed this location', 'For example: visited 20 Sep, hand-over at the main entrance.');
+    const method = req.body?.verificationMethod || null;
+    if (method && !VERIFICATION_METHODS.includes(method)) throw BadRequest('Unknown verification method');
     const row = await one(
       `UPDATE campus_node SET verification = 'confirmed', verified_by = $2, verified_at = now(),
-              source_note = coalesce(source_note, '') || E'\nConfirmed: ' || $3
-        WHERE id = $1 AND verification = 'pending' RETURNING *`, [req.params.id, req.actor.id, note.slice(0, 500)]);
+              source_note = coalesce(source_note, '') || E'\nConfirmed: ' || $3,
+              verification_method = coalesce($4, verification_method,
+                                             CASE WHEN lat IS NOT NULL THEN 'admin_entry' END)
+        WHERE id = $1 AND verification = 'pending' RETURNING *`, [req.params.id, req.actor.id, note.slice(0, 500), method]);
     if (!row) throw Conflict('No pending location with that id');
     await audit(req, { action: 'campus.location.confirm', resource: 'campus_node', resourceId: row.id, outcome: 'ok',
                        detail: { name: row.name, confirmation: note } });

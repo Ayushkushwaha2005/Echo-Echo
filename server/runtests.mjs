@@ -36,6 +36,7 @@ const FILES = [
   ['settlement', 'test/reconciliation.test.mjs'],
   ['storage', 'test/storage.test.mjs'],
   ['campus', 'test/campus-config.test.mjs'],
+  ['campus', 'test/geodata.test.mjs'],
   ['config', 'test/config-safety.test.mjs'],
   ['schema', 'test/schema-contract.test.mjs'],
   ['persistence', 'test/persistence.test.mjs'],

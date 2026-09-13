@@ -30,6 +30,7 @@ import profileRoutes from './routes/profile.js';
 import trustRoutes from './routes/trust.js';
 import passkeyRoutes from './routes/passkeys.js';
 import adminAccessRoutes from './routes/admin-access.js';
+import geodataRoutes from './routes/geodata.js';
 
 const boot = assertBootable();
 if (!boot.ok) {
@@ -255,6 +256,7 @@ export function build() {
     await app.register(trustRoutes);
     await app.register(passkeyRoutes);
     await app.register(adminAccessRoutes);
+    await app.register(geodataRoutes);
 
     return app;
   })();
