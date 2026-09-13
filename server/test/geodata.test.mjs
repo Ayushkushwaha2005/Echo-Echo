@@ -271,3 +271,26 @@ test('a walked perimeter becomes a PROPOSAL, compared with the existing outline;
   assert.deepEqual(cmp.body.locationsThatChangeSides.map((x) => [x.name, x.inA, x.inB]), [['Test East Spot', true, false]]);
   assert.equal((await c.get(`/admin/boundaries/${imp.body.id}/compare?with=active`)).status, 404, 'nothing active to compare with yet');
 });
+
+/* ======================= launch readiness ================================ */
+
+test('launch readiness lists pending external dependencies honestly and leaks no secret', async () => {
+  const c = await admin();
+  const r = await c.get('/admin/readiness');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const byKey = Object.fromEntries(r.body.items.map((i) => [i.key, i]));
+  for (const k of ['domain', 'storage', 'email', 'boundary', 'delivery_points', 'pickups', 'backups', 'upes_delivery']) {
+    assert.equal(byKey[k].status, 'pending', `${k} is pending in a test environment`);
+  }
+  assert.equal(byKey.gateway.status, 'deferred');
+  assert.equal(byKey.gateway.blocking, false);
+  assert.ok(r.body.summary.blocking > 0);
+  const blob = JSON.stringify(r.body);
+  assert.ok(!blob.includes(process.env.COOKIE_SECRET), 'no secret value');
+  assert.ok(!/postgres:\/\//.test(blob), 'no connection string');
+
+  await confirmBoundary(c);
+  assert.equal((await c.get('/admin/readiness')).body.items.find((i) => i.key === 'boundary').status, 'done');
+  const stu = await as(await makeUser(pool, { phone: '+919900000303', name: 'Stu' }));
+  assert.equal((await stu.get('/admin/readiness')).status, 403);
+});

@@ -20,6 +20,7 @@ import { providerStatus } from '../config.js';
 import { audit } from '../audit.js';
 import { notifyAsync } from '../services/notify.js';
 import { livePolicy, depositBalance, partnerRating } from './trust.js';
+import { readiness } from '../services/readiness.js';
 
 export default async function adminRoutes(app) {
   app.get('/admin/users', async (req) => {
@@ -249,6 +250,12 @@ export default async function adminRoutes(app) {
   app.get('/admin/flags', async (req) => {
     authorize(req.actor, 'platform.read');
     return { flags: await allFlags(), providers: providerStatus() };
+  });
+
+  /* What still stands between this deployment and real students. */
+  app.get('/admin/readiness', async (req) => {
+    authorize(req.actor, 'platform.read');
+    return readiness();
   });
 
   app.put('/admin/flags/:key', async (req) => {

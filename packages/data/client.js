@@ -114,6 +114,8 @@ export const quad = {
   revokeAdminSessions: (id, reason) => post(`/admin/access/admins/${id}/sessions/revoke`, { reason }),
   confirmLocation: (id, confirmation, verificationMethod) => post(`/campus/nodes/${id}/confirm`, { confirmation, verificationMethod }),
 
+  readiness: () => get('/admin/readiness'),
+
   /* ---------- field geodata --------------------------------------------- */
   previewPoints: (campusId, body) => post(`/admin/campuses/${campusId}/points/preview`, body),
   importPoints: (campusId, body) => post(`/admin/campuses/${campusId}/points/import`, body),

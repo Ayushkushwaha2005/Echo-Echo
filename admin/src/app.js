@@ -1045,8 +1045,20 @@ async function scrSupport() {
 async function scrPlatform() {
   setTitle('Platform', 'Feature flags, fees and integration status.');
   head().innerHTML = '';
-  await panel(view(), () => quad.flags(), (d) => `
+  await panel(view(), async () => ({ ...(await quad.flags()), ready: await quad.readiness() }), (d) => `
     <section class="card card-pad">
+      <div class="between" style="flex-wrap:wrap;gap:8px">
+        <h2 class="t-label">Launch readiness</h2>
+        <span class="t-sm">${d.ready.summary.done} done · <b>${d.ready.summary.blocking}</b> blocking · ${d.ready.summary.pending - d.ready.summary.blocking} other pending · ${d.ready.summary.deferred} deferred</span>
+      </div>
+      ${table(['Area', 'Item', 'Status', 'Next step'], d.ready.items.map((i) => [
+        esc(i.area), esc(i.label),
+        `<span class="badge ${i.status === 'done' ? 'badge-open' : i.status === 'deferred' ? 'badge-closed' : i.blocking ? 'badge-danger' : 'badge-warn'}">${esc(i.status)}${i.status === 'pending' && i.blocking ? ' · blocks launch' : ''}</span>`,
+        i.status === 'done' ? '' : `<span class="t-xs">${esc(i.how || '')}</span>`]))}
+      <p class="t-xs faint" style="margin-top:8px">${esc(d.ready.note)}</p>
+    </section>
+
+    <section class="card card-pad" style="margin-top:18px">
       <h2 class="t-label">Feature flags</h2>
       ${Object.entries(d.flags).map(([k, f]) => `
         <div class="item">
