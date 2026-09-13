@@ -112,7 +112,15 @@ export const quad = {
   restoreAdmin: (id, reason) => post(`/admin/access/admins/${id}/restore`, { reason }),
   revokeAdmin: (id, reason) => post(`/admin/access/admins/${id}/revoke`, { reason }),
   revokeAdminSessions: (id, reason) => post(`/admin/access/admins/${id}/sessions/revoke`, { reason }),
-  confirmLocation: (id, confirmation) => post(`/campus/nodes/${id}/confirm`, { confirmation }),
+  confirmLocation: (id, confirmation, verificationMethod) => post(`/campus/nodes/${id}/confirm`, { confirmation, verificationMethod }),
+
+  /* ---------- field geodata --------------------------------------------- */
+  previewPoints: (campusId, body) => post(`/admin/campuses/${campusId}/points/preview`, body),
+  importPoints: (campusId, body) => post(`/admin/campuses/${campusId}/points/import`, body),
+  confirmPointBatch: (campusId, batch, confirmation) => post(`/admin/campuses/${campusId}/points/confirm`, { batch, confirmation }),
+  campusDistances: (campusId) => get(`/admin/campuses/${campusId}/distances`),
+  importPerimeter: (campusId, body) => post(`/admin/campuses/${campusId}/boundaries/import`, body),
+  compareBoundary: (id, withId = 'active') => get(`/admin/boundaries/${id}/compare?with=${encodeURIComponent(withId)}`),
 
   /* ---------- catalog ---------------------------------------------------- */
   vendors: (opts) => get('/vendors' + qs(opts)),

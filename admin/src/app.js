@@ -881,7 +881,9 @@ async function paintReviews(filter) {
    ======================================================================== */
 async function scrLocations() {
   setTitle('Campus locations', 'Only locations here can be delivered to.');
-  head().innerHTML = `<button class="btn btn-primary btn-sm" data-act="newLocation">Add location</button>`;
+  head().innerHTML = `<button class="btn btn-primary btn-sm" data-act="newLocation">Add location</button>
+    <button class="btn btn-secondary btn-sm" data-act="importPoints">Import GPS points</button>
+    <button class="btn btn-ghost btn-sm" data-act="showDistances">Distances</button>`;
   await panel(view(), async () => {
     const campuses = (await quad.adminCampuses()).campuses;
     S.locCampus = S.locCampus && campuses.some((c) => c.id === S.locCampus) ? S.locCampus
@@ -911,7 +913,10 @@ async function scrLocations() {
     <section class="card card-pad" style="margin-top:18px">
       <div class="between" style="flex-wrap:wrap;gap:8px">
         <h2 class="t-label">Delivery boundary · ${esc(current?.name || '')}</h2>
-        <button class="btn btn-secondary btn-sm" data-act="editBoundary">Propose an outline</button>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" data-act="importPerimeter">Import walked perimeter</button>
+          <button class="btn btn-ghost btn-sm" data-act="editBoundary">Type an outline</button>
+        </div>
       </div>
       ${active
         ? `<p class="t-sm" style="margin:6px 0 10px"><span class="badge badge-open">Active</span>
@@ -927,6 +932,8 @@ async function scrLocations() {
             <p class="t-xs" style="white-space:pre-line;color:var(--text-2)">${esc(b.source_note || b.source || 'No source recorded')}</p>
             ${b.status === 'proposed' ? `<div class="row" style="gap:8px;margin-top:4px">
               <button class="btn btn-primary btn-sm" data-act="activateBoundary" data-id="${b.id}" data-name="${esc(b.name)}">Confirm and activate</button>
+              ${d.boundaries.filter((o) => o.status !== 'retired' && o.id !== b.id).map((o) =>
+                `<button class="btn btn-ghost btn-sm" data-act="compareBoundary" data-id="${b.id}" data-with="${o.id}">Compare with ${esc(o.name)}</button>`).join('')}
               <button class="btn btn-ghost btn-sm" data-act="retireBoundary" data-id="${b.id}">Discard</button></div>` : ''}
           </div>
           ${outlineSvg(b.polygon)}
@@ -969,6 +976,33 @@ function outlineSvg(polygon) {
   return `<svg viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Outline preview"
     style="background:var(--surface);border-radius:10px"><path d="${d}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/></svg>`;
 }
+
+/* Two outlines on one to-scale canvas (plus optional points), so a difference
+   between a walked perimeter and a map proposal is seen, not inferred. */
+function overlaySvg(a, b, points = [], size = 320) {
+  const all = [...a, ...b, ...points.map((p) => [p.lat, p.lng])];
+  const lat0 = all.reduce((s, p) => s + p[0], 0) / all.length;
+  const k = Math.cos((lat0 * Math.PI) / 180);
+  const proj = ([la, ln]) => [ln * k, -la];
+  const P = all.map(proj);
+  const minX = Math.min(...P.map((p) => p[0])), minY = Math.min(...P.map((p) => p[1]));
+  const span = Math.max(Math.max(...P.map((p) => p[0])) - minX, Math.max(...P.map((p) => p[1])) - minY) || 1;
+  const xy = (pt) => { const [x, y] = proj(pt); return [10 + ((x - minX) / span) * (size - 20), 10 + ((y - minY) / span) * (size - 20)]; };
+  const path = (poly) => poly.map((pt, i) => { const [x, y] = xy(pt); return `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`; }).join(' ') + ' Z';
+  const metresAcross = Math.round(span * 111320);
+  return `<svg viewBox="0 0 ${size} ${size}" width="100%" style="max-width:${size}px;background:var(--surface);border-radius:10px" role="img" aria-label="Outline comparison">
+    <path d="${path(b)}" fill="rgba(120,120,120,.15)" stroke="var(--text-2)" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <path d="${path(a)}" fill="var(--accent-soft)" fill-opacity=".45" stroke="var(--accent)" stroke-width="2"/>
+    ${points.map((p) => { const [x, y] = xy([p.lat, p.lng]); return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${p.inA === p.inB ? 'var(--text-2)' : 'var(--danger, #c0392b)'}"><title>${esc(p.name)}</title></circle>`; }).join('')}
+    <text x="10" y="${size - 6}" font-size="10" fill="var(--text-2)">≈ ${metresAcross} m across</text>
+  </svg>`;
+}
+
+const PLACE_TYPE_OPTS = [['', '— not set —'], ['academic_block', 'Academic block'], ['administrative', 'Administrative building'],
+  ['library', 'Library'], ['hostel', 'Hostel'], ['residence', 'Residence'], ['student_facility', 'Student facility'],
+  ['cafeteria_pickup', 'Cafeteria pickup point'], ['entrance', 'Entrance / access point'], ['delivery_point', 'Delivery point'], ['other', 'Other']];
+const METHOD_OPTS = [['', '— not set —'], ['gps_on_site', 'GPS reading taken on site'], ['survey_track', 'Surveyed track'],
+  ['official_map', 'Official UPES map/document'], ['public_map', 'Public map (e.g. OpenStreetMap) — unverified'], ['admin_entry', 'Typed in by an administrator']];
 
 const nodeRow = (n) => `
   <div class="treenode ${n.active === false ? 'faint' : ''}">
@@ -1575,6 +1609,139 @@ const ACTIONS = {
     ${textarea('confirmation', 'How did you confirm this outline?', 'For example: walked the perimeter on 20 Sep; all hostel blocks and both gates are inside.')}`,
     (d) => quad.activateBoundary(t.dataset.id, d.confirmation)),
 
+  /* ---- field geodata ---- */
+  useDeviceGps: (t) => {
+    const form = t.closest('form');
+    const status = form.querySelector('[data-gps-status]');
+    if (!('geolocation' in navigator)) { status.textContent = 'This browser cannot read GPS.'; return; }
+    status.textContent = 'Reading GPS… stand still, outdoors if possible.';
+    t.disabled = true;
+    navigator.geolocation.getCurrentPosition((pos) => {
+      t.disabled = false;
+      const { latitude, longitude, accuracy } = pos.coords;
+      form.querySelector('[name=lat]').value = latitude.toFixed(7);
+      form.querySelector('[name=lng]').value = longitude.toFixed(7);
+      form.querySelector('[name=gpsAccuracyM]').value = Math.round(accuracy);
+      form.querySelector('[name=verificationMethod]').value = 'gps_on_site';
+      status.textContent = `Recorded to about ±${Math.round(accuracy)} m at ${new Date(pos.timestamp).toLocaleTimeString('en-IN')}.` +
+        (accuracy > 25 ? ' That is imprecise — wait a few seconds outdoors and read again.' : '');
+    }, (err) => {
+      t.disabled = false;
+      status.textContent = err.code === 1 ? 'Location permission was refused.' : 'Could not read a GPS position. Try again outdoors.';
+    }, { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 });
+  },
+
+  importPoints: () => {
+    const m = modal('Import GPS points', `
+      <p class="t-sm muted">Paste an export from a GPS app: CSV (<code>name,type,lat,lng,accuracy_m,method,deliverable,note</code>),
+        GPX waypoints, or GeoJSON points. Preview first — nothing is stored until you import.</p>
+      ${select('format', 'Format', [['', 'Detect automatically'], ['csv', 'CSV'], ['gpx', 'GPX'], ['geojson', 'GeoJSON']])}
+      <label class="field"><span class="t-label">File contents</span>
+        <textarea class="input" name="text" rows="8" placeholder="name,type,lat,lng,accuracy_m,method,deliverable,note"></textarea></label>
+      <label class="field"><span class="t-label">Or choose a file</span><input class="input" type="file" name="file" accept=".csv,.gpx,.json,.geojson,text/*"></label>
+      ${select('defaultMethod', 'Method for rows that do not say', METHOD_OPTS.filter(([v]) => v))}
+      <div class="row" style="gap:8px;margin:8px 0"><button type="button" class="btn btn-secondary btn-sm" data-act="previewPoints">Preview</button></div>
+      <div data-preview></div>
+      ${check('confirm', 'I collected these on site myself — confirm them now (needs passkey)', false)}
+      ${field('confirmation', 'How they were collected (required to confirm)')}`,
+    async (d, form) => {
+      const text = await fileOrText(form);
+      const out = await quad.importPoints(S.locCampus, { format: d.format || undefined, text, defaultMethod: d.defaultMethod,
+        confirm: !!d.confirm, confirmation: d.confirmation });
+      toast(`${out.created.length} location(s) imported${out.confirmed ? ' and confirmed' : ' as pending'}`);
+      return out;
+    });
+    m.querySelector('select[name=defaultMethod]').value = 'gps_on_site';
+  },
+  previewPoints: async (t) => {
+    const form = t.closest('form');
+    const box = form.querySelector('[data-preview]');
+    try {
+      const text = await fileOrText(form);
+      const d = Object.fromEntries(new FormData(form));
+      const out = await quad.previewPoints(S.locCampus, { format: d.format || undefined, text, defaultMethod: d.defaultMethod });
+      box.innerHTML = `
+        <p class="t-sm"><b>${out.points.length}</b> valid · <b>${out.rejected.length}</b> invalid ·
+          boundary: ${out.boundaries.active ? `checked against “${esc(out.boundaries.active.name)}”` : '<span class="badge badge-warn">none confirmed</span>'}</p>
+        ${out.rejected.length ? table(['Line', 'Name', 'Problem'], out.rejected.map((r) => [String(r.line), esc(r.name || '—'), esc(r.problems.join('; '))])) : ''}
+        ${table(['Name', 'Type', 'Lat, Lng', '±m', 'Inside boundary', 'Notes'], out.points.map((p) => [
+          esc(p.name), esc(p.type), `${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`, p.accuracyM ?? '—',
+          p.insideActiveBoundary === null ? '—' : p.insideActiveBoundary ? 'yes' : '<b>no</b>',
+          `<span class="t-xs">${esc(p.warnings.join('; '))}</span>`]))}`;
+    } catch (e) {
+      box.innerHTML = `<p class="t-sm" style="color:var(--danger, #c0392b)">${esc(e.message)}${e.detail ? ` — ${esc(e.detail)}` : ''}</p>`;
+    }
+  },
+  showDistances: async () => {
+    const d = await quad.campusDistances(S.locCampus);
+    const ready = d.rows.filter((r) => r.estimate);
+    modal(`Distances · ${d.campus.name}`, `
+      <p class="t-xs faint">${esc(d.basis)}${d.boundaryConfirmed ? '' : ' No boundary is confirmed yet, so no delivery is possible.'}</p>
+      ${table(['Cafeteria', 'Pickup point', 'Ready'], d.vendors.map((v) => [esc(v.name), esc(v.pickupName || '—'),
+        v.pickupReady ? '<span class="badge badge-open">yes</span>' : '<span class="badge badge-warn">needs a confirmed, positioned pickup point</span>']))}
+      <h3 class="t-label" style="margin-top:12px">Estimates (${ready.length})</h3>
+      ${ready.length ? table(['From', 'To', 'Distance', 'Estimate', 'Inside boundary', 'Deliverable'], ready.map((r) => [
+        esc(r.vendor), esc(r.point), `${r.metres} m`, esc(r.estimate),
+        r.insideActiveBoundary === null ? '—' : r.insideActiveBoundary ? 'yes' : '<b>no</b>', r.deliverable ? 'yes' : 'no']))
+        : `<p class="t-sm muted">No estimate yet. ${d.pointCount ? 'Confirm each cafeteria’s pickup point with a position.' : 'No location on this campus has a recorded position yet.'}</p>`}`, DONE);
+  },
+  importPerimeter: () => modal('Import a walked perimeter', `
+    <p class="t-sm muted">Paste the track from a GPS app (GPX track, GeoJSON line/polygon, or CSV <code>lat,lng</code>).
+      It becomes a <b>proposal</b>, shown next to any existing outline. Nothing is replaced and delivery stays off until someone confirms an outline.</p>
+    ${select('format', 'Format', [['', 'Detect automatically'], ['gpx', 'GPX'], ['geojson', 'GeoJSON'], ['csv', 'CSV']])}
+    <label class="field"><span class="t-label">Track</span><textarea class="input" name="text" rows="6"></textarea></label>
+    <label class="field"><span class="t-label">Or choose a file</span><input class="input" type="file" name="file" accept=".gpx,.csv,.json,.geojson,text/*"></label>
+    ${field('name', 'Name', 'Walked perimeter')}
+    ${select('collectionMethod', 'Collected by', [['gps_walk', 'Walking the perimeter with GPS'], ['survey', 'Survey'], ['official_map', 'Official map']])}
+    ${textarea('sourceNote', 'How it was collected', 'e.g. walked the fence line on 21 Sep with GPS Logger, 1 s interval, phone held outdoors.')}
+    <div class="row" style="gap:8px;margin:8px 0"><button type="button" class="btn btn-secondary btn-sm" data-act="previewPerimeter">Preview and compare</button></div>
+    <div data-preview></div>`,
+    async (d, form) => {
+      const out = await quad.importPerimeter(S.locCampus, { format: d.format || undefined, text: await fileOrText(form),
+        name: d.name, collectionMethod: d.collectionMethod, sourceNote: d.sourceNote });
+      toast('Saved as a proposal. Compare it before confirming.');
+      return out;
+    }),
+  previewPerimeter: async (t) => {
+    const form = t.closest('form');
+    const box = form.querySelector('[data-preview]');
+    try {
+      const d = Object.fromEntries(new FormData(form));
+      const out = await quad.importPerimeter(S.locCampus, { format: d.format || undefined, text: await fileOrText(form),
+        name: d.name, collectionMethod: d.collectionMethod, sourceNote: d.sourceNote || 'preview only, not stored', dryRun: true });
+      box.innerHTML = `
+        <p class="t-sm">${out.stats.trackPoints} track points → ${out.stats.vertices} vertices · about ${out.metrics.widthM} × ${out.metrics.heightM} m ·
+          ${(out.metrics.areaM2 / 4046.86).toFixed(1)} acres · closing gap ${out.stats.closingGapM} m</p>
+        ${out.warnings.map((w) => `<p class="t-xs" style="color:var(--warn)">${esc(w)}</p>`).join('')}
+        ${out.comparisons.length ? table(['Compared with', 'Status', 'Overlap', 'Largest deviation', 'Area (new / existing)'], out.comparisons.map((c) => [
+          esc(c.withName), esc(c.withStatus), `${c.overlapPct}%`, `${c.maxDeviationM} m`,
+          `${Math.round(c.areaM2.a / 4046.86 * 10) / 10} / ${Math.round(c.areaM2.b / 4046.86 * 10) / 10} acres`])) : '<p class="t-sm muted">No existing outline to compare with.</p>'}
+        ${outlineSvg(out.polygon)}`;
+    } catch (e) {
+      box.innerHTML = `<p class="t-sm" style="color:var(--danger, #c0392b)">${esc(e.message)}${e.detail ? ` — ${esc(e.detail)}` : ''}</p>`;
+    }
+  },
+  compareBoundary: async (t) => {
+    const c = await quad.compareBoundary(t.dataset.id, t.dataset.with);
+    modal(`${c.a.name} vs ${c.b.name}`, `
+      <div class="row" style="gap:16px;flex-wrap:wrap;align-items:flex-start">
+        ${overlaySvg(c.a.polygon, c.b.polygon)}
+        <div class="stack" style="gap:6px;min-width:200px">
+          <p class="t-sm"><span style="color:var(--accent)">■</span> ${esc(c.a.name)} (${esc(c.a.status)})<br>
+            <span style="color:var(--text-2)">▭</span> ${esc(c.b.name)} (${esc(c.b.status)})</p>
+          <p class="t-sm">Overlap <b>${c.overlapPct}%</b> · largest deviation <b>${c.maxDeviationM} m</b></p>
+          <p class="t-xs">Only in ${esc(c.a.name)}: ${Math.round(c.areaM2.onlyInA)} m²<br>Only in ${esc(c.b.name)}: ${Math.round(c.areaM2.onlyInB)} m²</p>
+          <p class="t-xs faint">${esc(c.method)}</p>
+        </div>
+      </div>
+      <h3 class="t-label" style="margin-top:12px">Locations that would change sides</h3>
+      ${c.locationsThatChangeSides.length ? table(['Location', `Inside ${c.a.name}`, `Inside ${c.b.name}`], c.locationsThatChangeSides.map((x) =>
+        [esc(x.name), x.inA ? 'yes' : '<b>no</b>', x.inB ? 'yes' : '<b>no</b>'])) : '<p class="t-sm muted">None of the recorded locations change sides.</p>'}
+      <h3 class="t-label" style="margin-top:12px">Corners of ${esc(c.a.name)} outside ${esc(c.b.name)}</h3>
+      ${c.verticesOfAOutsideB.length ? table(['#', 'Lat, Lng', 'Distance to other edge'], c.verticesOfAOutsideB.map((v) =>
+        [String(v.index + 1), `${v.lat}, ${v.lng}`, `${v.metresToOtherEdge} m`])) : '<p class="t-sm muted">None.</p>'}`, DONE);
+  },
+
   retireBoundary: (t) => {
     if (!confirm('Discard this proposed outline? It is kept on record as retired.')) return;
     return act(t, () => quad.retireBoundary(t.dataset.id), { ok: 'Outline discarded', after: route });
@@ -1863,7 +2030,13 @@ async function locationModal(id, parentId) {
     ${field('detail', 'Short description shown to students (optional)', n.detail)}
     ${field('instructions', 'Handover note for the delivery partner (optional)', n.instructions)}
     ${field('aliases', 'Other names students use (comma separated)', (n.aliases || []).join(', '))}
+    ${select('placeType', 'Type of place', PLACE_TYPE_OPTS)}
     <div class="formrow">${field('lat', 'Latitude (only if measured)', n.lat ?? '')}${field('lng', 'Longitude (only if measured)', n.lng ?? '')}</div>
+    <div class="formrow">${field('gpsAccuracyM', 'GPS accuracy (m)', n.gps_accuracy_m ?? '')}
+      <label class="field"><span class="t-label">&nbsp;</span>
+        <button type="button" class="btn btn-secondary" data-act="useDeviceGps">Use this phone's GPS here</button></label></div>
+    <p class="t-xs faint" data-gps-status></p>
+    ${select('verificationMethod', 'How the position was established', METHOD_OPTS)}
     ${field('sourceNote', 'Source of this information', n.source_note || '')}
     ${check('deliverable', 'Orders can be delivered here', id ? n.deliverable : true)}
     ${check('deliveryEnabled', 'Delivery currently available', id ? n.delivery_enabled : true)}
@@ -1876,15 +2049,33 @@ async function locationModal(id, parentId) {
       if (!String(d.name || '').trim()) throw new Error('Give the location a name');
       const hasLat = String(d.lat).trim() !== '', hasLng = String(d.lng).trim() !== '';
       if (hasLat !== hasLng) throw new Error('Enter both latitude and longitude, or neither');
+      if (hasLat && !d.verificationMethod) throw new Error('Say how the position was established');
       const body = {
         name: d.name.trim(), kind: d.kind, detail: d.detail || null, instructions: d.instructions || null,
         aliases: splitList(d.aliases), deliverable: !!d.deliverable, deliveryEnabled: !!d.deliveryEnabled,
         lat: hasLat ? Number(d.lat) : null, lng: hasLng ? Number(d.lng) : null, sourceNote: d.sourceNote || null,
+        placeType: d.placeType || null, verificationMethod: d.verificationMethod || null,
+        gpsAccuracyM: String(d.gpsAccuracyM ?? '').trim() === '' ? null : Number(d.gpsAccuracyM),
       };
       if (!id) { body.parentId = parentId || null; body.campusSiteId = S.locCampus; }
       return id ? quad.updateLocation(id, body) : quad.createLocation(body);
     });
   m.querySelector('select[name=kind]').value = n.kind || (parentId ? 'building' : 'zone');
+  m.querySelector('select[name=placeType]').value = n.place_type || '';
+  m.querySelector('select[name=verificationMethod]').value = n.verification_method || '';
+}
+
+/* A chosen file wins over pasted text; both are read in the browser and sent
+   as text - nothing is uploaded to storage. */
+async function fileOrText(form) {
+  const f = form.querySelector('input[type=file]')?.files?.[0];
+  if (f) {
+    if (f.size > 5_000_000) throw new Error('That file is larger than 5 MB');
+    return f.text();
+  }
+  const text = form.querySelector('textarea[name=text]')?.value || '';
+  if (!text.trim()) throw new Error('Paste the file contents or choose a file');
+  return text;
 }
 
 const splitList = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);

@@ -25,7 +25,7 @@ export async function tree(campusId = null) {
   const { rows } = await q(
     `SELECT id, parent_id, kind, name, detail, aliases, deliverable,
             delivery_enabled, lat, lng, radius_m, source, source_note, sort, campus_site_id, instructions,
-            verification, confidence, verified_at
+            verification, confidence, verified_at, place_type, verification_method, gps_accuracy_m
        FROM campus_node WHERE active AND ($1::uuid IS NULL OR campus_site_id = $1)
       ORDER BY sort, name`, [campusId]);
   return rows;
