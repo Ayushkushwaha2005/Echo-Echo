@@ -1690,7 +1690,7 @@ const ACTIONS = {
     modal(`Distances · ${d.campus.name}`, `
       <p class="t-xs faint">${esc(d.basis)}${d.boundaryConfirmed ? '' : ' No boundary is confirmed yet, so no delivery is possible.'}</p>
       ${table(['Cafeteria', 'Pickup point', 'Ready'], d.vendors.map((v) => [esc(v.name), esc(v.pickupName || '—'),
-        v.pickupReady ? '<span class="badge badge-open">yes</span>' : '<span class="badge badge-warn">needs a confirmed, positioned pickup point</span>']))}
+        v.pickupReady ? '<span class="badge badge-open">yes</span>' : '<span class="badge badge-warn">not yet</span><div class="t-xs faint">needs a confirmed pickup point with GPS</div>']))}
       <h3 class="t-label" style="margin-top:12px">Estimates (${ready.length})</h3>
       ${ready.length ? table(['From', 'To', 'Distance', 'Estimate', 'Inside boundary', 'Deliverable'], ready.map((r) => [
         esc(r.vendor), esc(r.point), `${r.metres} m`, esc(r.estimate),
