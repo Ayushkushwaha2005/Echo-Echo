@@ -94,10 +94,37 @@ const child = (body, t) => body.match(new RegExp(`<${t}[^>]*>([\\s\\S]*?)</${t}>
 function parseGpx(text) {
   const s = String(text);
   if (/<!DOCTYPE|<!ENTITY/i.test(s)) return { points: [], track: [], problems: ['GPX files with DOCTYPE or ENTITY declarations are refused.'] };
-  const read = (el) => [...s.matchAll(new RegExp(`<${el}\\b([^>]*?)(?:/>|>([\\s\\S]*?)</${el}>)`, 'gi'))]
-    .map((m, i) => ({ line: i + 1, lat: attr(m[1], 'lat'), lng: attr(m[1], 'lon'),
-                      name: m[2] ? child(m[2], 'name') : undefined, note: m[2] ? child(m[2], 'desc') : undefined,
-                      time: m[2] ? child(m[2], 'time') : undefined, type: m[2] ? child(m[2], 'type') : undefined }));
+  /* A linear scan with indexOf. A single regex with a lazy body was
+     quadratic on unclosed elements (seconds per megabyte), which an upload
+     could use to stall the server. */
+  const lower = s.toLowerCase();
+  const read = (el) => {
+    const out = [];
+    const open = `<${el}`, close = `</${el}>`;
+    let at = lower.indexOf(open);
+    while (at !== -1) {
+      const after = lower[at + open.length];
+      const next = lower.indexOf(open, at + open.length);
+      if (after && !/[\s/>]/.test(after)) { at = next; continue; }     // e.g. <wptx
+      const tagEnd = s.indexOf('>', at);
+      if (tagEnd === -1) break;
+      const head = s.slice(at + open.length, tagEnd);
+      let body = '';
+      if (!head.endsWith('/')) {
+        /* The body ends at its closing tag, and is searched for only up to
+           the next element - never to the end of the file, which would make
+           a run of unclosed elements quadratic. */
+        const region = lower.slice(tagEnd, next === -1 ? lower.length : next);
+        const end = region.indexOf(close);
+        if (end !== -1) body = s.slice(tagEnd + 1, tagEnd + end);
+      }
+      out.push({ line: out.length + 1, lat: attr(head, 'lat'), lng: attr(head, 'lon'),
+                 name: body ? child(body, 'name') : undefined, note: body ? child(body, 'desc') : undefined,
+                 time: body ? child(body, 'time') : undefined, type: body ? child(body, 'type') : undefined });
+      at = next;
+    }
+    return out;
+  };
   return { points: read('wpt'), track: [...read('trkpt'), ...read('rtept')], problems: [] };
 }
 

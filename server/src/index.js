@@ -190,6 +190,9 @@ export function build() {
       if (err.statusCode === 429) {
         return reply.code(429).send({ error: 'Too many requests', code: 'rate_limited' });
       }
+      if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || err.statusCode === 413) {
+        return reply.code(413).send({ error: 'That request is too large', code: 'payload_too_large' });
+      }
       if (err.code === 'FST_REQ_FILE_TOO_LARGE') {
         return reply.code(413).send({ error: 'That file is too large', code: 'bad_request' });
       }
@@ -202,6 +205,11 @@ export function build() {
       }
       if (err.code === '23514') {
         return reply.code(400).send({ error: 'That value is not allowed', code: 'bad_request' });
+      }
+      /* Any other client error raised by the framework itself (unsupported
+         media type, malformed headers...) is the client's, not a 500. */
+      if (Number.isInteger(err.statusCode) && err.statusCode >= 400 && err.statusCode < 500) {
+        return reply.code(err.statusCode).send({ error: 'The request could not be processed', code: 'bad_request' });
       }
       /* Never leak an internal message or stack to a client. */
       req.log.error({ err, reqId: req.id }, 'unhandled');

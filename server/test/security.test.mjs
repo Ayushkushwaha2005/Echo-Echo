@@ -496,3 +496,15 @@ test('a student cannot read another student\'s verification case or ID document'
     assert.ok(r.status >= 400, `${url} must not expose another student's case (got ${r.status})`);
   }
 });
+
+test('client errors raised by the framework keep their status and never look like a server fault', async () => {
+  const big = await app.inject({ method: 'POST', url: '/auth/email/send',
+    headers: { 'content-type': 'application/json', origin: 'http://localhost:3000' },
+    payload: JSON.stringify({ email: 'x'.repeat(1_200_000) }) });
+  assert.equal(big.statusCode, 413);
+  assert.equal(JSON.parse(big.body).code, 'payload_too_large');
+  const media = await app.inject({ method: 'POST', url: '/auth/email/send',
+    headers: { 'content-type': 'text/xml', origin: 'http://localhost:3000' }, payload: '<x/>' });
+  assert.equal(media.statusCode, 415);
+  assert.ok(!/stack|Error:|FST_/.test(media.body), 'no framework internals in the body');
+});

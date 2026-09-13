@@ -83,6 +83,13 @@ test('a walked track becomes a closed, simplified outline; gaps and junk are rep
     'one bad coordinate refuses the whole track');
 });
 
+test('hostile GPX (thousands of unclosed elements) is parsed in linear time', () => {
+  const s = '<gpx>' + '<wpt lat="1" lon="2">'.repeat(230000);
+  const t = Date.now();
+  geo.parseTrack({ text: s });
+  assert.ok(Date.now() - t < 3000, `took ${Date.now() - t} ms for ${s.length} bytes`);
+});
+
 test('comparing two outlines reports area overlap, deviation and the vertices that differ', () => {
   const same = geo.comparePolygons(SQUARE, SQUARE);
   assert.ok(same.overlapPct > 99);
@@ -120,6 +127,17 @@ test('preview stores nothing and reports boundary placement, duplicates and weak
   assert.equal(byName['Test Outside'].insideActiveBoundary, false);
   assert.match(byName['Test Outside'].warnings.join(), /outside the confirmed boundary/);
   assert.equal((await pool.query(`SELECT count(*)::int n FROM campus_node`)).rows[0].n, 0);
+});
+
+test('a real-sized GPS export (over the global 1 MB JSON limit) is accepted by the import routes only', async () => {
+  const c = await admin();
+  const cid = await campusId(pool);
+  const rows = Array.from({ length: 1900 }, (_, i) => `Test Point ${i} ${'x'.repeat(600)},delivery_point,30.417,77.969,5,gps_on_site,no,`);
+  const text = 'name,type,lat,lng,accuracy_m,method,deliverable,note\n' + rows.join('\n');
+  assert.ok(text.length > 1_100_000);
+  const r = await c.post(`/admin/campuses/${cid}/points/preview`, { format: 'csv', text });
+  assert.equal(r.status, 200, JSON.stringify(r.body).slice(0, 200));
+  assert.equal((await c.post('/support/cases', { subject: 'x', body: text })).status, 413, 'other routes keep the 1 MB limit');
 });
 
 test('import as pending, then confirm the batch: evidence, confirming admin and timestamp are stored', async () => {

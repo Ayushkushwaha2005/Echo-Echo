@@ -23,6 +23,9 @@ import { audit } from '../audit.js';
 const MAX_ACCURACY_M = Number(process.env.GEO_IMPORT_MAX_ACCURACY_M || 25);
 const DUPLICATE_RADIUS_M = 15;
 const CONFIRMABLE_METHODS = ['gps_on_site', 'survey_track', 'official_map'];
+/* GPS exports are larger than the global 1 MB JSON limit; these admin-only
+   routes accept up to 6 MB, and the parsers cap point counts. */
+const UPLOAD = { bodyLimit: 6 * 1024 * 1024, config: { rateLimit: { max: 30, timeWindow: 60_000 } } };
 
 async function campusOr404(id) {
   const c = await one(`SELECT id, name FROM campus_site WHERE id = $1`, [id]);
@@ -68,7 +71,7 @@ async function review(campusId, body) {
 }
 
 export default async function geodataRoutes(app) {
-  app.post('/admin/campuses/:id/points/preview', async (req) => {
+  app.post('/admin/campuses/:id/points/preview', UPLOAD, async (req) => {
     authorize(req.actor, 'campus.create');
     const c = await campusOr404(req.params.id);
     const out = await review(c.id, req.body);
@@ -76,7 +79,7 @@ export default async function geodataRoutes(app) {
     return { ...out, maxAccuracyM: MAX_ACCURACY_M, stored: false };
   });
 
-  app.post('/admin/campuses/:id/points/import', async (req) => {
+  app.post('/admin/campuses/:id/points/import', UPLOAD, async (req) => {
     authorize(req.actor, 'campus.create');
     const c = await campusOr404(req.params.id);
     const b = req.body || {};
@@ -193,7 +196,7 @@ export default async function geodataRoutes(app) {
   });
 
   /* ---------- perimeter ------------------------------------------------------ */
-  app.post('/admin/campuses/:id/boundaries/import', async (req) => {
+  app.post('/admin/campuses/:id/boundaries/import', UPLOAD, async (req) => {
     authorize(req.actor, 'boundary.propose');
     const c = await campusOr404(req.params.id);
     const b = req.body || {};
