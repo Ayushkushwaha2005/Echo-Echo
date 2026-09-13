@@ -235,6 +235,49 @@ test('a verified-by-email student can order; admin decisions are never overridde
   }
 });
 
+test('typing a student address proves nothing: no code, no session, no verification', async () => {
+  const email = 'typed.only@stu.upes.ac.in';
+  assert.equal((await anon().post('/auth/email/send', { email })).status, 200);
+  /* Someone who does not read that mailbox has no code to give back. */
+  for (const code of ['000000', '123456', '999999']) {
+    const r = await anon().post('/auth/email/verify', { email, code });
+    assert.equal(r.status, 400);
+    assert.equal(cookieOf(r), null);
+  }
+  const u = await pool.query(`SELECT count(*)::int n FROM app_user WHERE student_email = $1`, [email]);
+  assert.equal(u.rows[0].n, 0, 'no account exists until the mailbox is proven');
+  /* The code went to that exact address and nowhere else. */
+  assert.deepEqual(mailbox.map((m) => m.to), [[email]]);
+});
+
+test('optional re-proof window: stale mailbox proof blocks ordering until the mailbox is proven again', async () => {
+  const cfg = await import('../src/config.js');
+  cfg.STUDENT_EMAIL.reverifyDays = 30;
+  try {
+    const email = 'fresh.1@stu.upes.ac.in';
+    const { token } = await signIn(email);
+    const n = await makeCampus(pool);
+    const v = await makeVendor(pool, { name: 'Frisco', slug: 'frisco' });
+    const i = await makeItem(pool, v.id, { name: 'Tea', paise: 2000 });
+    const s = client(app, token);
+    const bidholi = (await s.get('/campuses')).body.campuses.find((c) => c.name === 'Bidholi Campus');
+    await s.put('/me/profile', { name: 'Fresh Student', contactPhone: '9812345671', campusId: bidholi.id });
+    const body = { vendorId: v.id, lines: [{ itemId: i.id, qty: 1 }], fulfilment: 'delivery', destinationId: n.blockB.id };
+    assert.equal((await s.post('/orders/draft', body)).status, 200, 'fresh proof orders');
+
+    await pool.query(`UPDATE app_user SET student_email_verified_at = now() - interval '40 days' WHERE student_email = $1`, [email]);
+    const stale = await s.post('/orders/draft', body);
+    assert.equal(stale.status, 403);
+    assert.equal(stale.body.code, 'reverify_email');
+
+    await age(email, 120);
+    const again = await signIn(email);
+    assert.equal((await client(app, again.token).post('/orders/draft', body)).status, 200, 'a new mailbox proof renews it');
+  } finally {
+    cfg.STUDENT_EMAIL.reverifyDays = 0;
+  }
+});
+
 test('an account-suspended user gets no session and no status change from a code', async () => {
   const email = 'banned.1@stu.upes.ac.in';
   await pool.query(

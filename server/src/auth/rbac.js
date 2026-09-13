@@ -16,6 +16,7 @@
 import { evaluate as evaluateProfile, MISSING_COPY } from '../services/profile.js';
 import { assertPasskeySession } from './passkey-policy.js';
 import { capsFor, GRANTABLE_KEYS, PERMISSION_KEYS, ROLE_DEFAULT_PERMISSIONS } from './permissions.js';
+import { STUDENT_EMAIL } from '../config.js';
 
 export const ROLES = {
   platform_owner:   { rank: 100, label: 'Platform owner',   scope: 'platform' },
@@ -206,6 +207,15 @@ export function assertMayOrder(actor) {
   if (actor.studentStatus !== 'approved') {
     throw Forbidden('Student verification is required to order',
       VERIFICATION_COPY[actor.studentStatus]?.next || 'Your student verification is not approved.');
+  }
+  /* Optional freshness of mailbox proof. Only for students whose approval
+     rests on the mailbox; an admin-approved ID card is not re-asked. */
+  if (STUDENT_EMAIL.reverifyDays > 0 && actor.verifiedVia === 'institutional_email' && actor.studentEmailVerifiedAt) {
+    const ageDays = (Date.now() - new Date(actor.studentEmailVerifiedAt).getTime()) / 86_400_000;
+    if (ageDays > STUDENT_EMAIL.reverifyDays) {
+      throw new HttpError(403, 'reverify_email', 'Confirm your student email again to order',
+        `Your university email was last confirmed more than ${STUDENT_EMAIL.reverifyDays} days ago. Sign in with a new code sent to it.`);
+    }
   }
   /* The profile is evaluated from the session's database row. A client that
      skips the completion screen meets the same refusal. */

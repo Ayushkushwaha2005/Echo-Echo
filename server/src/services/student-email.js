@@ -235,6 +235,11 @@ export async function recordMailboxProof(c, userId, email) {
     await c.query(
       `UPDATE app_user SET student_email = $2, student_email_verified_at = now() WHERE id = $1`,
       [userId, email]);
+  } else {
+    /* The same mailbox proven again: the proof is fresh. This is what lets
+       STUDENT_EMAIL_REVERIFY_DAYS work - a mailbox the university has since
+       withdrawn can no longer renew it. */
+    await c.query(`UPDATE app_user SET student_email_verified_at = now() WHERE id = $1`, [userId]);
   }
 
   const before = u.student_status;

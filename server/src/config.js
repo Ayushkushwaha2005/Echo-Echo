@@ -340,6 +340,11 @@ export const STUDENT_EMAIL = {
   domains: String(env('STUDENT_EMAIL_DOMAINS') || 'stu.upes.ac.in')
     .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   emailRequiresAdminReview: bool('STUDENT_EMAIL_REQUIRES_ADMIN_REVIEW', false),
+  /* 0 = off. When set, a student whose VERIFIED status rests on mailbox proof
+     must prove the mailbox again once that proof is older than this many days
+     before ordering. Mitigates mailboxes that outlive enrolment only if the
+     university deactivates them - see docs/STUDENT-VERIFICATION.md. */
+  reverifyDays: Number(env('STUDENT_EMAIL_REVERIFY_DAYS', 0)),
   ttlSeconds: Number(env('EMAIL_CODE_TTL_SECONDS', 600)),
   length: 6,
   maxAttempts: Number(env('EMAIL_CODE_MAX_ATTEMPTS', 5)),

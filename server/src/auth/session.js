@@ -56,7 +56,9 @@ export async function actorFromToken(token) {
     `SELECT s.token_hash, s.user_id, u.status, u.name, u.phone, u.student_status,
             s.auth_method, s.passkey_verified_at, s.issued_at,
             u.student_email, u.student_email_verified_at, u.contact_phone, u.campus_site_id,
-            c.service_status AS campus_service_status, c.name AS campus_name
+            c.service_status AS campus_service_status, c.name AS campus_name,
+            (SELECT method FROM verification_case v WHERE v.user_id = u.id AND v.state = 'approved'
+              ORDER BY coalesce(v.decided_at, v.submitted_at) DESC LIMIT 1) AS verified_via
        FROM session s JOIN app_user u ON u.id = s.user_id
        LEFT JOIN campus_site c ON c.id = u.campus_site_id
       WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()`,
@@ -109,6 +111,8 @@ export async function actorFromToken(token) {
       student_status: s.student_status, campus_site_id: s.campus_site_id,
     },
     studentEmail: s.student_email,
+    studentEmailVerifiedAt: s.student_email_verified_at,
+    verifiedVia: s.verified_via || null,
     sessionKind: s.auth_method,              // 'code' | 'passkey' | 'recovery'
     passkeyAt: s.passkey_verified_at,
     campusId: s.campus_site_id,
