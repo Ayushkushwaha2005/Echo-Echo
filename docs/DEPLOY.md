@@ -142,7 +142,7 @@ every subdomain you use serves HTTPS. The surfaces load no `http://` resources
    npm run check:db    # with the same variables in server/.env: answers, TLS on, migrations applied
    ```
 
-   Migrations `001`…`016` apply in order, each in one transaction, once.
+   Migrations `001`…`017` apply in order, each in one transaction, once.
    **Never run `npm run seed` against production** (it refuses, and `/ready`
    reports seed rows as not-ready).
 
@@ -286,7 +286,7 @@ Research and sources: [CAMPUS-UPES-BIDHOLI.md](CAMPUS-UPES-BIDHOLI.md).
 - The OpenStreetMap outline is a **proposed** boundary. Until an administrator
   holding `boundary.confirm` confirms it with a fresh passkey and a written
   note, **every delivery order is refused** (self pickup works).
-- Migration 016 adds two **pending, non-deliverable** location candidates
+- Field data is entered through the workflow in [CAMPUS-FIELD-COLLECTION.md](CAMPUS-FIELD-COLLECTION.md). Migration 016 adds two **pending, non-deliverable** location candidates
   (Energy Block, Infirmary) from OpenStreetMap. Nothing is deliverable until
   confirmed on the ground (Locations → Confirm location), and a delivery point
   without a recorded position is refused.

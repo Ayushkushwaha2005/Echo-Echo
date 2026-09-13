@@ -20,7 +20,10 @@ Zero-cost stack and its limits: DEPLOY.md section 0.
 - [x] Ledger append-only and balanced; payment code intact and deferred
 - [x] `/health` (no DB), `/ready` (DB, migrations, seed rows, providers), graceful shutdown, redacted structured logs
 - [x] Production startup guard (secrets, HTTPS origins, TLS DB, S3 storage, passkeys, RP ID, email/OTP, payment or explicit `PAYMENTS_DEFERRED`)
-- [x] Migrations 001–016; seed refuses production
+- [x] Migrations 001–017 (tested on an empty database and as an upgrade of the dev database); seed refuses production
+- [x] Field geodata workflow: on-site GPS capture in Campus Control, CSV/GPX/GeoJSON point import with preview, batch confirmation (passkey + note), distance/ETA matrix, walked-perimeter import compared against the OSM proposal — see [CAMPUS-FIELD-COLLECTION.md](CAMPUS-FIELD-COLLECTION.md)
+- [x] Launch readiness list in Campus Control → Platform (done / pending / deferred for every external dependency)
+- [x] Optional mailbox re-proof window `STUDENT_EMAIL_REVERIFY_DAYS` (alumni-mailbox mitigation, off by default)
 - [x] Operator self-tests against real providers: `npm run check:db`, `check:storage` (including "bucket is private"), `check:email`
 - [x] Daily encrypted off-site DB dump workflow (`.github/workflows/db-backup.yml`)
 
@@ -58,7 +61,10 @@ Zero-cost stack and its limits: DEPLOY.md section 0.
 ## REQUIRES MANUAL VERIFICATION (on campus)
 
 - [ ] Walk/compare the proposed Bidholi boundary; then Locations → Confirm and activate (needs `boundary.confirm` + passkey)
+- [ ] Walk the perimeter with a GPS logger; import it; compare with the OSM proposal; confirm only if it matches
+- [ ] Record Frisco, Tulips, Chai Garam counters and every legitimate delivery point on site ([CAMPUS-FIELD-COLLECTION.md](CAMPUS-FIELD-COLLECTION.md))
 - [ ] Confirm or archive the two pending OSM candidates (Energy Block, Infirmary)
+- [ ] Ask UPES IT when student mailboxes are disabled after leaving; set `STUDENT_EMAIL_REVERIFY_DAYS` if applicable
 - [ ] Add each real delivery point with measured coordinates and its source (hostel office list, signage, on-site measurement)
 - [ ] Measure and set each cafeteria's pickup point (enables walking-time estimates)
 - [ ] Confirm with UPES that student partners may deliver inside campus and hostels
