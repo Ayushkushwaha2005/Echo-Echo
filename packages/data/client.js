@@ -41,6 +41,14 @@ export class Offline extends Error {
   constructor() { super('Cannot reach the ECHO ECHO server'); this.code = 'offline'; }
 }
 
+/* What a non-API response means, said plainly and without a request id. */
+function hostError(status) {
+  if (status === 404) return 'Cannot reach the ECHO ECHO server';
+  if (status === 502 || status === 503 || status === 504) return 'ECHO ECHO is temporarily unavailable';
+  if (status >= 500) return 'Something went wrong on our side';
+  return 'Cannot reach the ECHO ECHO server';
+}
+
 async function call(method, path, body, opts = {}) {
   let res;
   try {
@@ -57,7 +65,15 @@ async function call(method, path, body, opts = {}) {
   const text = await res.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* non-JSON */ }
-  if (!res.ok) throw new ApiError(res.status, json || { error: text.slice(0, 200) });
+  if (!res.ok) {
+    /* A JSON body is one of OUR errors and is written to be read by the
+       person in front of the screen. Anything else came from something
+       between the browser and the API - a proxy, a static host, a captive
+       portal - and its body is an internal error page, sometimes carrying a
+       request id. Echoing that puts infrastructure wording in front of a
+       student, so it is replaced with what it actually means to them. */
+    throw new ApiError(res.status, json || { error: hostError(res.status) });
+  }
   return json;
 }
 
