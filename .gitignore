@@ -9,3 +9,6 @@ server/var/
 # build output is reproducible from `node build.mjs`
 dist/
 !prototype/dist/
+
+.vercel
+.env*
