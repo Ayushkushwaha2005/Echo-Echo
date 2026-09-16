@@ -278,6 +278,73 @@ Create three Render **Static Sites** publishing `dist/web`, `dist/admin`,
 `dist/shop`; add the rewrite `/* → /index.html` only if a surface needs it
 (`dist/serve.json` is the reference); no directory listing.
 
+## 7b. Surfaces on Vercel (current deployment)
+
+The surfaces are deployed to Vercel from `main`:
+
+| | |
+|---|---|
+| Project | `echo-echo` |
+| Production URL | https://echo-echo-nu.vercel.app |
+| Repository | github.com/Ayushkushwaha2005/Echo-Echo (`main`) |
+| Build | `node build.mjs --production` |
+| Output | `dist` |
+| Install | none — the surfaces are plain ES modules with no dependencies |
+
+`vercel.json` mirrors the redirects and headers that `build.mjs` already
+writes into `dist/serve.json`, so the deployed site behaves the way
+`npm run web` does locally: `/` redirects to `/web/`, and every response
+carries `nosniff`, `DENY`, `no-referrer` and `no-cache`.
+
+**Only the surfaces are on Vercel. The API is not, and cannot be.** It is a
+long-running Fastify process holding a PostgreSQL pool and running in-process
+schedulers; a serverless function is neither long-running nor a stable place
+to hold either. Nothing about that should be worked around — see section 6 for
+hosting it on Render.
+
+### The API base, and why it is `same-origin`
+
+The Vercel project sets `QUAD_API_BASE=same-origin` at build time. Nothing is
+injected into the pages and `client.js` falls back to `location.origin`.
+
+This is not a placeholder for a missing URL. It is the only arrangement that
+can work at all, because the session cookie is `SameSite=Lax`:
+
+- `*.vercel.app` is on the Public Suffix List, so
+  `echo-echo-nu.vercel.app` and any separate API host are **different sites**
+  to a browser. A `SameSite=Lax` cookie is not sent across them, so
+  sign-in would appear to succeed and then every following request would
+  arrive anonymous.
+- Pointing the build at a separate API hostname does not fix that. Only
+  same-origin does.
+
+So until the API is hosted, the deployed site is the **interface only**: every
+screen renders, and anything that needs the API reports that it cannot reach
+the server. That is accurate, not a degraded mode to apologise for.
+
+### Connecting the API to it
+
+Two options, both same-origin:
+
+1. **A Vercel rewrite** to the API host, so the browser only ever talks to the
+   Vercel origin. Add to `vercel.json`, before deploying:
+
+   ```json
+   "rewrites": [{ "source": "/api/:path*", "destination": "https://<api-host>/:path*" }]
+   ```
+
+   This keeps one origin and the cookie flows. Note the API sets cookies on
+   the proxied responses, so `HTTP.secureCookies` must be on and
+   `TRUST_PROXY=true`.
+
+2. **A custom domain**, `echoecho.in` for the surfaces and `api.echoecho.in`
+   for the API. Same registrable domain, so `SameSite=Lax` is satisfied
+   without a proxy. This is the arrangement section 1 describes and the one to
+   prefer for a real launch.
+
+Either way the build stays `same-origin` for option 1, or becomes
+`QUAD_API_BASE=https://api.echoecho.in` for option 2.
+
 ## 8. Campus data (Bidholi)
 
 Research and sources: [CAMPUS-UPES-BIDHOLI.md](CAMPUS-UPES-BIDHOLI.md).
