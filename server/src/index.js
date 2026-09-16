@@ -56,6 +56,11 @@ export function build() {
           'req.headers.cookie', 'req.headers.authorization',
           'req.headers["x-razorpay-signature"]', 'res.headers["set-cookie"]',
           'req.body.code', 'req.body.otp', 'req.body.password',
+          /* The two-stage sign-in and the password reset each carry a
+             single-use bearer secret in the body. Neither is a session, but
+             either would let somebody finish a sign-in or set a password if
+             it were read out of a log. */
+          'req.body.challenge', 'req.body.token', 'req.body.currentPassword',
           'req.body.inviteCode', 'req.body.credential', '*.public_key_jwk',
           '*.code_hash', '*.token_hash', '*.apiKey', '*.secret',
         ],

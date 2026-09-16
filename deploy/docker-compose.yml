@@ -1,0 +1,99 @@
+# ===========================================================================
+# ECHO ECHO — the API and its reverse proxy on one small VM.
+#
+#   docker compose up -d
+#
+# Two things this file is responsible for, both of which the product depends
+# on and neither of which is automatic:
+#
+#   1. The API comes back by itself. `restart: unless-stopped` survives a
+#      crash AND a VM reboot, so the 30-second sweeper and the 60-second
+#      settlement scheduler keep running without anyone logging in. Those are
+#      in-process timers; if the container stays down, abandoned orders are
+#      never released and settlement batches are never built.
+#
+#   2. The API is not reachable except through Caddy. It publishes to
+#      127.0.0.1 only, so nothing answers on the VM's public address except
+#      ports 80 and 443.
+#
+# Secrets are NOT in this file. They are read from server.env on the VM,
+# which is never committed (see .gitignore) and should be chmod 600.
+# ===========================================================================
+services:
+  api:
+    build:
+      context: ../server
+      dockerfile: Dockerfile
+    image: echo-echo-api:latest
+    container_name: echo-echo-api
+    restart: unless-stopped
+
+    # Loopback only. Caddy reaches it; the internet does not.
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    env_file:
+      - ./server.env
+
+    environment:
+      # Behind Caddy, so the real client address arrives in X-Forwarded-For.
+      # Without this every request shares the proxy's IP and the per-IP rate
+      # limits stop being per-IP.
+      TRUST_PROXY: "true"
+      # Bind inside the container; the port mapping above does the isolating.
+      HOST: "0.0.0.0"
+      PORT: "8080"
+
+    # The image already defines a HEALTHCHECK against /ready, which checks
+    # PostgreSQL rather than just the process. It is restated here so the
+    # timings are visible next to the restart policy they interact with.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+    # A B1s has 1 GB of RAM and Caddy needs some of it. The API is Fastify
+    # with five dependencies and a connection pool; this ceiling is generous
+    # and exists so a leak degrades one container instead of the whole VM.
+    mem_limit: 640m
+
+    # Docker's json-file driver grows without bound by default, and a 30 GB
+    # OS disk fills quietly. Structured logs are already redacted.
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # SIGTERM reaches the app, which closes Fastify and ends the pg pool
+    # before exiting. Give it room to finish in-flight requests.
+    stop_grace_period: 30s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: echo-echo-caddy
+    restart: unless-stopped
+    # The proxy is the only thing on the public interface.
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and keys. This volume is what stops Let's Encrypt being
+      # asked for a new certificate on every restart, which would hit its
+      # rate limits within a day.
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    depends_on:
+      - api
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:
+  caddy_logs:

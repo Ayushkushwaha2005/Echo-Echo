@@ -12,3 +12,6 @@ dist/
 
 .vercel
 .env*
+
+# deployment secrets live only on the VM
+deploy/server.env

@@ -1,0 +1,63 @@
+# ===========================================================================
+# ECHO ECHO — reverse proxy for the API host
+#
+#   https://api.echoecho.tech  ->  the Fastify container on 127.0.0.1:8080
+#
+# Caddy obtains and renews the TLS certificate from Let's Encrypt on its own.
+# That is the whole reason it is here: the API must be https before the
+# server will boot at all (SECURE_COOKIES=true, and the boot guard refuses a
+# production start without it).
+#
+# The Fastify container is NOT published on a public port. It listens on the
+# loopback interface of the VM and only Caddy can reach it, so the API cannot
+# be hit over plain http by going around the proxy.
+# ===========================================================================
+
+{
+	# A real address, so expiry notices arrive somewhere a person reads.
+	# Replace before first boot; Caddy will not start with a placeholder.
+	email admin@echoecho.tech
+}
+
+api.echoecho.tech {
+	# --- the application ---------------------------------------------------
+	# Caddy terminates TLS and forwards to the container. X-Forwarded-For and
+	# X-Forwarded-Proto are set by default, which is what TRUST_PROXY=true on
+	# the Fastify side reads: without both, every request would appear to come
+	# from the proxy's own address and per-IP rate limits would collapse into
+	# one shared bucket.
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Real-IP {remote_host}
+
+		# The container's own readiness endpoint decides whether it is fit to
+		# serve. An instance that cannot reach PostgreSQL fails /ready and is
+		# taken out rather than left answering errors.
+		health_uri /health
+		health_interval 30s
+		health_timeout 5s
+	}
+
+	# --- transport ---------------------------------------------------------
+	encode gzip
+
+	# HSTS is also set by the application, but a request that never reaches
+	# the application (a 502 while the container restarts) should carry it too.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Caddy advertises itself by default. There is no reason to tell the
+		# internet which proxy version is in front of the API.
+		-Server
+	}
+
+	# --- logs --------------------------------------------------------------
+	# Access logs stay on the VM. The application redacts secrets in its own
+	# structured logs; this one records only the request line, so a code or a
+	# token in a body cannot land here either.
+	log {
+		output file /var/log/caddy/api.echoecho.tech.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+		format json
+	}
+}
