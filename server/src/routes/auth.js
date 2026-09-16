@@ -1,17 +1,19 @@
 /* ==========================================================================
    QUAD — AUTH ROUTES
 
-   One login path for every role: phone → OTP → session. The role is read
-   from the database after verification and the landing surface is derived
-   from it server-side. There is no role parameter on any request in this
-   file, so "select Admin and get admin" is not expressible.
+   One way in per audience, and the role is never something the request
+   asks for. Students prove their university mailbox with a six-digit code
+   sent to it; administrators sign in with a password and an authenticator
+   code (routes/admin-signin.js). The role is read from the database after
+   verification and the landing surface is derived from it server-side, so
+   "select Admin and get admin" is not expressible on any request here.
    ========================================================================== */
-import { sendOtp, verifyOtp, normalisePhone, isConfigured } from '../services/otp.js';
 import { issueSession, revokeSession, cookieOptions } from '../auth/session.js';
-import { landingSurface, SURFACE_ROLES, Forbidden, BadRequest, verificationView } from '../auth/rbac.js';
+import { landingSurface, SURFACE_ROLES, Forbidden, HttpError, verificationView } from '../auth/rbac.js';
 import { q, one, tx } from '../db/index.js';
 import { SESSION, PLATFORM_OWNER, providerStatus, RATE_LIMITS, STUDENT_EMAIL, ADMIN } from '../config.js';
 import { audit } from '../audit.js';
+import { flag } from '../services/flags.js';
 import { acceptPendingInvitation } from '../services/admin-credentials.js';
 import { profileOf, validateMobile } from '../services/profile.js';
 import {
@@ -46,7 +48,10 @@ export default async function authRoutes(app) {
   /* Surfaces call this on boot to know what is actually available, so they
      can render a truthful unavailable state instead of a dead form. */
   app.get('/auth/status', async () => ({
-    otp: { configured: isConfigured() },
+    /* Phone sign-in no longer exists. Reported as permanently unconfigured
+       so an older cached bundle renders its unavailable state rather than a
+       form that cannot work. */
+    otp: { configured: false, removed: true },
     email: { configured: emailConfigured(), domains: STUDENT_EMAIL.domains,
              codeLength: STUDENT_EMAIL.length },
     providers: providerStatus(),
@@ -140,80 +145,23 @@ export default async function authRoutes(app) {
     return { contactPhone: phone };
   });
 
-  app.post('/auth/otp/send', {
-    config: { rateLimit: { max: RATE_LIMITS.otpSend, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } },
-  }, async (req) => {
-    const phone = normalisePhone(req.body?.phone);
-    const out = await sendOtp(phone, { ip: req.ip });
-    await audit(req, { action: 'auth.otp.send', resource: 'phone', resourceId: phone, outcome: 'ok' });
-    /* Deliberately does not reveal whether an account exists. */
-    return { sent: true, expiresAt: out.expiresAt, resendAfterSeconds: out.resendAfterSeconds, length: out.length };
-  });
+  /* ---------- phone sign-in: removed --------------------------------------
+     There is no phone login in this product. Students sign in with their
+     institutional mailbox; administrators with a password and an
+     authenticator code. A phone number is collected once, at checkout, as
+     the delivery contact number — it is never an identity and never opens a
+     session.
 
-  app.post('/auth/otp/verify', {
-    config: { rateLimit: { max: RATE_LIMITS.otpVerify, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } },
-  }, async (req, reply) => {
-    const phone = normalisePhone(req.body?.phone);
-    const code = String(req.body?.code || '');
-    if (!/^\d{4,8}$/.test(code)) throw BadRequest('Enter the code we sent you');
-
-    try {
-      await verifyOtp(phone, code);
-    } catch (e) {
-      await audit(req, { action: 'auth.otp.verify', resource: 'phone', resourceId: phone,
-                         outcome: 'denied', detail: { message: e.message } });
-      throw e;
-    }
-
-    /* First verified login creates the account with the `student` role.
-       Every other role is granted by an admin, never self-selected. The
-       one exception is the platform owner, matched by the server-side
-       PLATFORM_OWNER_PHONE and applied here in case they sign in before
-       the migration bootstrap has seen them. */
-    const { user, created } = await tx(async (c) => {
-      let u = (await c.query(`SELECT * FROM app_user WHERE phone = $1`, [phone])).rows[0];
-      let created = false;
-      if (!u) {
-        u = (await c.query(
-          `INSERT INTO app_user (phone, name) VALUES ($1,$2) RETURNING *`,
-          [phone, phone === PLATFORM_OWNER.phone ? PLATFORM_OWNER.name : null])).rows[0];
-        created = true;
-        await c.query(
-          `INSERT INTO user_role (user_id, role) VALUES ($1,'student')
-           ON CONFLICT DO NOTHING`, [u.id]);
-      }
-      if (PLATFORM_OWNER.configured && phone === PLATFORM_OWNER.phone) {
-        await c.query(
-          `INSERT INTO user_role (user_id, role) VALUES ($1,'platform_owner')
-           ON CONFLICT DO NOTHING`, [u.id]);
-      }
-      return { user: u, created };
-    });
-
-    if (user.status === 'suspended') {
-      await audit(req, { action: 'auth.login', resourceId: user.id, outcome: 'denied',
-                         detail: { reason: 'suspended' } });
-      throw Forbidden('Account suspended', 'Contact campus support.');
-    }
-
-    const roles = (await q(
-      `SELECT role FROM user_role WHERE user_id = $1 AND status = 'active'`, [user.id]
-    )).rows.map((r) => r.role);
-
-    const token = await issueSession(user.id, { ip: req.ip, userAgent: req.headers['user-agent'] });
-    reply.setCookie(SESSION.cookieName, token, cookieOptions());
-
-    await audit(req, { action: 'auth.login', resource: 'user', resourceId: user.id,
-                       outcome: 'ok', detail: { created, roles } });
-
-    return {
-      user: { id: user.id, name: user.name, phone: user.phone, studentStatus: user.student_status },
-      roles,
-      /* Server decides where you land. */
-      surface: landingSurface(roles),
-      newAccount: created,
-    };
-  });
+     These two endpoints answered on this path until migration 018. They are
+     answered explicitly rather than left to the 404 handler so that an old
+     cached bundle, or anything still pointed at them, gets a truthful
+     reason instead of looking like a routing fault. */
+  const phoneGone = async () => {
+    throw new HttpError(410, 'endpoint_removed', 'Phone sign-in has been removed',
+      'Sign in with your university student email. A phone number is only used as a delivery contact.');
+  };
+  app.post('/auth/otp/send', phoneGone);
+  app.post('/auth/otp/verify', phoneGone);
 
   app.post('/auth/logout', async (req, reply) => {
     await revokeSession(req.cookies?.[SESSION.cookieName]);
@@ -244,6 +192,16 @@ export default async function authRoutes(app) {
       },
       verificationStatus: verificationView(req.actor.studentStatus, req.actor.status),
       profile: await profileOf(req.actor.id),
+      /* The live-location check. `required` is the admin feature flag;
+         `confirmed` is what this session actually proved, read from the
+         session row — the browser is told, never asked. */
+      location: {
+        required: await flag('live_location'),
+        confirmed: !!req.actor.campusPresenceAt,
+        confirmedAt: req.actor.campusPresenceAt,
+        accuracyM: req.actor.campusPresenceAccuracyM,
+        campusId: req.actor.campusPresenceSiteId,
+      },
       roles: req.actor.roles,
       /* Granular administrator permissions usable from THIS session. The
          surfaces use them to hide controls; the server enforces them. */

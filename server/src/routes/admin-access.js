@@ -76,6 +76,10 @@ const ADMIN_LIST_SQL = `
          a.permissions, a.invited_at, a.activated_at, a.suspended_at, a.revoked_at, a.status_reason,
          a.permissions_updated_at, ib.name AS invited_by_name, r.roles,
          (SELECT count(*)::int FROM webauthn_credential w WHERE w.user_id = u.id AND w.revoked_at IS NULL) AS passkeys,
+         /* Whether this administrator can actually sign in: a password AND
+            a confirmed authenticator. Never the values themselves. */
+         (SELECT ac.password_hash IS NOT NULL AND ac.totp_confirmed_at IS NOT NULL
+            FROM admin_credential ac WHERE ac.user_id = u.id) AS "signInReady",
          (SELECT max(issued_at) FROM session s WHERE s.user_id = u.id AND s.auth_method = 'passkey') AS last_sign_in_at,
          (SELECT count(*)::int FROM session s WHERE s.user_id = u.id AND s.revoked_at IS NULL AND s.expires_at > now()) AS active_sessions,
          (SELECT max(at) FROM audit_log l WHERE l.actor_id = u.id) AS last_activity_at
@@ -354,6 +358,8 @@ Nobody from ECHO ECHO will ever ask you for it. If you did not expect this, igno
                 status_reason = $3, updated_at = now()`, [t.id, req.actor.id, reason]);
       const roles = (await c.query(`UPDATE user_role SET status = 'revoked', revoked_at = now()
                       WHERE user_id = $1 AND role IN ('platform_admin','support') AND status = 'active'`, [t.id])).rowCount;
+      /* The password and authenticator go too: revoked means revoked. */
+      await c.query(`DELETE FROM admin_credential WHERE user_id = $1`, [t.id]);
       const passkeys = (await c.query(`UPDATE webauthn_credential SET revoked_at = now(), revoked_by = $2
                       WHERE user_id = $1 AND revoked_at IS NULL`, [t.id, req.actor.id])).rowCount;
       await c.query(`UPDATE admin_recovery_code SET revoked_at = now() WHERE user_id = $1 AND used_at IS NULL AND revoked_at IS NULL`, [t.id]);

@@ -72,21 +72,33 @@ test('security headers are present', async () => {
 
 /* ======================= authentication ================================= */
 
-test('OTP send returns 503 configuration_required with no provider', async () => {
-  const r = await anon().post('/auth/otp/send', { phone: '9876543210' });
-  assert.equal(r.status, 503);
-  assert.equal(r.body.code, 'configuration_required');
-  assert.match(r.body.detail, /OTP_PROVIDER/);
+test('phone sign-in is gone, and says so rather than 404ing', async () => {
+  for (const url of ['/auth/otp/send', '/auth/otp/verify']) {
+    const r = await anon().post(url, { phone: '9876543210', code: '123456' });
+    assert.equal(r.status, 410, `${url} must report itself removed`);
+    assert.equal(r.body.code, 'endpoint_removed');
+    assert.match(r.body.error, /Phone sign-in has been removed/);
+  }
 });
 
-test('OTP verify cannot be used to log in without a provider', async () => {
-  /* The classic bypass attempt. */
+test('no phone code, however guessable, creates an account or a session', async () => {
+  /* The classic bypass attempt, against an endpoint that no longer exists. */
   for (const code of ['123456', '000000', '111111']) {
     const r = await anon().post('/auth/otp/verify', { phone: '9876543210', code });
-    assert.equal(r.status, 503, `code ${code} must not authenticate`);
+    assert.equal(r.status, 410, `code ${code} must not authenticate`);
+    assert.equal(r.headers['set-cookie'], undefined, 'no session cookie may be issued');
   }
   const users = await pool.query(`SELECT count(*)::int AS n FROM app_user`);
   assert.equal(users.rows[0].n, 0, 'no account may be created by a failed verify');
+  const sessions = await pool.query(`SELECT count(*)::int AS n FROM session`);
+  assert.equal(sessions.rows[0].n, 0, 'no session may exist');
+});
+
+test('/auth/status reports phone sign-in as removed, not merely unconfigured', async () => {
+  const r = await anon().get('/auth/status');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.otp.configured, false);
+  assert.equal(r.body.otp.removed, true);
 });
 
 test('an anonymous caller gets 401 on authenticated routes', async () => {

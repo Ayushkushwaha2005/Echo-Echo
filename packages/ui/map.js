@@ -1,0 +1,150 @@
+/* ==========================================================================
+   ECHO ECHO — CAMPUS MAP
+
+   OpenStreetMap tiles drawn with Leaflet. No Google Maps, no API key, no
+   billing account, and nothing scraped: OSM tiles are served under the Open
+   Database Licence and the attribution below is the condition of using them.
+
+   The map draws only what the SERVER sent. It has no coordinates of its own
+   and never guesses one: if a cafeteria or a delivery point has no surveyed
+   position, it is absent from the map and the screen says so in words. That
+   is the whole reason this file takes a `tracking` payload rather than an
+   address — /orders/:id/tracking has already decided what this viewer may
+   see, including whether the delivery partner's position is disclosed.
+
+   Leaflet is fetched from a CDN on first use and never bundled, so a screen
+   without a map costs nothing. If the CDN is unreachable the map degrades to
+   a plain list of the same places, which is the information that mattered.
+   ========================================================================== */
+
+const LEAFLET_VERSION = '1.9.4';
+const CDN = `https://cdnjs.cloudflare.com/ajax/libs/leaflet/${LEAFLET_VERSION}`;
+
+let leafletPromise = null;
+
+/* One load, shared by every map on the page. */
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (leafletPromise) return leafletPromise;
+  leafletPromise = new Promise((resolve, reject) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = `${CDN}/leaflet.min.css`;
+    document.head.append(css);
+
+    const js = document.createElement('script');
+    js.src = `${CDN}/leaflet.min.js`;
+    js.async = true;
+    js.onload = () => (window.L ? resolve(window.L) : reject(new Error('Leaflet did not load')));
+    js.onerror = () => reject(new Error('Could not load the map library'));
+    document.head.append(js);
+  }).catch((e) => { leafletPromise = null; throw e; });
+  return leafletPromise;
+}
+
+/* A round pin, drawn in CSS rather than fetched as an image, so the map has
+   no second network dependency and matches the product's palette. */
+const pin = (L, colour, glyph, title) => L.divIcon({
+  className: 'echo-pin-wrap',
+  html: `<span class="echo-pin" style="--pin:${colour}" title="${title}">${glyph}</span>`,
+  iconSize: [30, 30],
+  iconAnchor: [15, 15],
+});
+
+const PLACES = {
+  pickup: { colour: '#1C1917', glyph: '🍴', label: 'Pick-up' },
+  destination: { colour: '#E0567A', glyph: '📍', label: 'Delivering to' },
+  partner: { colour: '#2F7D5F', glyph: '🛵', label: 'Your delivery partner' },
+};
+
+/**
+ * Draw a tracking payload into `el`.
+ *
+ * @param el        the container element
+ * @param tracking  the body of GET /orders/:id/tracking
+ * @param opts.self optional { lat, lng } for "you are here" on the partner's
+ *                  own screen — never sent anywhere by this function
+ */
+export async function drawTrackingMap(el, tracking, { self = null } = {}) {
+  const points = [];
+  if (tracking.pickup) points.push({ ...tracking.pickup, kind: 'pickup' });
+  if (tracking.destination) points.push({ ...tracking.destination, kind: 'destination' });
+  if (tracking.partner) points.push({ ...tracking.partner, kind: 'partner', name: 'Delivery partner' });
+  if (self) points.push({ ...self, kind: 'partner', name: 'You' });
+
+  if (!points.length) {
+    el.innerHTML = `<div class="map-empty">
+      <p class="t-sm muted">${escapeText(tracking.note
+        || 'There is nothing to show on a map for this order yet.')}</p></div>`;
+    return null;
+  }
+
+  let L;
+  try {
+    L = await loadLeaflet();
+  } catch {
+    /* No map library. Show the same places as text — the point was where
+       things are, not that there be a picture of it. */
+    el.innerHTML = `<div class="map-empty stack g2">
+      <p class="t-sm muted">The map could not load. The places on this delivery are:</p>
+      <ul class="t-sm" style="margin:0;padding-left:18px">
+        ${points.map((p) => `<li>${escapeText(PLACES[p.kind].label)}: ${escapeText(p.name || '—')}</li>`).join('')}
+      </ul></div>`;
+    return null;
+  }
+
+  el.innerHTML = '';
+  el.classList.add('echo-map');
+  const map = L.map(el, { zoomControl: true, attributionControl: true, scrollWheelZoom: false });
+
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    /* Required by the OSM tile usage policy. */
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map);
+
+  /* The confirmed campus outline, so it is obvious this is a campus-only
+     service and where its edge is. */
+  if (tracking.boundary?.polygon?.length) {
+    L.polygon(tracking.boundary.polygon, {
+      color: '#E0567A', weight: 1.5, opacity: 0.7, fillOpacity: 0.05, dashArray: '5,5',
+    }).addTo(map).bindTooltip(tracking.boundary.name || 'Campus');
+  }
+
+  for (const p of points) {
+    const spec = PLACES[p.kind];
+    L.marker([p.lat, p.lng], { icon: pin(L, spec.colour, spec.glyph, spec.label) })
+      .addTo(map)
+      .bindPopup(`<b>${escapeText(spec.label)}</b><br>${escapeText(p.name || '')}`);
+  }
+
+  /* A straight line between the two ends of the journey. It is deliberately
+     not a routed path: ECHO ECHO has no routing data for footpaths inside a
+     campus, and drawing a road route across a quadrangle would be a
+     confident picture of something untrue. */
+  if (tracking.pickup && tracking.destination) {
+    L.polyline([[tracking.pickup.lat, tracking.pickup.lng],
+                [tracking.destination.lat, tracking.destination.lng]],
+      { color: '#1C1917', weight: 2, opacity: 0.35, dashArray: '6,6' }).addTo(map);
+  }
+
+  const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng]));
+  if (points.length === 1) map.setView(bounds.getCenter(), 17);
+  else map.fitBounds(bounds, { padding: [34, 34], maxZoom: 18 });
+
+  /* Leaflet measures the container on creation; inside a screen that was
+     still laying out, that measurement is wrong until the next frame. */
+  requestAnimationFrame(() => map.invalidateSize());
+  return map;
+}
+
+/** What to tell someone when there is no partner marker. */
+export const partnerVisibilityNote = (v) => ({
+  no_partner_yet: 'No delivery partner has picked this up yet.',
+  hidden_until_pickup: 'You will see your partner on the map once they have collected your order.',
+  not_reported_yet: 'Your partner has collected the order. Their position will appear shortly.',
+  visible: null,
+}[v] ?? null);
+
+const escapeText = (s) => String(s ?? '').replace(/[&<>"']/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);

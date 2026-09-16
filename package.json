@@ -10,6 +10,7 @@
     "seed": "npm --prefix server run seed:local",
     "enrol:owner": "npm --prefix server run enrol:owner:local",
     "api": "npm --prefix server run start:local",
-    "test": "npm --prefix server test"
+    "test": "npm --prefix server test",
+    "admin:setup": "npm --prefix server run admin:setup:local --"
   }
 }

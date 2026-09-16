@@ -12,7 +12,8 @@
 import { randomInt, createHash, randomBytes } from 'node:crypto';
 import { q, one, tx } from '../db/index.js';
 import { authorize, can, assertMayOrder, BadRequest, NotFound, Forbidden, Conflict } from '../auth/rbac.js';
-import { assertDeliverable } from '../services/campus.js';
+import { assertDeliverable, pathOf } from '../services/campus.js';
+import { validateMobile } from '../services/profile.js';
 import { flag } from '../services/flags.js';
 import { audit } from '../audit.js';
 import { notifyAsync } from '../services/notify.js';
@@ -64,8 +65,27 @@ const sha = (s) => createHash('sha256').update(s).digest('hex');
 /* ---------- draft pricing -------------------------------------------------
    Shared by the checkout route and the AI's create_order_draft tool, so both
    get identical, server-computed numbers.                                  */
-export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, destinationId, placedVia }) {
+export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, destinationId,
+                                      contactPhone, landmark, instructions, placedVia }) {
   if (!Array.isArray(lines) || !lines.length) throw BadRequest('Your order is empty');
+
+  /* ---- the delivery contact number -----------------------------------
+     Collected at checkout and nowhere else. It is not an identity and it
+     never opens a session: it is the number the partner rings from the
+     door, and the number the payment gateway wants on a receipt.
+
+     A number given on a previous order is reused, so it is typed once
+     rather than at every checkout - but an order with no number anywhere is
+     refused, not stored blank. Whatever is used is validated as a real
+     Indian mobile number. */
+  const remembered = (await c.query(
+    `SELECT contact_phone, phone FROM app_user WHERE id = $1`, [customerId])).rows[0];
+  const given = contactPhone ?? remembered?.contact_phone ?? remembered?.phone ?? null;
+  if (!given) {
+    throw BadRequest('Add a delivery contact number',
+      'Your delivery partner needs a number to reach you on when they arrive.');
+  }
+  const phone = validateMobile(given);
 
   const v = (await c.query(`SELECT * FROM vendor WHERE id = $1`, [vendorId])).rows[0];
   if (!v || !v.active) throw NotFound('No such cafeteria');
@@ -92,13 +112,42 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
       'You can only order from cafeterias on the campus in your profile.');
   }
 
+  /* The complete destination, frozen onto the order. destination_id stays
+     the only thing the boundary gate trusts; this snapshot is what the
+     delivery partner reads at the door, and it must not change when a
+     building is renamed or a floor is archived next term. */
+  let snapshot = null;
   if (fulfilment === 'delivery') {
     if (!(await flag('delivery'))) throw Conflict('Delivery is currently disabled');
     if (!v.delivery_enabled) throw Conflict(`${v.name} does not deliver`);
-    await assertDeliverable(destinationId, { campusId: v.campus_site_id });   // the campus boundary gate
+    const node = await assertDeliverable(destinationId, { campusId: v.campus_site_id });   // the campus boundary gate
+    const trail = await pathOf(node.id);
+    snapshot = {
+      destinationId: node.id,
+      campus: campus.name,
+      /* campus → zone → building → floor → room, exactly as configured. */
+      path: trail.map((n) => n.name),
+      label: trail.map((n) => n.name).join(' — '),
+      name: node.name,
+      kind: node.kind,
+      detail: node.detail || null,
+      instructions: node.instructions || null,
+      lat: node.lat, lng: node.lng,
+      frozenAt: new Date().toISOString(),
+    };
   } else if (fulfilment !== 'pickup') {
     throw BadRequest('Choose pickup or delivery');
   }
+
+  /* Free text the student adds to the configured destination. It refines a
+     confirmed campus location; it can never replace one, so there is still
+     no way to express an off-campus address. */
+  const clean = (v2, max) => {
+    const t = String(v2 ?? '').trim().replace(/\s+/g, ' ');
+    return t ? t.slice(0, max) : null;
+  };
+  const landmarkText = fulfilment === 'delivery' ? clean(landmark, 120) : null;
+  const instructionsText = fulfilment === 'delivery' ? clean(instructions, 300) : null;
 
   let subtotal = 0;
   const priced = [];
@@ -130,11 +179,20 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
 
   const order = (await c.query(
     `INSERT INTO food_order (code, customer_id, vendor_id, fulfilment, destination_id,
-                             state, subtotal_paise, delivery_paise, total_paise, placed_via)
-     VALUES ($1,$2,$3,$4,$5,'draft',$6,$7,$8,$9) RETURNING *`,
+                             state, subtotal_paise, delivery_paise, total_paise, placed_via,
+                             delivery_contact_phone, delivery_landmark, delivery_instructions,
+                             destination_snapshot)
+     VALUES ($1,$2,$3,$4,$5,'draft',$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
     [randomBytes(4).toString('hex').toUpperCase(), customerId, vendorId, fulfilment,
      fulfilment === 'delivery' ? destinationId : null,
-     subtotal, money.delivery_fee_paise, money.customer_total_paise, placedVia || 'web'])).rows[0];
+     subtotal, money.delivery_fee_paise, money.customer_total_paise, placedVia || 'web',
+     phone, landmarkText, instructionsText,
+     snapshot ? JSON.stringify(snapshot) : null])).rows[0];
+
+  /* Remember it for next time, so the number is typed once rather than at
+     every checkout. Still not an identity: nothing signs in with it. */
+  await c.query(`UPDATE app_user SET contact_phone = $2, profile_updated_at = now()
+                  WHERE id = $1 AND (contact_phone IS DISTINCT FROM $2)`, [customerId, phone]);
 
   /* Immutable from the moment it is written. The table's CHECK constraints
      re-prove the allocation identity, and its trigger refuses every later
@@ -157,11 +215,13 @@ export default async function orderRoutes(app) {
     /* Holding the capability is not the same as being allowed to use it.
        See assertMayOrder(): active account, approved student verification,
        both read from the session's database row on this request. */
-    assertMayOrder(req.actor);
+    assertMayOrder(req.actor, { liveLocationRequired: await flag('live_location') });
     const b = req.body || {};
     const draft = await tx((c) => buildDraft(c, {
       customerId: req.actor.id, vendorId: b.vendorId, lines: b.lines,
-      fulfilment: b.fulfilment, destinationId: b.destinationId, placedVia: 'web',
+      fulfilment: b.fulfilment, destinationId: b.destinationId,
+      contactPhone: b.contactPhone, landmark: b.landmark, instructions: b.instructions,
+      placedVia: 'web',
     }));
     await audit(req, { action: 'order.draft', resource: 'order', resourceId: draft.id, outcome: 'ok' });
     return draft;
@@ -222,6 +282,46 @@ export default async function orderRoutes(app) {
     const financials = await snapshotFor({ query: q }, o.id);
     const canAudit = can(req.actor, 'finance.read_all') || can(req.actor, 'order.inspect');
 
+    /* ---- who sees which numbers ---------------------------------------
+       The snapshot holds the whole allocation: what the cafeteria is owed,
+       what the partner earns, what ECHO ECHO keeps. Only someone auditing
+       the order needs all of it.
+
+       A customer sees what they were charged and what it was made up of.
+       A delivery partner sees what THEY earn and nothing else about the
+       split - not the cafeteria's share, not the platform's. Neither is a
+       secret being kept from them; it is simply not their side of the
+       transaction, and putting it on screen invites an argument about a
+       number that is not theirs to negotiate. */
+    const isPartner = o.partner_id === req.actor?.id;
+    const isCustomer = o.customer_id === req.actor?.id;
+    const shapeMoney = (f) => {
+      if (!f) return null;
+      if (canAudit) return f;
+      if (isCustomer) {
+        return {
+          order_id: f.order_id,
+          food_subtotal_paise: f.food_subtotal_paise,
+          discount_paise: f.discount_paise,
+          tax_paise: f.tax_paise,
+          delivery_fee_paise: f.delivery_fee_paise,
+          platform_fee_paise: f.platform_fee_paise,
+          customer_total_paise: f.customer_total_paise,
+        };
+      }
+      if (isPartner) {
+        return { order_id: f.order_id, delivery_earning_paise: f.delivery_earning_paise };
+      }
+      /* Cafeteria staff: what this order is worth to the cafeteria. */
+      return {
+        order_id: f.order_id,
+        food_subtotal_paise: f.food_subtotal_paise,
+        commission_paise: f.commission_paise,
+        cafeteria_payable_paise: f.cafeteria_payable_paise,
+        customer_total_paise: f.customer_total_paise,
+      };
+    };
+
     /* Who is bringing it: enough to recognise them at the door - first name,
        photo, delivery rating - and nothing else. No phone, no email, no
        surname, no account id. */
@@ -253,7 +353,14 @@ export default async function orderRoutes(app) {
     const shownEvents = customerView
       ? events.map(({ actor_id, actor_name, ...e }) => e) : events;
     return {
-      order: shaped, items, events: shownEvents, payment, financials, partner, myReviews,
+      order: shaped, items, events: shownEvents, payment,
+      financials: shapeMoney(financials), partner, myReviews,
+      /* What the partner is paid for bringing this order, stated plainly and
+         computed by the server from the policy pinned to the order. */
+      earning: isPartner && financials
+        ? { paise: financials.delivery_earning_paise,
+            note: 'Paid to you when the delivery is confirmed with the customer\'s code.' }
+        : undefined,
       ledger: canAudit ? await entriesForOrder(q, o.id) : undefined,
     };
   });

@@ -29,6 +29,9 @@ import financeRoutes from './routes/finance.js';
 import profileRoutes from './routes/profile.js';
 import trustRoutes from './routes/trust.js';
 import passkeyRoutes from './routes/passkeys.js';
+import adminSignInRoutes from './routes/admin-signin.js';
+import adminResetRoutes from './routes/admin-reset.js';
+import trackingRoutes from './routes/tracking.js';
 import adminAccessRoutes from './routes/admin-access.js';
 import geodataRoutes from './routes/geodata.js';
 
@@ -145,9 +148,18 @@ export function build() {
     const PUBLIC = [
       /^\/health$/, /^\/ready$/,
       /^\/auth\/(status|otp\/send|otp\/verify|email\/send|email\/verify|logout|me)$/,
+      /* Administrator sign-in is public in exactly the sense the student's
+         email code is: it proves possession of a password AND a code from a
+         registered authenticator, and only then does a session exist. The
+         status endpoint tells the screen which method to render. */
+      /^\/auth\/admin\/(status|logout)$/,
+      /^\/auth\/admin\/login(\/password)?$/,
+      /* Password reset proves an institutional mailbox with an emailed
+         code. It issues no session and never bypasses the authenticator. */
+      /^\/auth\/admin\/password-reset\/(request|verify|complete)$/,
       /* Redeeming an enrolment code is public in exactly the sense that
-         verifying an OTP is: it proves possession of a secret, and only
-         then does a session exist. */
+         verifying an email code is: it proves possession of a secret, and
+         only then does a session exist. */
       /^\/auth\/enrol$/, /^\/auth\/enrol\/available$/,
       /* Passkey sign-in proves possession of a registered private key. */
       /^\/auth\/passkey\/login\/(options|verify)$/,
@@ -155,7 +167,7 @@ export function build() {
       /^\/vendors(\/[^/]+\/(menu|contact))?$/,      // browsing before sign-in
       /^\/menu\/search/, /^\/reviews/,
       /^\/campus\/(tree|destinations|search|resolve|boundary)/,
-      /^\/ai\/status$/, /^\/campuses$/, /^\/partner\/policy$/,
+      /^\/ai\/status$/, /^\/campuses$/, /^\/partner\/policy$/, /^\/pricing\/current$/,
       /^\/assets\/[0-9a-f-]{36}$/, /^\/assets\/limits$/,
     ];
 
@@ -248,6 +260,9 @@ export function build() {
     });
 
     await app.register(authRoutes);
+    await app.register(adminSignInRoutes);
+    await app.register(adminResetRoutes);
+    await app.register(trackingRoutes);
     await app.register(catalogRoutes);
     await app.register(campusRoutes);
     await app.register(orderRoutes);

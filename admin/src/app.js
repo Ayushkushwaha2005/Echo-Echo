@@ -772,20 +772,22 @@ async function scrTrust() {
 const ADMIN_BADGE = { active: 'badge-ok', invited: 'badge-warn', suspended: 'badge-bad', revoked: 'badge-bad' };
 
 async function scrAdmins() {
-  setTitle('Administrators', 'Who can run ECHO ECHO, with exactly which permissions. Every administrator signs in with a passkey.');
+  setTitle('Administrators',
+    'Who can run ECHO ECHO, and exactly what each of them may do. Everyone here signs in with a password and an authenticator code.');
   head().innerHTML = `
     ${session.isOwner ? '<button class="btn btn-primary btn-sm" data-act="newAdminInvite">Invite administrator</button>' : ''}
-    <button class="btn btn-secondary btn-sm" data-act="addPasskey">Add a passkey on this device</button>`;
+    <button class="btn btn-secondary btn-sm" data-act="changeAdminPassword">Change my password</button>
+    <button class="btn btn-secondary btn-sm" data-act="replaceAuthenticator">Replace my authenticator</button>`;
   await panel(view(), async () => ({
     admins: await quad.accessAdmins(),
     invitations: session.can('admins.view') ? await quad.accessInvitations() : { invitations: [] },
-    me: await quad.passkeyStatus(),
+    me: await quad.adminCredential(),
   }), (d) => {
     const open = d.invitations.invitations.filter((i) => i.state === 'waiting');
     return `
     <section class="card card-pad">
       <h2 class="t-label">Administrators</h2>
-      ${table(['Name', 'Status', 'Permissions', 'Passkeys', 'Last sign-in', 'Sessions', ''],
+      ${table(['Name', 'Status', 'Permissions', 'Sign-in set up', 'Last sign-in', 'Sessions', ''],
         d.admins.administrators.map((a) => {
           const self = a.id === session.me.user.id;
           const btn = (act, label, extra = '') =>
@@ -795,7 +797,10 @@ async function scrAdmins() {
             a.isOwner ? '<span class="badge badge-ink">Owner</span>'
               : `<span class="badge ${ADMIN_BADGE[a.status] || ''}">${esc(a.status)}</span>${a.status_reason ? `<div class="t-xs faint">${esc(a.status_reason)}</div>` : ''}`,
             a.isOwner ? 'All' : `${a.effective.permissions.length}${a.effective.source === 'role_default' ? ' <span class="t-xs faint">(role default)</span>' : ''}`,
-            a.passkeys ? String(a.passkeys) : '<span class="badge badge-warn">None</span>',
+            a.signInReady === false ? '<span class="badge badge-warn">Not finished</span>'
+              : a.signInReady === true ? '<span class="badge badge-ok">Ready</span>'
+              : a.passkeys ? '<span class="badge badge-ok">Ready</span>'
+              : '<span class="badge badge-warn">Not finished</span>',
             a.last_sign_in_at ? when(a.last_sign_in_at) : '—',
             String(a.active_sessions),
             `<div class="row" style="gap:6px;flex-wrap:wrap">
@@ -819,11 +824,15 @@ async function scrAdmins() {
         session.isOwner ? `<button class="btn btn-ghost btn-sm" data-act="cancelInvitation" data-id="${i.id}">Cancel</button>` : '']))}
     </section>` : ''}
     <section class="card card-pad" style="margin-top:18px">
-      <h2 class="t-label">Your account</h2>
-      <p class="t-sm">${d.me.credentials.length} passkey${d.me.credentials.length === 1 ? '' : 's'} ·
-        ${d.me.recoveryCodesRemaining} unused recovery code${d.me.recoveryCodesRemaining === 1 ? '' : 's'}</p>
-      ${d.me.recoveryCodesRemaining <= 3 ? `<p class="t-xs" style="color:var(--warn)">You are running low on recovery codes. Register a passkey on a second device so losing one is not a lock-out.</p>` : ''}
-      <p class="t-xs faint">Money, roles and campus boundaries ask for your passkey again after ${d.me.reauthMinutes} minutes.</p>
+      <h2 class="t-label">Your sign-in</h2>
+      <p class="t-sm">
+        Password ${d.me.passwordSet ? `set${d.me.passwordUpdatedAt ? ` ${when(d.me.passwordUpdatedAt)}` : ''}` : '<b>not set</b>'} ·
+        Authenticator ${d.me.authenticatorReady ? 'working' : '<b>not finished</b>'}
+      </p>
+      ${!d.me.authenticatorReady ? `<p class="t-xs" style="color:var(--warn)">
+        Finish setting up your authenticator app. Until you do, you cannot sign back in after this session ends.</p>` : ''}
+      <p class="t-xs faint">Money, roles and campus boundaries ask for your password and a fresh code again after a while.
+        ECHO ECHO stores no fingerprints and no face data.</p>
     </section>`; }, { label: 'Loading administrators' });
 }
 
@@ -1262,7 +1271,7 @@ const ACTIONS = {
       ${field('name', 'Name')}
       ${field('email', 'University email', '', 'email')}
       ${select('role', 'Role ceiling', [['platform_admin', 'Administrator'], ['support', 'Support']])}
-      <p class="t-xs faint">They sign in with this mailbox, enter the one-time code from the invitation email, and create a passkey.
+      <p class="t-xs faint">They sign in with this mailbox, enter the one-time code from the invitation email, then set a password and an authenticator app.
         The code expires in ${catalog.inviteTtlHours} hours and works once.${catalog.emailDelivery ? '' : ' Email is not configured, so the code will be shown to you once instead.'}</p>
       ${permissionPicker(catalog)}`,
     async (d, form) => {
@@ -1287,11 +1296,11 @@ const ACTIONS = {
     (d, form) => quad.setAdminPermissions(t.dataset.id, pickedPermissions(form), d.reason));
   },
   suspendAdmin: (t) => modal(`Suspend ${t.dataset.name}`,
-    `<p class="t-sm muted">Every session ends now. Their passkeys are kept so the owner can restore access later.</p>
+    `<p class="t-sm muted">Every session ends now. Their password and authenticator are kept, so the owner can restore access later.</p>
      ${field('reason', 'Reason')}`, (d) => quad.suspendAdmin(t.dataset.id, d.reason)),
   restoreAdmin: (t) => modal(`Restore ${t.dataset.name}`, field('reason', 'Reason'), (d) => quad.restoreAdmin(t.dataset.id, d.reason)),
   revokeAdmin: (t) => modal(`Revoke ${t.dataset.name}'s administrator access`,
-    `<p class="t-sm muted">Removes their administrator role, passkeys, recovery codes, pending invites and every session.
+    `<p class="t-sm muted">Removes their administrator role, password, authenticator, pending invites and every session.
       Their student account is not affected. Restoring later needs a new invitation.</p>
      ${field('reason', 'Reason')}`, (d) => quad.revokeAdmin(t.dataset.id, d.reason)),
   revokeAdminSessions: (t) => modal(`Sign ${t.dataset.name} out everywhere`, field('reason', 'Reason'),
@@ -1316,7 +1325,8 @@ const ACTIONS = {
         ${a.activated_at ? ` · active since ${when(a.activated_at)}` : ''}</p>
       <h3 class="t-label" style="margin-top:12px">Permissions</h3>
       <p class="t-xs">${a.isOwner ? 'All, including owner-only powers.' : a.effective.permissions.map(esc).join(', ') || 'None'}</p>
-      <h3 class="t-label" style="margin-top:12px">Passkeys</h3>
+      <h3 class="t-label" style="margin-top:12px">Old passkeys</h3>
+      <p class="t-xs faint">Left over from the previous sign-in. Nobody signs in with these any more — remove them when you see them.</p>
       ${d.credentials.length ? table(['Device', 'Added', 'Last used', ''], d.credentials.map((c) => [
         esc(c.label), when(c.created_at), c.last_used_at ? when(c.last_used_at) : '—',
         c.revoked_at ? '<span class="badge">removed</span>'
@@ -1329,34 +1339,52 @@ const ACTIONS = {
       <h3 class="t-label" style="margin-top:12px">Recent activity</h3>
       ${d.activity.length ? table(['When', 'Action', 'Outcome'], d.activity.slice(0, 50).map((x) => [when(x.at), esc(x.action), esc(x.outcome)])) : '<p class="t-sm muted">No activity yet.</p>'}`, DONE);
   },
-  inviteAdmin: async (t) => {
-    const out = await act(t, () => quad.passkeyInvite(t.dataset.id));
-    if (!out) return;
-    modal(`Passkey invite · ${t.dataset.name}`, `
-      <p class="t-sm muted">Give this code to ${esc(t.dataset.name)} in person or over a channel you trust.
-        They sign in with their student email, choose “Set up your passkey” and enter it.</p>
-      <div class="enrolcode">${esc(out.code)}</div>
-      <p class="t-xs faint" style="margin-top:10px">Works once, expires ${esc(new Date(out.expiresAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }))}. Shown only now.</p>`,
-      DONE);
-  },
   revokePasskey: (t) => {
     if (!confirm(`Remove the passkey “${t.dataset.label}”? Sessions opened with it end immediately.`)) return;
     return act(t, () => quad.revokePasskey(t.dataset.id), { ok: 'Passkey removed', after: scrAdmins });
   },
-  addPasskey: async (t) => {
-    const { registerPasskey, passkeyError } = await import('../../packages/ui/passkey.js');
-    t.disabled = true;
+
+  /* ---- your own sign-in ---------------------------------------------------
+     A new password needs the old one and a current code, so someone who
+     walks up to an unlocked screen cannot lock the real administrator out. */
+  changeAdminPassword: async () => {
+    const current = prompt('Your current password:');
+    if (current === null) return;
+    const code = prompt('The 6-digit code your authenticator app is showing now:');
+    if (code === null) return;
+    const next = prompt('Your new password (at least 12 characters):');
+    if (next === null) return;
+    const again = prompt('Type the new password again:');
+    if (again !== next) return toast('The two passwords do not match', 'bad');
     try {
-      await registerPasskey({ label: prompt('Name this device', navigator.platform || 'This device') || 'This device' });
-      toast('Passkey added'); scrAdmins();
-    } catch (e) {
-      if (e?.code === 'reauth_required' || e?.code === 'passkey_required') {
-        const { passkeyReauth } = await import('../../packages/ui/passkey.js');
-        try { await passkeyReauth(); await registerPasskey({ label: 'This device' }); toast('Passkey added'); scrAdmins(); }
-        catch (e2) { toast(passkeyError(e2), 'bad'); }
-      } else toast(passkeyError(e), 'bad');
-    } finally { t.disabled = false; }
+      await quad.setAdminPassword({ currentPassword: current, code, password: next });
+      toast('Password changed. Every other session has been signed out.');
+      scrAdmins();
+    } catch (e) { toast(explain(e), 'bad'); }
   },
+
+  replaceAuthenticator: async () => {
+    if (!confirm('Set up a new authenticator? The one you use now stops working as soon as you confirm the new one.')) return;
+    let out;
+    try { out = await quad.beginAuthenticator(); }
+    catch (e) { return toast(explain(e), 'bad'); }
+    modal('Set up your authenticator', `
+      <p class="t-sm muted">In Microsoft Authenticator — or any authenticator app — choose
+        <b>Add account → Other account → Enter key manually</b>, then type this key.</p>
+      <div class="enrolcode">${esc(out.secret)}</div>
+      <p class="t-xs faint">Account name: ${esc(out.issuer)} · ${out.digits} digits · a new code every ${out.periodSeconds} seconds.
+        This key is shown once. It is stored encrypted and nothing can read it back.</p>
+      <label class="t-label" style="margin-top:12px;display:block">Code the app is showing now</label>
+      <input class="input" name="code" inputmode="numeric" maxlength="6" placeholder="——————"
+             style="font-family:'DM Mono',monospace;letter-spacing:.3em;text-align:center">`,
+      async (data) => {
+        const code = String(data.code || '').replace(/\D/g, '');
+        if (code.length !== 6) throw new Error('Enter the 6 digits the app is showing.');
+        await quad.confirmAuthenticator(code);
+        toast('Authenticator set up');
+      });
+  },
+  /* Passkeys are no longer a sign-in method; nothing offers adding one. */
 
   /* ---- campuses ---- */
   editCampus: (t) => {
@@ -1412,7 +1440,7 @@ const ACTIONS = {
   assignOwner: (t) => modal('Assign cafeteria owner', `
     ${field('name', 'Name')}${field('phone', 'Phone number', '', 'tel')}
     <p class="t-xs faint">
-      No password is created. They sign in with an OTP to their own number and land on Counter.
+      No password is created. Give them an enrolment code and they sign in at the Counter.
     </p>`,
     (d) => quad.grantRole({ ...d, role: 'vendor_owner', vendorId: t.dataset.id })),
 
@@ -1951,6 +1979,14 @@ const ACTIONS = {
       <label class="field"><span>Delivery earning paid to the partner (paise)</span>
         <input class="input" name="deliveryEarningPaise" type="number" min="0"
                value="${live.delivery_earning_paise ?? 0}"></label>
+      <label class="field"><span>Higher earning on a bigger order (paise)</span>
+        <input class="input" name="deliveryEarningHighPaise" type="number" min="0"
+               value="${live.delivery_earning_high_paise ?? ''}"
+               placeholder="leave both empty for one flat earning"></label>
+      <label class="field"><span>Food subtotal at which the higher earning starts (paise)</span>
+        <input class="input" name="deliveryEarningThresholdPaise" type="number" min="0"
+               value="${live.delivery_earning_threshold_paise ?? ''}"
+               placeholder="e.g. 30000 for ₹300"></label>
       <label class="field"><span>Tax on food (basis points)</span>
         <input class="input" name="taxBps" type="number" min="0" max="10000"
                value="${live.tax_bps ?? 0}"></label>`,
@@ -1961,6 +1997,11 @@ const ACTIONS = {
           platformFeeBps: Number(d.platformFeeBps),
           deliveryFeePaise: Number(d.deliveryFeePaise),
           deliveryEarningPaise: Number(d.deliveryEarningPaise),
+          /* Both or neither. Passed through as typed - empty means "no
+             tier", and the server refuses one without the other rather than
+             quietly keeping half a rule. */
+          deliveryEarningHighPaise: d.deliveryEarningHighPaise,
+          deliveryEarningThresholdPaise: d.deliveryEarningThresholdPaise,
           taxBps: Number(d.taxBps),
         });
         toast('New terms take effect on the next order');

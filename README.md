@@ -27,7 +27,8 @@ Three processes, each in its own terminal, from the repository root.
 
 ```bash
 cd server && npm install && cd ..
-cp server/.env.example server/.env   # set PLATFORM_OWNER_PHONE; DATABASE_URL
+cp server/.env.example server/.env   # set PLATFORM_OWNER_EMAIL, ADMIN_TOTP_KEY
+                                     # and DATABASE_URL
                                      # postgres://quad:quad@localhost:55433/quad
 
 npm run db          # 1. PostgreSQL (embedded binaries, server/var/pgdev) — keep running
@@ -35,7 +36,7 @@ npm run migrate     #    once, and after pulling new migrations
 npm run seed        #    dev only: 3 cafeterias (closed), menus, campus tree
 npm run api         # 2. API on http://localhost:8080 — keep running
 npm run web         # 3. builds dist/ and serves it on http://localhost:3000 — keep running
-npm run enrol:owner #    prints a one-time sign-in code for the platform owner
+npm run admin:setup #    sets the owner's password and prints an authenticator key
 ```
 
 | Surface | URL |
@@ -49,8 +50,33 @@ The development database is separate from the test cluster on purpose: the
 test runner recreates and stops `server/var/pgdata`, and must never take the
 running site down. `npm test` runs the full suite against real PostgreSQL.
 
+## Signing in
+
+One way in per audience, and none of them is a phone number.
+
+| Who | How |
+|---|---|
+| Student | college → campus → the part of their address before `@stu.upes.ac.in` → a 6-digit code emailed to it → a live-location check |
+| Administrator | email → password → a 6-digit code from Microsoft Authenticator (or any TOTP app) |
+| Counter staff | the mobile number and enrolment code an administrator reads out |
+
+`npm run admin:setup` provisions the owner named in `PLATFORM_OWNER_EMAIL`.
+It prints the authenticator key **once**; the secret is stored encrypted with
+`ADMIN_TOTP_KEY` and no API can read it back. The first correct code the owner
+types confirms the enrolment.
+
+Student sign-in needs an email provider (`EMAIL_PROVIDER=resend` plus
+`RESEND_API_KEY` and `EMAIL_FROM`). Without one, `POST /auth/email/send`
+returns 503 and the screen says so — no code is ever faked.
+
+The live-location check is enforced on the server, not in the browser: a
+successful fix is recorded on the session row, and ordering is refused
+without it. It fails closed when permission is denied, when the fix is too
+imprecise, when there is no confirmed campus boundary, and when the student
+is outside it or too near its edge.
+
 The server **refuses to start** without `DATABASE_URL` and
-`PLATFORM_OWNER_PHONE`, and prints exactly which capabilities are inert
+a platform owner, and prints exactly which capabilities are inert
 because their provider is missing. Production deployment: docs/DEPLOY.md.
 ## What is enforced, and where
 

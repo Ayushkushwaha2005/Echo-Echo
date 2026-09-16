@@ -46,7 +46,11 @@ const hash = (code, salt) =>
    platform_owner: an admin must never be able to mint their way into the
    owner account. The owner uses the bootstrap CLI, which requires shell
    access to the server and is therefore proof of control of the deployment. */
-export const ENROLLABLE_ROLES = ['platform_admin', 'support', 'vendor_owner', 'vendor_staff'];
+/* Cafeteria counter staff, and nobody else. Administrators used to be on
+   this list; they now sign in to Campus Control with a password and an
+   authenticator code, so issuing them a code would create a second, weaker
+   door onto the same surface. Students have never been on it. */
+export const ENROLLABLE_ROLES = ['vendor_owner', 'vendor_staff'];
 
 export async function assertEnrollable(userId) {
   const roles = (await q(
@@ -58,8 +62,9 @@ export async function assertEnrollable(userId) {
       'Run `npm run enrol:owner` on the server instead — controlling the host is the proof of ownership.');
   }
   if (!roles.some((r) => ENROLLABLE_ROLES.includes(r))) {
-    throw Forbidden('This account has no staff or admin role',
-      'Enrolment codes exist for cafeteria and platform staff. Students sign in with a phone OTP.');
+    throw Forbidden('This account is not cafeteria counter staff',
+      'Enrolment codes exist for cafeteria staff signing in at the counter. Students sign in with ' +
+      'their university student email; administrators use their password and authenticator code.');
   }
   return roles;
 }

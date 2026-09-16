@@ -401,6 +401,14 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: 700; }
   transition: all var(--d-fast) var(--e-out);
 }
 .loccard:hover { border-color: var(--accent); }
+/* A campus that is not open yet. Rendered as a plain element rather than a
+   button, so there is nothing to focus, press or activate; this only has to
+   make that visible. No hover, no pointer, no selected state. */
+.loccard.is-disabled {
+  opacity: .55; cursor: default; pointer-events: none;
+  background: var(--surface-2, var(--surface)); border-style: dashed;
+}
+.loccard.is-disabled:hover { border-color: var(--line); }
 .loccard[aria-pressed="true"] { background: var(--surface-ink); border-color: transparent; color: var(--text-on-ink); }
 .loccard[aria-pressed="true"] .muted { color: var(--text-on-ink); opacity: .66; }
 .loccard .glyph { font-size: 1.5rem; line-height: 1; }

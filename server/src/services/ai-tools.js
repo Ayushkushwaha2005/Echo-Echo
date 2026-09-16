@@ -198,10 +198,18 @@ export const TOOLS = {
   /* The only tool that writes. It creates an unpaid draft and nothing more. */
   async create_order_draft(actor, { vendor_id, items, fulfilment, destination_id }) {
     authorize(actor, 'order.create');
+    /* The delivery contact number is not something the assistant may invent
+       or accept in conversation: it is read from the account, and an account
+       that has never given one is sent to checkout to type it. */
+    const contact = (await one(`SELECT contact_phone FROM app_user WHERE id = $1`, [actor.id]))?.contact_phone;
+    if (!contact) {
+      return { error: 'no_contact_number',
+        message: 'Ask the student to finish this order on the checkout screen: a delivery contact number is needed and it has to be typed there.' };
+    }
     const draft = await tx((c) => buildDraft(c, {
       customerId: actor.id, vendorId: vendor_id,
       lines: (items || []).map((i) => ({ itemId: i.item_id, qty: i.qty })),
-      fulfilment, destinationId: destination_id, placedVia: 'ai',
+      fulfilment, destinationId: destination_id, contactPhone: contact, placedVia: 'ai',
     }));
     return {
       order_id: draft.id,

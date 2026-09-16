@@ -75,8 +75,6 @@ export const quad = {
   /* ---------- session ---------------------------------------------------- */
   health: () => get('/health'),
   authStatus: () => get('/auth/status'),
-  sendOtp: (phone) => post('/auth/otp/send', { phone }),
-  verifyOtp: (phone, code) => post('/auth/otp/verify', { phone, code }),
   sendEmailCode: (email) => post('/auth/email/send', { email }),
   verifyEmailCode: (email, code) => post('/auth/email/verify', { email, code }),
   setContactPhone: (phone) => post('/auth/me/contact-phone', { phone }),
@@ -86,7 +84,30 @@ export const quad = {
   enrolAvailable: () => get('/auth/enrol/available'),
   enrol: (phone, code) => post('/auth/enrol', { phone, code }),
   me: () => get('/auth/me'),
-  /* Administrator passkeys (WebAuthn). */
+  /* ---------- Campus Control sign-in -------------------------------------
+     Two screens. The first proves the password and comes back with a
+     short-lived challenge; the second exchanges that challenge and an
+     authenticator code for a session. The challenge is not a session and
+     grants nothing on its own, so it is held in memory by the sign-in screen
+     and never written to storage. */
+  adminAuthStatus: () => get('/auth/admin/status'),
+  adminPasswordStage: (email, password) => post('/auth/admin/login/password', { email, password }),
+  adminLogin: (challenge, code) => post('/auth/admin/login', { challenge, code }),
+
+  /* Password reset: an emailed code proves the mailbox and buys a new
+     password. Never a session, and never a way past the authenticator. */
+  adminResetRequest: (email) => post('/auth/admin/password-reset/request', { email }),
+  adminResetVerify: (email, code) => post('/auth/admin/password-reset/verify', { email, code }),
+  adminResetComplete: (token, password) => post('/auth/admin/password-reset/complete', { token, password }),
+  adminReauth: (password, code) => post('/auth/admin/reauth', { password, code }),
+  adminLogout: () => post('/auth/admin/logout'),
+  adminCredential: () => get('/auth/admin/credential'),
+  setAdminPassword: (body) => post('/auth/admin/credential/password', body),
+  beginAuthenticator: () => post('/auth/admin/credential/authenticator/begin'),
+  confirmAuthenticator: (code) => post('/auth/admin/credential/authenticator/confirm', { code }),
+
+  /* Administrator passkeys (WebAuthn). Retained for deployments that still
+     have credentials registered; no surface offers them as a sign-in. */
   passkeyLoginOptions: () => post('/auth/passkey/login/options'),
   passkeyLoginVerify: (credential) => post('/auth/passkey/login/verify', { credential }),
   passkeyReauthOptions: () => post('/auth/passkey/reauth/options'),
@@ -156,6 +177,22 @@ export const quad = {
         : 'Timed out finding your location')),
       { enableHighAccuracy: true, timeout: 10_000, maximumAge: 30_000 });
   }),
+  /* The live-location gate. Unlike locate(), a refusal here is a refusal:
+     the server records the pass on the session, and ordering needs it. */
+  confirmPresence: () => new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      return reject(new Error('This browser cannot share your location, so ordering cannot be opened.'));
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(post('/campus/presence', {
+        lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy })),
+      (err) => reject(new Error(
+        err.code === err.PERMISSION_DENIED
+          ? 'Location permission was denied. ECHO ECHO can only take orders from students on campus, so it needs to check where you are.'
+        : err.code === err.POSITION_UNAVAILABLE ? 'Your location is unavailable right now. Try again outdoors.'
+        : 'Finding your location took too long. Try again outdoors.')),
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 });
+  }),
   campusZones: (campusId) => get('/campus/zones' + qs({ campusId })),
   createLocation: (data) => post('/campus/nodes', data),
   updateLocation: (id, patchBody) => patch(`/campus/nodes/${id}`, patchBody),
@@ -165,6 +202,24 @@ export const quad = {
 
   /* ---------- ordering --------------------------------------------------- */
   draft: (data) => post('/orders/draft', data),
+  /* The fees the server would charge, for an honest bill before payment. */
+  currentPricing: () => get('/pricing/current'),
+  partnerEarningRule: () => get('/partner/earning-rule'),
+
+  /* ---------- live delivery tracking -------------------------------------
+     The server decides what a map may draw, including whether the partner's
+     position is disclosed at all. */
+  tracking: (orderId) => get(`/orders/${orderId}/tracking`),
+  reportLocation: (orderId) => new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error('This browser cannot share location'));
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(post('/partner/location', {
+        orderId, lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy })),
+      (err) => reject(new Error(err.code === err.PERMISSION_DENIED
+        ? 'Location permission was denied' : 'Your location is unavailable')),
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 5_000 });
+  }),
+  clearLocation: () => post('/partner/location/clear'),
   orders: (opts) => get('/orders' + qs(opts)),
   order: (id) => get(`/orders/${id}`),
   transition: (id, to, note) => post(`/orders/${id}/transition`, { to, note }),

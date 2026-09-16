@@ -17,7 +17,7 @@ const bool = (k, d = false) => {
 export const PLATFORM = {
   name: 'Quad',
   legal: 'Quad Campus Commerce',
-  tagline: 'Campus ordering, end to end',
+  tagline: 'Food from your campus, brought to you on it',
 };
 
 export const HTTP = {
@@ -133,6 +133,11 @@ export const RATE_LIMITS = {
   emailSend: Number(env('RL_EMAIL_SEND', 120)),
   emailVerify: Number(env('RL_EMAIL_VERIFY', 240)),
   enrol: Number(env('RL_ENROL', 120)),
+  /* Administrator sign-in is not a campus-wide endpoint — a handful of
+     people use it — so this one can be genuinely tight. The limit that
+     actually protects the account is the per-credential lock-out in
+     services/admin-auth.js, which no IP rotation can dilute. */
+  adminLogin: Number(env('RL_ADMIN_LOGIN', 20)),
   ai: Number(env('RL_AI', 30)),
   windowMinutes: Number(env('RL_WINDOW_MINUTES', 10)),
 };
@@ -402,6 +407,37 @@ export const ADMIN = {
   },
   reauthMinutes: Number(env('ADMIN_REAUTH_MINUTES', 10)),
   inviteTtlHours: Number(env('ADMIN_PASSKEY_INVITE_TTL_HOURS', 24)),
+};
+
+/* ---------- administrator sign-in ----------------------------------------
+   Email + password + a code from an authenticator app. All three are
+   verified on this server: TOTP is computed locally from a shared secret
+   (RFC 6238), so there is no provider to configure and no provider that can
+   be missing. The only piece of environment it needs is a key to encrypt
+   the stored secrets with, and COOKIE_SECRET is an acceptable source for a
+   deployment that has not set a dedicated one. */
+export const ADMIN_AUTH = {
+  totpKey: env('ADMIN_TOTP_KEY') || null,
+  totpIssuer: env('ADMIN_TOTP_ISSUER', 'ECHO ECHO Campus Control'),
+  totpPeriodSeconds: Number(env('ADMIN_TOTP_PERIOD_SECONDS', 30)),
+  /* Steps of clock drift tolerated either way. 1 = ±30 seconds, which is
+     what every authenticator app assumes. */
+  totpWindow: Number(env('ADMIN_TOTP_WINDOW', 1)),
+  maxAttempts: Number(env('ADMIN_LOGIN_MAX_ATTEMPTS', 5)),
+  lockMinutes: Number(env('ADMIN_LOGIN_LOCK_MINUTES', 15)),
+  /* How long an administrator session lasts. Shorter than a student's,
+     because it can change money and permissions. */
+  sessionMinutes: Number(env('ADMIN_SESSION_MINUTES', 480)),
+  /* How long the gap between the password screen and the authenticator
+     screen may be. Long enough to open the app and read a code, short enough
+     that a proven password left on a walked-away-from browser goes stale. */
+  loginChallengeSeconds: Number(env('ADMIN_LOGIN_CHALLENGE_SECONDS', 300)),
+  /* A verified email code buys this long to actually choose a new password. */
+  resetTokenMinutes: Number(env('ADMIN_RESET_TOKEN_MINUTES', 15)),
+  get configured() {
+    const material = this.totpKey || HTTP.cookieSecret;
+    return !!material && material.length >= 32;
+  },
 };
 
 export const WEBAUTHN = {

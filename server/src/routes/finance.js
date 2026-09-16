@@ -266,6 +266,42 @@ export default async function financeRoutes(app) {
      PRICING POLICY — the commercial terms
      ====================================================================== */
 
+  /* ---------- what an order costs, before there is an order --------------
+     The fees ECHO ECHO charges a customer, read from the live platform
+     policy so the checkout screen cannot quote a number the server would
+     not charge. Deliberately only the customer's side: commission and the
+     partner's earning are not a customer's business, and are not here. */
+  app.get('/pricing/current', async () => {
+    const p = await one(
+      `SELECT platform_fee_flat_paise, platform_fee_bps, delivery_fee_paise, tax_bps
+         FROM pricing_policy WHERE effective_to IS NULL AND vendor_id IS NULL
+         ORDER BY effective_from DESC LIMIT 1`);
+    return {
+      currency: 'INR',
+      platformFeeFlatPaise: p?.platform_fee_flat_paise ?? 0,
+      platformFeeBps: p?.platform_fee_bps ?? 0,
+      deliveryFeePaise: p?.delivery_fee_paise ?? 0,
+      taxBps: p?.tax_bps ?? 0,
+      note: 'Indicative. The order is priced again from the live menu when it is placed.',
+    };
+  });
+
+  /* What a delivery partner earns, and where the step is. Shown on the
+     partner screens so the rule is visible rather than folded into a number
+     that appears after the fact. */
+  app.get('/partner/earning-rule', async (req) => {
+    authorize(req.actor, 'delivery.read', { ownerId: req.actor.id });
+    const p = await one(
+      `SELECT delivery_earning_paise, delivery_earning_high_paise, delivery_earning_threshold_paise
+         FROM pricing_policy WHERE effective_to IS NULL AND vendor_id IS NULL
+         ORDER BY effective_from DESC LIMIT 1`);
+    return {
+      basePaise: p?.delivery_earning_paise ?? 0,
+      higherPaise: p?.delivery_earning_high_paise ?? null,
+      thresholdPaise: p?.delivery_earning_threshold_paise ?? null,
+    };
+  });
+
   app.get('/admin/pricing', async (req) => {
     authorize(req.actor, 'finance.read_all');
     const { rows } = await q(
@@ -313,6 +349,23 @@ export default async function financeRoutes(app) {
       throw BadRequest('discountFundedBy must be platform or cafeteria');
     }
 
+    /* ---- the two-tier delivery earning --------------------------------
+       Both or neither. A threshold with no higher amount (or the reverse)
+       is a rule that would look configured and do nothing, so it is
+       refused here as well as by the table's CHECK constraint. */
+    const blank = (v) => v === null || v === undefined || v === '';
+    const hasTier = !blank(b.deliveryEarningHighPaise) || !blank(b.deliveryEarningThresholdPaise);
+    if (hasTier && (blank(b.deliveryEarningHighPaise) || blank(b.deliveryEarningThresholdPaise))) {
+      throw BadRequest('A higher delivery earning needs both an amount and an order value to start at',
+        'Set deliveryEarningHighPaise and deliveryEarningThresholdPaise together, or leave both empty.');
+    }
+    terms.delivery_earning_high_paise = hasTier ? int('deliveryEarningHighPaise', b.deliveryEarningHighPaise) : null;
+    terms.delivery_earning_threshold_paise = hasTier ? int('deliveryEarningThresholdPaise', b.deliveryEarningThresholdPaise) : null;
+    if (hasTier && terms.delivery_earning_high_paise < terms.delivery_earning_paise) {
+      throw BadRequest('The higher delivery earning is lower than the base one',
+        'The amount paid above the threshold must be at least the base earning.');
+    }
+
     const created = await tx(async (c) => {
       await c.query(
         `UPDATE pricing_policy SET effective_to = now()
@@ -320,11 +373,13 @@ export default async function financeRoutes(app) {
       const { rows } = await c.query(
         `INSERT INTO pricing_policy (vendor_id, commission_bps, commission_mode,
            platform_fee_flat_paise, platform_fee_bps, delivery_fee_paise,
-           delivery_earning_paise, tax_bps, discount_funded_by, note, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+           delivery_earning_paise, delivery_earning_high_paise, delivery_earning_threshold_paise,
+           tax_bps, discount_funded_by, note, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
         [vendorId, terms.commission_bps, terms.commission_mode,
          terms.platform_fee_flat_paise, terms.platform_fee_bps, terms.delivery_fee_paise,
-         terms.delivery_earning_paise, terms.tax_bps, terms.discount_funded_by,
+         terms.delivery_earning_paise, terms.delivery_earning_high_paise,
+         terms.delivery_earning_threshold_paise, terms.tax_bps, terms.discount_funded_by,
          b.note ? String(b.note).slice(0, 300) : null, req.actor.id]);
       return rows[0];
     });

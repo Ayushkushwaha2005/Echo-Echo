@@ -224,7 +224,7 @@ export default async function paymentRoutes(app) {
     /* Re-checked here, not only at draft creation: verification can be
        revoked between drafting an order and paying for it, and a draft is
        not a licence to complete a purchase. */
-    assertMayOrder(req.actor);
+    assertMayOrder(req.actor, { liveLocationRequired: await flag('live_location') });
     if (!(await flag('online_payment'))) {
       throw ProviderUnavailable('Online payment is currently disabled',
         'Ordering is unavailable until payment is re-enabled. There is no cash option.');

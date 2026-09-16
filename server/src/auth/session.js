@@ -29,7 +29,7 @@ export async function issueSession(userId, { ip, userAgent, method = 'code', cre
     `INSERT INTO session (token_hash, user_id, expires_at, user_agent, ip, auth_method,
                           passkey_verified_at, passkey_credential_id)
      VALUES ($1,$2, now() + ($3 || ' minutes')::interval, $4, $5, $6,
-             CASE WHEN $6 = 'passkey' THEN now() END, $7)`,
+             CASE WHEN $6 IN ('passkey','admin_totp') THEN now() END, $7)`,
     [sha(token), userId, String(ttlMinutes || SESSION.ttlMinutes), userAgent || null, ip || null,
      method, credentialId]);
   return token;
@@ -55,6 +55,7 @@ export async function actorFromToken(token) {
   const s = await one(
     `SELECT s.token_hash, s.user_id, u.status, u.name, u.phone, u.student_status,
             s.auth_method, s.passkey_verified_at, s.issued_at,
+            s.campus_presence_at, s.campus_presence_site_id, s.campus_presence_accuracy_m,
             u.student_email, u.student_email_verified_at, u.contact_phone, u.campus_site_id,
             c.service_status AS campus_service_status, c.name AS campus_name,
             (SELECT method FROM verification_case v WHERE v.user_id = u.id AND v.state = 'approved'
@@ -92,7 +93,14 @@ export async function actorFromToken(token) {
   const adminCaps = !isOwner && platformHeld.length ? capsFor(permissionKeys) : null;
 
   const all = held;
-  const passkeyOk = !ADMIN.passkeyRequired || (s.auth_method === 'passkey' && !!s.passkey_verified_at);
+  /* "Strongly authenticated as an administrator." Campus Control is opened
+     with password + authenticator code (auth_method 'admin_totp'); the
+     older passkey method still satisfies the same gate for any deployment
+     that still has credentials registered. An email-code session never
+     does, so a student who is also an admin cannot touch Campus Control
+     from the session they order lunch with. */
+  const passkeyOk = !ADMIN.passkeyRequired ||
+    (['passkey', 'admin_totp'].includes(s.auth_method) && !!s.passkey_verified_at);
   const recovery = s.auth_method === 'recovery';
   const roles = recovery ? [] : all.filter((r) => !isPlatformRole(r) || (passkeyOk && adminStatus === 'active'));
   const withheldRoles = all.filter((r) => !roles.includes(r));
@@ -113,7 +121,12 @@ export async function actorFromToken(token) {
     studentEmail: s.student_email,
     studentEmailVerifiedAt: s.student_email_verified_at,
     verifiedVia: s.verified_via || null,
-    sessionKind: s.auth_method,              // 'code' | 'passkey' | 'recovery'
+    sessionKind: s.auth_method,              // 'code' | 'admin_totp' | 'passkey' | 'recovery'
+    /* The live-location check this session passed, if any. Read from the
+       session row, so a browser cannot assert it. */
+    campusPresenceAt: s.campus_presence_at || null,
+    campusPresenceSiteId: s.campus_presence_site_id || null,
+    campusPresenceAccuracyM: s.campus_presence_accuracy_m ?? null,
     passkeyAt: s.passkey_verified_at,
     campusId: s.campus_site_id,
     campusServiceStatus: s.campus_service_status || null,

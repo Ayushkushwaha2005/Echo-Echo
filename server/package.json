@@ -18,8 +18,10 @@
     "check:db": "node --env-file=.env scripts/ops-check.mjs db",
     "check:storage": "node --env-file=.env scripts/ops-check.mjs storage",
     "check:email": "node --env-file=.env scripts/ops-check.mjs email",
-    "admin:invite":"node src/db/admin-passkey-invite.js",
-    "admin:invite:local": "node --env-file=.env src/db/admin-passkey-invite.js"
+    "admin:invite": "node src/db/admin-passkey-invite.js",
+    "admin:invite:local": "node --env-file=.env src/db/admin-passkey-invite.js",
+    "admin:setup": "node src/db/admin-setup.js",
+    "admin:setup:local": "node --env-file=.env src/db/admin-setup.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

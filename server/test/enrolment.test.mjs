@@ -111,12 +111,25 @@ test('an admin CANNOT mint their way into the platform owner account', async () 
   assert.equal(codes.rows[0].n, 0, 'no code may exist for the owner');
 });
 
-test('a plain student cannot be enrolled — students use the OTP path', async () => {
+test('a plain student cannot be enrolled - students sign in with their university email', async () => {
   const stu = await makeUser(pool, { phone: '+919600000021', name: 'Asha' });
   const { ca } = await adminAnd(stu);
   const r = await ca.post(`/admin/users/${stu.id}/enrolment`);
   assert.equal(r.status, 403);
-  assert.match(r.body.error, /no staff or admin role/i);
+  assert.match(r.body.error, /not cafeteria counter staff/i);
+});
+
+test('an administrator cannot be given an enrolment code either', async () => {
+  /* Campus Control is opened with a password and an authenticator code.
+     Issuing an administrator a counter code would be a second, weaker door
+     onto the same surface, so it is refused at the point of issue. */
+  const admin2 = await makeUser(pool, { phone: '+919600000022', name: 'Second Admin',
+    roles: ['platform_admin'] });
+  const platformOwner = await makeUser(pool, { phone: '+919000000000', name: 'Owner', roles: ['platform_owner'] });
+  const co = await as(platformOwner);
+  const r = await co.post(`/admin/users/${admin2.id}/enrolment`);
+  assert.equal(r.status, 403);
+  assert.match(r.body.error, /not cafeteria counter staff/i);
 });
 
 test('a code is bound to one account and cannot be redeemed by another number', async () => {
@@ -233,22 +246,22 @@ test('this path needs no external provider at all', async () => {
   assert.equal(PAYMENTS.configured, false);
   assert.equal(AI.configured, false);
 
-  /* And yet a real administrator can be brought online end to end. */
-  const admin2 = await makeUser(pool, { phone: '+919600000040', name: 'New Admin',
-    roles: ['platform_admin'] });
-  const { ca } = await adminAnd(admin2);
-  /* An ordinary administrator cannot mint a sign-in code into a colleague's
-     account; the platform owner can. */
-  assert.equal((await ca.post(`/admin/users/${admin2.id}/enrolment`)).status, 403);
+  /* And yet a real counter can be brought online end to end: an owner issues
+     the code, reads it out, and the cafeteria signs in. No SMS gateway, no
+     mailbox, no third party of any kind. */
+  const v = await makeVendor(pool, { name: 'Frisco', slug: 'frisco-provider-free' });
+  const staff = await makeUser(pool, { phone: '+919600000040', name: 'New Staff',
+    roles: ['vendor_owner'], vendorId: v.id });
   const platformOwner = await makeUser(pool, { phone: '+919000000000', name: 'Owner', roles: ['platform_owner'] });
   const co = await as(platformOwner);
-  const code = (await co.post(`/admin/users/${admin2.id}/enrolment`)).body.code;
+  const code = (await co.post(`/admin/users/${staff.id}/enrolment`)).body.code;
   const login = await anon().post('/auth/enrol', { phone: '9600000040', code });
   assert.equal(login.status, 200);
-  assert.equal(login.body.surface, 'admin');
+  assert.equal(login.body.surface, 'counter');
 
-  /* The OTP route still refuses honestly rather than falling back to this. */
+  /* Phone sign-in is gone rather than merely unconfigured, so nothing can
+     quietly fall back to it. */
   const otp = await anon().post('/auth/otp/send', { phone: '9600000040' });
-  assert.equal(otp.status, 503, 'the OTP path must not silently use enrolment codes');
-  assert.equal(otp.body.code, 'configuration_required');
+  assert.equal(otp.status, 410, 'there is no phone sign-in to fall back to');
+  assert.equal(otp.body.code, 'endpoint_removed');
 });

@@ -194,7 +194,7 @@ export function authorize(actor, action, res = {}) {
  * — is enforced separately by assertDeliverable() in services/campus.js,
  * because it is a property of the order rather than of the person.
  */
-export function assertMayOrder(actor) {
+export function assertMayOrder(actor, { liveLocationRequired = false } = {}) {
   if (!actor) throw Unauthenticated('Sign in required');
   if (actor.status !== 'active') {
     throw Forbidden(`This account is ${actor.status}`,
@@ -217,6 +217,26 @@ export function assertMayOrder(actor) {
         `Your university email was last confirmed more than ${STUDENT_EMAIL.reverifyDays} days ago. Sign in with a new code sent to it.`);
     }
   }
+  /* ---- live location -------------------------------------------------
+     ECHO ECHO takes orders from students who are on campus. The session
+     proves that once, through POST /campus/presence, which writes the
+     verdict onto the session row after testing the fix against the
+     confirmed boundary. Read here from that row: a client that skipped the
+     step, or that says it passed, is refused.
+
+     `liveLocationRequired` is the admin-visible feature flag of the same
+     name, resolved by the caller (it defaults on) and passed in rather than
+     read here, so this function stays synchronous and testable. */
+  if (liveLocationRequired && !actor.campusPresenceAt) {
+    throw new HttpError(403, 'location_required', 'Confirm you are on campus',
+      'ECHO ECHO needs to check your location before you order. Allow location access when your browser asks.');
+  }
+  if (liveLocationRequired && actor.campusPresenceSiteId && actor.campusId &&
+      actor.campusPresenceSiteId !== actor.campusId) {
+    throw new HttpError(403, 'location_required', 'You are not on the campus in your profile',
+      'The location you confirmed is on a different campus. Confirm your location again.');
+  }
+
   /* The profile is evaluated from the session's database row. A client that
      skips the completion screen meets the same refusal. */
   if (actor.profile) {

@@ -66,7 +66,28 @@ const hash = (code, salt) =>
 
 const minutes = () => Math.round(STUDENT_EMAIL.ttlSeconds / 60);
 
-function message(code) {
+function message(code, purpose) {
+  /* A password reset says what it is for. Someone who did not ask for one
+     needs to recognise that immediately, and "student verification code" on
+     an administrator mailbox would bury exactly the wrong thing. */
+  if (purpose === 'admin_reset') {
+    return {
+      subject: `${code} is your ECHO ECHO password reset code`,
+      text:
+`Your ECHO ECHO administrator password reset code is: ${code}
+
+It expires in ${minutes()} minutes and works once.
+
+Enter it on the Campus Control password reset screen. You will still need
+your authenticator app to sign in afterwards - this code on its own does not
+open Campus Control.
+
+If you did not ask to reset your password, ignore this email and your
+password stays as it is. ECHO ECHO staff will never ask you for this code.
+
+- ${PLATFORM.legal}`,
+    };
+  }
   return {
     subject: `${code} is your ECHO ECHO student verification code`,
     text:
@@ -89,9 +110,10 @@ export const isConfigured = () => STUDENT_EMAIL.configured;
 /* ---------- send ---------------------------------------------------------- */
 export async function sendStudentEmailCode(email, { purpose = 'login', userId = null, ip } = {}) {
   if (!STUDENT_EMAIL.configured) {
-    throw ProviderUnavailable('Email verification is not configured',
-      'Set EMAIL_PROVIDER=resend, RESEND_API_KEY and EMAIL_FROM on the server. ' +
-      'No code can be issued until then.');
+    console.error('[student-email] refusing to send: no email provider. ' +
+      'Set EMAIL_PROVIDER=resend, RESEND_API_KEY and EMAIL_FROM on the server.');
+    throw ProviderUnavailable('We cannot send codes right now',
+      'Sign-in is temporarily unavailable. Please try again shortly.');
   }
   if (purpose === 'link') {
     if (!userId) throw BadRequest('Sign in first');
@@ -148,7 +170,8 @@ export async function sendStudentEmailCode(email, { purpose = 'login', userId = 
     const salt = randomBytes(16).toString('hex');
 
     /* Send FIRST: a gateway failure must not leave a live code nobody got. */
-    const ref = await sendEmail({ to: email, ...message(code), secret: code, kind: 'student_code' });
+    const ref = await sendEmail({ to: email, ...message(code, purpose), secret: code,
+                                  kind: purpose === 'admin_reset' ? 'admin_reset_code' : 'student_code' });
 
     const row = (await c.query(
       `INSERT INTO email_challenge (email, purpose, user_id, code_hash, salt, max_attempts,
@@ -171,7 +194,8 @@ export async function sendStudentEmailCode(email, { purpose = 'login', userId = 
    for 'link', the right account) whose code matches. Throws otherwise.     */
 export async function verifyStudentEmailCode(email, code, { purpose = 'login', userId = null } = {}) {
   if (!STUDENT_EMAIL.configured) {
-    throw ProviderUnavailable('Email verification is not configured');
+    throw ProviderUnavailable('We cannot check codes right now',
+      'Sign-in is temporarily unavailable. Please try again shortly.');
   }
   const input = String(code ?? '');
   if (!new RegExp(`^\\d{${STUDENT_EMAIL.length}}$`).test(input)) {

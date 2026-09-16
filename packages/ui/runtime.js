@@ -22,6 +22,17 @@ import { mark as logoMark, lockup } from '../../brand/logo.js';
 
 export { quad, ApiError, Offline, rupees, ratingLabel };
 
+/* Re-confirming an administrator: the same two factors as signing in, asked
+   for in place rather than by throwing the person back to the sign-in screen
+   and losing what they were doing. */
+export async function adminReauth() {
+  const password = prompt('Confirm it is you.\n\nYour administrator password:');
+  if (password === null) throw new Error('Confirmation cancelled.');
+  const code = prompt('The 6-digit code your authenticator app is showing now:');
+  if (code === null) throw new Error('Confirmation cancelled.');
+  return quad.adminReauth(password, String(code).replace(/\D/g, ''));
+}
+
 /* ---------- session ------------------------------------------------------ */
 export const session = {
   me: null,
@@ -231,12 +242,12 @@ export async function act(btn, fn, { after, ok } = {}) {
     try {
       out = await fn();
     } catch (e) {
-      /* Money, roles and boundaries need a fresh passkey confirmation. Ask
-         the device once, then repeat the same request; the server decides. */
-      if (!(e instanceof ApiError) || !['reauth_required', 'passkey_required'].includes(e.code)) throw e;
-      const { passkeyReauth } = await import('./passkey.js');
-      toast('Confirm with your passkey to continue');
-      await passkeyReauth();
+      /* Money, roles and boundaries need a fresh confirmation that it is
+         really this administrator. Ask once, then repeat the same request;
+         the server decides whether the confirmation was good enough. */
+      if (!(e instanceof ApiError) ||
+          !['reauth_required', 'admin_signin_required'].includes(e.code)) throw e;
+      await adminReauth();
       out = await fn();
     }
     if (ok) toast(ok);

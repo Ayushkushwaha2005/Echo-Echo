@@ -55,7 +55,7 @@ export default async function aiRoutes(app) {
     /* The assistant is an ordering surface like any other, so it meets the
        same gate. An unverified student cannot get past the checkout route
        by asking the AI to place the order instead. */
-    assertMayOrder(req.actor);
+    assertMayOrder(req.actor, { liveLocationRequired: await flag('live_location') });
     if (!AI.configured) {
       throw ProviderUnavailable(
         'Ordering assistant is temporarily unavailable',

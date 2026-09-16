@@ -1,19 +1,17 @@
 /* ==========================================================================
-   QUAD — LOGIN GATEWAY
+   ECHO ECHO — SIGN IN
 
-   One gateway for every role. The server decides where you land — there is
-   no role picker, because a role is not a client-side choice.
+   One way in per audience, and the server decides where you land. There is
+   no role picker here, because a role is not a client-side choice.
 
-   Two real ways in, and neither ever fakes anything:
+     Campus Control   email → password → authenticator code
+     Counter          the enrolment code an administrator reads out
+     Student site     handled by web/src/app.js: college → campus →
+                      university email → code → live location
 
-     phone → OTP            needs an SMS gateway
-     phone → enrolment code needs nothing at all; an administrator issues
-                            the code and delivers it in person
-
-   If no SMS provider is configured we do not render a Send OTP button that
-   cannot send. We show the enrolment path instead, because it genuinely
-   works — which is how staff and administrators can run the platform on a
-   deployment with no third-party services whatsoever.
+   What used to be here and is gone: phone numbers, SMS codes, passkeys, and
+   the choice between three ways in on one screen. Every one of them was a
+   second door onto a surface that only needs one.
    ========================================================================== */
 import { quad, ApiError, Offline } from '../data/client.js';
 import { lockup } from '../../brand/logo.js';
@@ -24,9 +22,10 @@ const el = (html) => { const t = document.createElement('template'); t.innerHTML
 
 export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
   root.innerHTML = '';
-  let status;
+  let adminStatus = null;
   try {
-    status = await quad.authStatus();
+    if (surface === 'admin') adminStatus = await quad.adminAuthStatus();
+    else await quad.authStatus();
   } catch (e) {
     root.append(el(`
       <div class="auth-screen">
@@ -41,126 +40,265 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
     return;
   }
 
-  let phone = '';
   let email = '';
-  /* Campus Control leads with the passkey. Counter leads with the enrolment
-     code its staff are given. Student-email sign-in is offered on both, for
-     an administrator's first set-up or recovery. */
-  render(surface === 'admin' ? 'choose' : !status.otp.configured ? 'enrol' : 'phone',
-         { smsUnavailable: !status.otp.configured });
+  /* Stage-one proof and the reset token. Both are short-lived, single-use and
+     worth nothing alone, and both stay in this closure - never in storage. */
+  let challenge = null;
+  let resetToken = null;
+
+  const SCREENS = {
+    admin: adminStep,
+    code: codeStep,
+    'reset-email': resetEmailStep,
+    'reset-code': resetCodeStep,
+    'reset-new': resetNewStep,
+    enrol: enrolStep,
+  };
+
+  render(surface === 'admin' ? 'admin' : 'enrol');
 
   function render(step, ctx = {}) {
     root.innerHTML = '';
-    root.append(step === 'phone' ? phoneStep(ctx)
-              : step === 'enrol' ? enrolStep({ smsUnavailable: !status.otp.configured, ...ctx })
-              : step === 'choose' ? chooseStep(ctx)
-              : step === 'email' ? emailStep(ctx)
-              : step === 'emailcode' ? emailCodeStep(ctx)
-              : codeStep(ctx));
+    root.append((SCREENS[step] || adminStep)(ctx));
   }
 
-  function chooseStep({ error } = {}) {
-    const node = el(`
-      <div class="auth-screen">
-        <div class="auth-card">
-          ${lockup({ height: 30 })}
-          <h1 class="auth-title">Campus Control</h1>
-          <p class="auth-sub">Sign in with your passkey — fingerprint, face or device PIN.</p>
-          ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
-          <button class="auth-btn" type="button" data-act="passkey">Sign in with passkey</button>
-          <button class="auth-link" type="button" data-act="email">First time or lost your device? Use your student email</button>
-          <button class="auth-link" type="button" data-act="enrol">I have an enrolment code</button>
-          <p class="auth-fine">Your fingerprint, face and PIN never leave your device. ECHO ECHO stores only a public key.</p>
-        </div>
-      </div>`);
-    node.querySelector('[data-act=email]').onclick = () => render('email');
-    node.querySelector('[data-act=enrol]').onclick = () => render('enrol');
-    const btn = node.querySelector('[data-act=passkey]');
-    btn.onclick = async () => {
-      btn.disabled = true; btn.textContent = 'Waiting for your device…';
-      try {
-        const { passkeySignIn } = await import('./passkey.js');
-        const out = await passkeySignIn();
-        onSignedIn ? onSignedIn(out) : (location.href = surfaceUrl(out.surface));
-      } catch (err) {
-        const { passkeyError } = await import('./passkey.js');
-        render('choose', { error: passkeyError(err) });
-      }
-    };
-    return node;
-  }
+  /* ---------- Campus Control ----------------------------------------------
+     Two screens, in this order and no other:
 
-  function emailStep({ error } = {}) {
+       1. email + password   -> a short-lived challenge, no session
+       2. authenticator code -> the session
+
+     Neither screen alone gets anyone in. The challenge lives in this
+     closure: it is not a session, and writing it to storage would leave half
+     a sign-in lying around after the tab is closed. */
+  function adminStep({ error } = {}) {
     const node = el(`
       <div class="auth-screen">
         <form class="auth-card" novalidate>
           ${lockup({ height: 30 })}
-          <h1 class="auth-title">Student email</h1>
-          <p class="auth-sub">We email a 6-digit code to your university mailbox. Administrators then set up or confirm their passkey.</p>
-          <label class="auth-field"><span class="auth-label">University student email</span>
-            <input class="auth-input" name="email" type="email" autocomplete="email" autocapitalize="none"
-                   spellcheck="false" maxlength="254" placeholder="name.12345@${(status.email?.domains || ['stu.upes.ac.in'])[0]}" value="${safe(email)}"></label>
+          <h1 class="auth-title">Campus Control</h1>
+          <p class="auth-sub">Sign in with your administrator email and password.</p>
+
+          <label class="auth-field"><span class="auth-label">Administrator email</span>
+            <input class="auth-input" name="email" type="email" autocomplete="username"
+                   autocapitalize="none" spellcheck="false" maxlength="254"
+                   placeholder="you@stu.upes.ac.in" value="${safe(email)}" required></label>
+
+          <label class="auth-field"><span class="auth-label">Password</span>
+            <input class="auth-input" name="password" type="password" autocomplete="current-password"
+                   maxlength="200" required></label>
+
           ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
-          ${status.email?.configured ? '<button class="auth-btn" type="submit">Email me a code</button>'
-            : '<p class="auth-error">Email sign-in is not configured on this server.</p>'}
-          <button class="auth-link" type="button" data-act="back">Back</button>
+          ${adminStatus && adminStatus.configured === false
+            ? `<p class="auth-error">Administrator sign-in is not available on this server.</p>`
+            : '<button class="auth-btn" type="submit">Continue</button>'}
+          <button class="auth-link" type="button" data-act="forgot">Forgot password?</button>
         </form>
       </div>`);
-    node.querySelector('[data-act=back]').onclick = () => render(surface === 'admin' ? 'choose' : 'enrol');
+
+    const [emailInput, pwInput] = node.querySelectorAll('input');
+    node.querySelector('[data-act=forgot]').addEventListener('click', () => {
+      email = emailInput.value.trim() || email;
+      render('reset-email');
+    });
     node.addEventListener('submit', async (e) => {
       e.preventDefault();
-      email = node.querySelector('input').value.trim();
+      email = emailInput.value.trim();
+      if (!email || !pwInput.value) return render('admin', { error: 'Enter your email and password.' });
       const btn = node.querySelector('button[type=submit]');
-      btn.disabled = true; btn.textContent = 'Sending…';
-      try { const out = await quad.sendEmailCode(email); email = out.email; render('emailcode'); }
-      catch (err) { render('email', { error: message(err) }); }
+      btn.disabled = true; btn.textContent = 'Checking…';
+      try {
+        const out = await quad.adminPasswordStage(email, pwInput.value);
+        challenge = out.challenge;
+        render('code');
+      } catch (err) {
+        render('admin', { error: message(err) });
+      }
     });
-    setTimeout(() => node.querySelector('input').focus(), 0);
+    setTimeout(() => (email ? pwInput : emailInput).focus(), 0);
     return node;
   }
 
-  function emailCodeStep({ error } = {}) {
+  /* Screen 2. The account was settled by the password step, so there is
+     nothing to name here - only a code to produce. */
+  function codeStep({ error } = {}) {
+    const node = el(`
+      <div class="auth-screen">
+        <form class="auth-card" novalidate>
+          ${lockup({ height: 30 })}
+          <h1 class="auth-title">Authenticator code</h1>
+          <p class="auth-sub">Enter the 6-digit code for ${safe(email)} from your authenticator app.</p>
+
+          <label class="auth-field"><span class="auth-label">6-digit code</span>
+            <input class="auth-input auth-code" name="code" inputmode="numeric" autocomplete="one-time-code"
+                   maxlength="6" placeholder="——————" required></label>
+
+          ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
+          <button class="auth-btn" type="submit">Sign in</button>
+          <button class="auth-link" type="button" data-act="back">Back</button>
+        </form>
+      </div>`);
+
+    const codeInput = node.querySelector('input');
+    node.querySelector('[data-act=back]').addEventListener('click', () => { challenge = null; render('admin'); });
+    node.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const code = codeInput.value.replace(/\D/g, '');
+      if (code.length !== 6) return render('code', { error: 'Enter the 6-digit code from your authenticator app.' });
+      const btn = node.querySelector('button[type=submit]');
+      btn.disabled = true; btn.textContent = 'Signing in…';
+      try {
+        const out = await quad.adminLogin(challenge, code);
+        challenge = null;
+        onSignedIn ? onSignedIn(out) : (location.href = surfaceUrl(out.surface));
+      } catch (err) {
+        /* A challenge that has timed out or run out of attempts is spent, and
+           the only way on is to prove the password again. */
+        if (err instanceof ApiError && /timed out|attempts/i.test(`${err.message} ${err.detail || ''}`)) {
+          challenge = null;
+          return render('admin', { error: message(err) });
+        }
+        render('code', { error: message(err) });
+      }
+    });
+    setTimeout(() => codeInput.focus(), 0);
+    return node;
+  }
+
+  /* ---------- Forgot password ---------------------------------------------
+     A code to the institutional mailbox, then a new password. It never opens
+     a session: it ends back at screen 1, where both factors are still
+     required. The screen says the same thing whether or not the address
+     belongs to an administrator, because the server does too. */
+  function resetEmailStep({ error, notice } = {}) {
+    const node = el(`
+      <div class="auth-screen">
+        <form class="auth-card" novalidate>
+          ${lockup({ height: 30 })}
+          <h1 class="auth-title">Reset your password</h1>
+          <p class="auth-sub">We will email a code to your administrator address.</p>
+
+          <label class="auth-field"><span class="auth-label">Administrator email</span>
+            <input class="auth-input" name="email" type="email" autocomplete="username"
+                   autocapitalize="none" spellcheck="false" maxlength="254"
+                   value="${safe(email)}" required></label>
+
+          ${notice ? `<p class="auth-note">${safe(notice)}</p>` : ''}
+          ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
+          <button class="auth-btn" type="submit">Send code</button>
+          <button class="auth-link" type="button" data-act="back">Back to sign in</button>
+        </form>
+      </div>`);
+
+    const emailInput = node.querySelector('input');
+    node.querySelector('[data-act=back]').addEventListener('click', () => render('admin'));
+    node.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      email = emailInput.value.trim();
+      if (!email) return render('reset-email', { error: 'Enter your administrator email.' });
+      const btn = node.querySelector('button[type=submit]');
+      btn.disabled = true; btn.textContent = 'Sending…';
+      try {
+        const out = await quad.adminResetRequest(email);
+        render('reset-code', { notice: out.message });
+      } catch (err) {
+        render('reset-email', { error: message(err) });
+      }
+    });
+    setTimeout(() => emailInput.focus(), 0);
+    return node;
+  }
+
+  function resetCodeStep({ error, notice } = {}) {
     const node = el(`
       <div class="auth-screen">
         <form class="auth-card" novalidate>
           ${lockup({ height: 30 })}
           <h1 class="auth-title">Check your inbox</h1>
-          <p class="auth-sub">Enter the 6-digit code sent to <b>${safe(email)}</b>. It expires in 10 minutes.</p>
-          <label class="auth-field"><span class="auth-label">Verification code</span>
-            <input class="auth-input auth-code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="——————"></label>
+          <p class="auth-sub">${safe(notice || `Enter the code we sent to ${email}.`)}</p>
+
+          <label class="auth-field"><span class="auth-label">6-digit code</span>
+            <input class="auth-input auth-code" name="code" inputmode="numeric" autocomplete="one-time-code"
+                   maxlength="6" placeholder="——————" required></label>
+
           ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
-          <button class="auth-btn" type="submit">Verify</button>
-          <button class="auth-link" type="button" data-act="back">Use a different email</button>
+          <button class="auth-btn" type="submit">Continue</button>
+          <button class="auth-link" type="button" data-act="back">Back to sign in</button>
         </form>
       </div>`);
-    node.querySelector('[data-act=back]').onclick = () => render('email');
+
+    const codeInput = node.querySelector('input');
+    node.querySelector('[data-act=back]').addEventListener('click', () => render('admin'));
     node.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const code = node.querySelector('input').value.replace(/\D/g, '');
-      if (code.length !== 6) return render('emailcode', { error: 'Enter the 6-digit code.' });
+      const code = codeInput.value.replace(/\D/g, '');
+      if (code.length !== 6) return render('reset-code', { error: 'Enter the 6-digit code from the email.' });
       const btn = node.querySelector('button[type=submit]');
-      btn.disabled = true; btn.textContent = 'Verifying…';
-      try { const out = await quad.verifyEmailCode(email, code); onSignedIn ? onSignedIn(out) : location.reload(); }
-      catch (err) { render('emailcode', { error: message(err) }); }
+      btn.disabled = true; btn.textContent = 'Checking…';
+      try {
+        const out = await quad.adminResetVerify(email, code);
+        resetToken = out.token;
+        render('reset-new');
+      } catch (err) {
+        render('reset-code', { error: message(err) });
+      }
     });
-    setTimeout(() => node.querySelector('input').focus(), 0);
+    setTimeout(() => codeInput.focus(), 0);
     return node;
   }
 
-  /* The provider-free path. An administrator issues the code and reads it
-     out; no SMS gateway is involved at any point. */
-  function enrolStep({ error, smsUnavailable } = {}) {
+  function resetNewStep({ error } = {}) {
     const node = el(`
       <div class="auth-screen">
         <form class="auth-card" novalidate>
           ${lockup({ height: 30 })}
-          <h1 class="auth-title">Enrolment code</h1>
-          <p class="auth-sub">
-            ${smsUnavailable
-              ? 'Text-message sign-in is not available on this deployment. Staff and ' +
-                'administrators can sign in with a code issued by an administrator.'
-              : 'If an administrator gave you a code, enter it with your number.'}
-          </p>
+          <h1 class="auth-title">Choose a new password</h1>
+          <p class="auth-sub">At least 12 characters. You will still need your authenticator code to sign in.</p>
+
+          <label class="auth-field"><span class="auth-label">New password</span>
+            <input class="auth-input" name="password" type="password" autocomplete="new-password"
+                   maxlength="200" required></label>
+          <label class="auth-field"><span class="auth-label">New password again</span>
+            <input class="auth-input" name="again" type="password" autocomplete="new-password"
+                   maxlength="200" required></label>
+
+          ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
+          <button class="auth-btn" type="submit">Save password</button>
+          <button class="auth-link" type="button" data-act="back">Back to sign in</button>
+        </form>
+      </div>`);
+
+    const [pw, again] = node.querySelectorAll('input');
+    node.querySelector('[data-act=back]').addEventListener('click', () => { resetToken = null; render('admin'); });
+    node.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (pw.value !== again.value) return render('reset-new', { error: 'The two passwords do not match.' });
+      const btn = node.querySelector('button[type=submit]');
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const out = await quad.adminResetComplete(resetToken, pw.value);
+        resetToken = null;
+        render('admin', { error: out.message });
+      } catch (err) {
+        render('reset-new', { error: message(err) });
+      }
+    });
+    setTimeout(() => pw.focus(), 0);
+    return node;
+  }
+
+  /* ---------- Counter -----------------------------------------------------
+     Cafeteria staff, and only cafeteria staff. The code is issued by an
+     administrator and read out; no SMS gateway and no mailbox is involved,
+     which is what lets a counter open on a deployment with no third-party
+     services at all. */
+  function enrolStep({ error } = {}) {
+    const node = el(`
+      <div class="auth-screen">
+        <form class="auth-card" novalidate>
+          ${lockup({ height: 30 })}
+          <h1 class="auth-title">Counter sign-in</h1>
+          <p class="auth-sub">Enter the number and code your campus administrator gave you.</p>
           <label class="auth-field">
             <span class="auth-label">Mobile number</span>
             <div class="auth-phone">
@@ -174,136 +312,28 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
             <input class="auth-input auth-enrol" name="code" autocomplete="one-time-code"
                    maxlength="14" placeholder="XXXX-XXXX-XXXX" required>
           </label>
-          ${error ? `<p class="auth-error">${safe(error)}</p>` : ''}
+          ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
           <button class="auth-btn" type="submit">Sign in</button>
-          ${smsUnavailable ? '' :
-            '<button class="auth-link" type="button" data-act="usePhone">Use a text message instead</button>'}
-          <p class="auth-fine">Codes work once and expire. Ask an administrator for a new one.</p>
+          <p class="auth-fine">Each code works once and then expires. Ask your administrator for a new one.</p>
         </form>
       </div>`);
 
     const [phoneInput, codeInput] = node.querySelectorAll('input');
-    const btn = node.querySelector('button[type=submit]');
-    node.querySelector('[data-act=usePhone]')?.addEventListener('click', () => render('phone'));
-
     node.addEventListener('submit', async (e) => {
       e.preventDefault();
       const digits = phoneInput.value.replace(/\D/g, '');
-      if (digits.length !== 10) {
-        return render('enrol', { error: 'Enter a 10-digit mobile number.', smsUnavailable });
-      }
-      if (!codeInput.value.trim()) {
-        return render('enrol', { error: 'Enter the code you were given.', smsUnavailable });
-      }
+      if (digits.length !== 10) return render('enrol', { error: 'Enter a 10-digit mobile number.' });
+      if (!codeInput.value.trim()) return render('enrol', { error: 'Enter the code you were given.' });
+      const btn = node.querySelector('button[type=submit]');
       btn.disabled = true; btn.textContent = 'Signing in…';
       try {
         const out = await quad.enrol('+91' + digits, codeInput.value);
         onSignedIn ? onSignedIn(out) : (location.href = surfaceUrl(out.surface));
       } catch (err) {
-        render('enrol', { error: message(err), smsUnavailable });
+        render('enrol', { error: message(err) });
       }
     });
     setTimeout(() => phoneInput.focus(), 0);
-    return node;
-  }
-
-  function phoneStep({ error } = {}) {
-    const node = el(`
-      <div class="auth-screen">
-        <form class="auth-card" novalidate>
-          ${lockup({ height: 30 })}
-          <h1 class="auth-title">Welcome</h1>
-          <p class="auth-sub">Continue with your phone number.</p>
-          <label class="auth-field">
-            <span class="auth-label">Mobile number</span>
-            <div class="auth-phone">
-              <span class="auth-cc">+91</span>
-              <input class="auth-input" name="phone" type="tel" inputmode="numeric"
-                     autocomplete="tel" maxlength="10" placeholder="00000 00000" required>
-            </div>
-          </label>
-          ${error ? `<p class="auth-error">${safe(error)}</p>` : ''}
-          <button class="auth-btn" type="submit">Send OTP</button>
-          <p class="auth-fine">You'll get a 6-digit code by SMS. Standard rates apply.</p>
-          <button class="auth-link" type="button" data-act="useEnrol">I have an enrolment code</button>
-        </form>
-      </div>`);
-
-    const input = node.querySelector('input');
-    const btn = node.querySelector('button[type=submit]');
-    node.querySelector('[data-act=useEnrol]').addEventListener('click', () => render('enrol'));
-    node.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const digits = input.value.replace(/\D/g, '');
-      if (digits.length !== 10) return render('phone', { error: 'Enter a 10-digit mobile number.' });
-      btn.disabled = true; btn.textContent = 'Sending…';
-      try {
-        phone = '+91' + digits;
-        const out = await quad.sendOtp(phone);
-        render('code', { resendAfter: out.resendAfterSeconds });
-      } catch (err) {
-        render('phone', { error: message(err) });
-      }
-    });
-    setTimeout(() => input.focus(), 0);
-    return node;
-  }
-
-  function codeStep({ error, resendAfter = 45 } = {}) {
-    const pretty = phone.replace(/^\+91(\d{5})(\d{5})$/, '+91 $1 $2');
-    const node = el(`
-      <div class="auth-screen">
-        <form class="auth-card" novalidate>
-          ${lockup({ height: 30 })}
-          <h1 class="auth-title">Verify your number</h1>
-          <p class="auth-sub">We sent a 6-digit code to <b>${safe(pretty)}</b>.</p>
-          <label class="auth-field">
-            <span class="auth-label">Verification code</span>
-            <input class="auth-input auth-code" name="code" inputmode="numeric"
-                   autocomplete="one-time-code" maxlength="6" placeholder="——————" required>
-          </label>
-          ${error ? `<p class="auth-error">${safe(error)}</p>` : ''}
-          <button class="auth-btn" type="submit">Verify</button>
-          <div class="auth-alt">
-            <button class="auth-link" type="button" data-act="back">Change number</button>
-            <button class="auth-link" type="button" data-act="resend" disabled>Resend in ${resendAfter}s</button>
-          </div>
-        </form>
-      </div>`);
-
-    const input = node.querySelector('input');
-    const btn = node.querySelector('button[type=submit]');
-    const resend = node.querySelector('[data-act=resend]');
-
-    let left = resendAfter;
-    const tick = setInterval(() => {
-      left -= 1;
-      if (left <= 0) { clearInterval(tick); resend.disabled = false; resend.textContent = 'Resend code'; }
-      else resend.textContent = `Resend in ${left}s`;
-    }, 1000);
-
-    node.querySelector('[data-act=back]').onclick = () => { clearInterval(tick); render('phone'); };
-    resend.onclick = async () => {
-      resend.disabled = true;
-      try { const out = await quad.sendOtp(phone); clearInterval(tick); render('code', { resendAfter: out.resendAfterSeconds }); }
-      catch (err) { clearInterval(tick); render('code', { error: message(err) }); }
-    };
-
-    node.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const code = input.value.replace(/\D/g, '');
-      if (code.length !== 6) return render('code', { error: 'Enter the 6-digit code.', resendAfter: left });
-      btn.disabled = true; btn.textContent = 'Verifying…';
-      try {
-        const out = await quad.verifyOtp(phone, code);
-        clearInterval(tick);
-        /* The server said where this account belongs. The client obeys. */
-        onSignedIn ? onSignedIn(out) : (location.href = surfaceUrl(out.surface));
-      } catch (err) {
-        render('code', { error: message(err), resendAfter: left });
-      }
-    });
-    setTimeout(() => input.focus(), 0);
     return node;
   }
 }

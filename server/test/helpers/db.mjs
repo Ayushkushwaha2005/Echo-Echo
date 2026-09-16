@@ -400,6 +400,9 @@ export async function setTerms(pool, terms = {}, { vendorId = null } = {}) {
     commission_bps: 0, commission_mode: 'deduct_from_cafeteria',
     platform_fee_flat_paise: 0, platform_fee_bps: 0,
     delivery_fee_paise: 0, delivery_earning_paise: 0,
+    /* The two-tier delivery earning. Null/null means one flat earning,
+       which is what almost every test wants. */
+    delivery_earning_high_paise: null, delivery_earning_threshold_paise: null,
     tax_bps: 0, discount_funded_by: 'platform', ...terms,
   };
   await pool.query(
@@ -408,10 +411,12 @@ export async function setTerms(pool, terms = {}, { vendorId = null } = {}) {
   const { rows } = await pool.query(
     `INSERT INTO pricing_policy (vendor_id, commission_bps, commission_mode,
        platform_fee_flat_paise, platform_fee_bps, delivery_fee_paise,
-       delivery_earning_paise, tax_bps, discount_funded_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+       delivery_earning_paise, delivery_earning_high_paise, delivery_earning_threshold_paise,
+       tax_bps, discount_funded_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
     [vendorId, t.commission_bps, t.commission_mode, t.platform_fee_flat_paise,
      t.platform_fee_bps, t.delivery_fee_paise, t.delivery_earning_paise,
+     t.delivery_earning_high_paise, t.delivery_earning_threshold_paise,
      t.tax_bps, t.discount_funded_by]);
   return rows[0];
 }
@@ -427,16 +432,26 @@ export const campusId = async (pool, slug = 'upes-bidholi') =>
 
 /* Students are placed on Bidholi, the campus in service, by default, so a
    test about something else starts from an account that can order. */
+/* A valid Indian mobile, one per fixture user. Tests use synthetic `phone`
+   values that are not real numbers (and often not even the right length),
+   which is fine for an identifier but not for the delivery contact number
+   the checkout validates. `contactPhone: null` gives a user who has never
+   supplied one, for tests about that requirement. */
+let contactSeq = 0;
+const nextContactPhone = () => `+9198${String(10_000_000 + (contactSeq++)).slice(0, 8)}`;
+
 export async function makeUser(pool, { phone, name, roles = ['student'], vendorId = null,
                                        studentStatus = 'approved', status = 'active',
+                                       contactPhone = undefined,
                                        campus = 'upes-bidholi' }) {
   const u = (await pool.query(
-    `INSERT INTO app_user (phone, name, student_status, status, campus_site_id)
-     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    `INSERT INTO app_user (phone, name, student_status, status, campus_site_id, contact_phone)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
     /* Many tests name users with a single letter. A real profile needs a full
        name, so a placeholder letter becomes "<letter> Tester". */
     [phone, name && name.length < 2 ? `${name} Tester` : name, studentStatus, status,
-     campus ? await campusId(pool, campus) : null])).rows[0];
+     campus ? await campusId(pool, campus) : null,
+     contactPhone === undefined ? nextContactPhone() : contactPhone])).rows[0];
   for (const r of roles) {
     await pool.query(
       `INSERT INTO user_role (user_id, role, vendor_id) VALUES ($1,$2,$3)`,

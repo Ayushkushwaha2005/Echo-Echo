@@ -297,8 +297,11 @@ textarea.input { resize: vertical; min-height: 72px; }
   font-size:26px;letter-spacing:-.02em;margin:10px 0 0;color:var(--text,#1C1917)}
 .auth-sub{margin:0;font-size:14px;line-height:1.5;color:var(--text-2,#6B6360)}
 .auth-field{display:flex;flex-direction:column;gap:7px;margin-top:6px}
-.auth-label{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
-  color:var(--text-muted,#6B6360)}
+/* A field label reads as a label, not as a system banner: sentence case, no
+   tracking. The brand's uppercase treatment stays where it belongs, on the
+   lockup and the section labels - not on "Password". */
+.auth-label{font-size:13px;font-weight:600;letter-spacing:0;
+  color:var(--text-2,#6B6360)}
 .auth-phone{display:flex;align-items:center;border:1px solid var(--line,rgba(28,25,23,.14));
   border-radius:11px;overflow:hidden;background:var(--bg-sunken,#FFFBF8)}
 .auth-phone:focus-within{border-color:var(--rose-500,#E0567A);
@@ -327,6 +330,14 @@ textarea.input { resize: vertical; min-height: 72px; }
   font-weight:600;color:var(--text-2,#6B6360);cursor:pointer;text-decoration:underline;
   text-underline-offset:3px}
 .auth-link:disabled{opacity:.45;cursor:default;text-decoration:none}
+/* A link on its own line under the button - "Forgot password?", "Back" -
+   centred under the form rather than pretending to be a second action. */
+.auth-card > .auth-link{align-self:center}
+/* A plain statement of fact, not an error: the password-reset screen says
+   the same thing whether or not the address belongs to an administrator. */
+.auth-note{margin:0;font-size:13.5px;line-height:1.45;color:var(--text-2,#6B6360);
+  background:var(--bg-sunken,#FFFBF8);border:1px solid var(--line,rgba(28,25,23,.12));
+  border-radius:9px;padding:10px 12px}
 .auth-link:not(:disabled):hover{color:var(--rose-600,#C7405F)}
 /* Truthful unavailable state — a configuration notice, not a dead form. */
 .auth-config{border:1px solid var(--line,rgba(28,25,23,.10));border-radius:11px;
@@ -508,3 +519,45 @@ textarea.input { resize: vertical; min-height: 72px; }
 }
 /* On phones the status card (and its one action) comes before the explainer. */
 @media (max-width: 1023.98px) { .site .site-split > aside.first-mobile { order: -1; } }
+
+/* ---------- the student email field -------------------------------------
+   The domain is not typed. It sits fixed to the right of the box, so the
+   student fills in only what is theirs and the commonest sign-in mistake —
+   a personal address, or a typo in the domain — cannot be made.
+
+   On a narrow screen the domain drops onto its own line rather than
+   squeezing the input: an enrolment number is long, and a field you cannot
+   read what you typed into is worse than one that wraps. */
+.emailsplit{display:flex;align-items:stretch;flex-wrap:wrap;
+  border:1px solid var(--line,rgba(28,25,23,.14));border-radius:12px;
+  overflow:hidden;background:var(--bg-sunken,#FFFBF8)}
+.emailsplit:focus-within{border-color:var(--rose-500,#E0567A);
+  box-shadow:0 0 0 3px rgba(224,86,122,.13)}
+.emailsplit .emailsplit-local{flex:1 1 9ch;min-width:0;border:0;border-radius:0;
+  background:transparent;box-shadow:none}
+.emailsplit .emailsplit-local:focus{border:0;box-shadow:none}
+.emailsplit-domain{display:flex;align-items:center;padding:0 12px;
+  font-family:'DM Mono',monospace;font-size:14px;white-space:nowrap;
+  color:var(--text-muted,#6B6360);background:rgba(28,25,23,.04);
+  border-left:1px solid var(--line,rgba(28,25,23,.10))}
+@media (max-width:380px){
+  .emailsplit-domain{flex-basis:100%;border-left:0;
+    border-top:1px solid var(--line,rgba(28,25,23,.10));padding:8px 12px}
+}
+
+/* ---------- campus map ---------------------------------------------------
+   OpenStreetMap tiles via Leaflet. The pins are drawn here rather than
+   fetched as images, so the map needs one network dependency instead of
+   several and matches the product's palette. */
+.echo-map{height:260px;width:100%;border-radius:14px;overflow:hidden;
+  border:1px solid var(--line,rgba(28,25,23,.14));background:var(--bg-sunken,#FFFBF8);z-index:0}
+@media (min-width:900px){ .echo-map{height:320px} }
+.map-empty{padding:18px;border-radius:14px;border:1px dashed var(--line,rgba(28,25,23,.18));
+  background:var(--bg-sunken,#FFFBF8)}
+.echo-pin-wrap{background:none;border:0}
+.echo-pin{display:flex;align-items:center;justify-content:center;width:30px;height:30px;
+  border-radius:50%;background:var(--pin,#1C1917);color:#fff;font-size:14px;line-height:1;
+  box-shadow:0 2px 8px rgba(28,25,23,.35);border:2px solid #fff}
+/* Leaflet's own controls, toned to the product rather than its defaults. */
+.leaflet-container{font:inherit}
+.leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.82)}

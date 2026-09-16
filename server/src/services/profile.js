@@ -11,7 +11,8 @@
      student email   a mailbox proven by the email-code flow - OR a VERIFIED
                      status granted by an administrator for a student who
                      could not use their mailbox (see docs/STUDENT-VERIFICATION.md)
-     contact phone   a valid Indian mobile number (contact/payment only)
+     (a contact phone is NOT required here: it is asked for once, at
+      checkout, as the delivery contact number - see routes/orders.js)
      campus          a campus_site row; ordering additionally requires that
                      campus to be in service
    ========================================================================== */
@@ -80,7 +81,6 @@ export function evaluate(u) {
   const missing = [];
   if (!u.name || !NAME.test(u.name)) missing.push('name');
   if (!emailOk && !adminVerified) missing.push('student_email');
-  if (!contactPhone) missing.push('contact_phone');
   if (!u.campus_site_id) missing.push('campus');
   const campus = u.c_id ? shapeCampus({
     id: u.c_id, slug: u.c_slug, college_name: u.c_college_name, name: u.c_name,
@@ -101,6 +101,9 @@ export function evaluate(u) {
 export const MISSING_COPY = {
   name: 'your full name',
   student_email: 'a verified university student email',
+  /* Kept so an older stored value still renders a sentence; nothing adds
+     this key any more. A phone number is collected at checkout, where it is
+     needed, rather than as a condition of having an account. */
   contact_phone: 'a contact mobile number',
   campus: 'your campus',
 };

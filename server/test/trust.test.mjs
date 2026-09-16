@@ -84,9 +84,13 @@ async function world() {
    the payment and handover paths are covered by their own suites. */
 async function deliveredOrder(pool, { customer, partner, v, i, n, state = 'delivered' }) {
   const o = (await pool.query(
+    /* A delivery order carries the contact number the partner rings; the
+       table refuses one without it, the same as the checkout route does. */
     `INSERT INTO food_order (code, customer_id, vendor_id, fulfilment, destination_id, state,
-                             subtotal_paise, total_paise, partner_id, delivered_at)
-     VALUES ($1,$2,$3,'delivery',$4,$5,9000,9000,$6, CASE WHEN $5='delivered' THEN now() END) RETURNING *`,
+                             subtotal_paise, total_paise, partner_id, delivered_at,
+                             delivery_contact_phone)
+     VALUES ($1,$2,$3,'delivery',$4,$5,9000,9000,$6, CASE WHEN $5='delivered' THEN now() END,
+             coalesce((SELECT contact_phone FROM app_user WHERE id = $2), '+919810000999')) RETURNING *`,
     ['T' + randomBytes(3).toString('hex').toUpperCase(), customer.id, v.id, n.blockB.id, state, partner.id])).rows[0];
   const line = (await pool.query(
     `INSERT INTO order_item (order_id, item_id, name_snapshot, unit_paise_snapshot, qty, line_paise)

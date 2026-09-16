@@ -61,6 +61,15 @@ const signIn = async (email) => {
   return { r, token: cookieOf(r) };
 };
 
+/* The live-location step that follows sign-in. Uses the real endpoint against
+   the fixture boundary, so it exercises the same check the browser does. */
+const confirmOnCampus = async (token) => {
+  const r = await client(app, token).post('/campus/presence',
+    { lat: 30.42, lng: 77.97, accuracy: 8 });
+  assert.equal(r.status, 200, `presence check failed: ${JSON.stringify(r.body)}`);
+  return r;
+};
+
 test('without SMS: a student signs in by proving control of their @stu.upes.ac.in mailbox', async () => {
   const email = 'ayush.17551@stu.upes.ac.in';
   const sent = await anon().post('/auth/email/send', { email: '  Ayush.17551@STU.UPES.AC.IN ' });
@@ -215,11 +224,19 @@ test('a verified-by-email student can order; admin decisions are never overridde
   const i = await makeItem(pool, v.id, { name: 'Tea', paise: 2000 });
   const s = client(app, token);
   const body = { vendorId: v.id, lines: [{ itemId: i.id, qty: 1 }], fulfilment: 'delivery', destinationId: n.blockB.id };
-  /* Verified, but the profile is not complete yet: the server says what is missing. */
+  /* Signing in is not the same as being on campus. A brand-new session has
+     not passed the live-location check, and ordering says so first. */
+  const noLocation = await s.post('/orders/draft', body);
+  assert.equal(noLocation.status, 403);
+  assert.equal(noLocation.body.code, 'location_required');
+  await confirmOnCampus(token);
+
+  /* Verified and on campus, but the profile is not complete yet: the server
+     says what is missing. */
   const early = await s.post('/orders/draft', body);
   assert.equal(early.status, 403);
   assert.match(early.body.error, /Complete your profile/);
-  assert.match(early.body.detail, /full name.*contact mobile.*campus/);
+  assert.match(early.body.detail, /full name.*campus/);
   const bidholi = (await s.get('/campuses')).body.campuses.find((c) => c.name === 'Bidholi Campus');
   assert.equal((await s.put('/me/profile', { name: 'Order Student', contactPhone: '9812345670', campusId: bidholi.id })).status, 200);
   const draft = await s.post('/orders/draft', body);
@@ -262,6 +279,7 @@ test('optional re-proof window: stale mailbox proof blocks ordering until the ma
     const s = client(app, token);
     const bidholi = (await s.get('/campuses')).body.campuses.find((c) => c.name === 'Bidholi Campus');
     await s.put('/me/profile', { name: 'Fresh Student', contactPhone: '9812345671', campusId: bidholi.id });
+    await confirmOnCampus(token);
     const body = { vendorId: v.id, lines: [{ itemId: i.id, qty: 1 }], fulfilment: 'delivery', destinationId: n.blockB.id };
     assert.equal((await s.post('/orders/draft', body)).status, 200, 'fresh proof orders');
 
@@ -272,6 +290,7 @@ test('optional re-proof window: stale mailbox proof blocks ordering until the ma
 
     await age(email, 120);
     const again = await signIn(email);
+    await confirmOnCampus(again.token);
     assert.equal((await client(app, again.token).post('/orders/draft', body)).status, 200, 'a new mailbox proof renews it');
   } finally {
     cfg.STUDENT_EMAIL.reverifyDays = 0;

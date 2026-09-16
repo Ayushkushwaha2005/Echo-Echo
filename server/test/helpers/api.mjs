@@ -24,12 +24,26 @@ export async function makeApp() {
 }
 
 /* Issues a real session for a user, exactly as auth/session.js does. */
-export async function sessionFor(pool, userId, { ttlMinutes = 720 } = {}) {
+/**
+ * A signed-in session.
+ *
+ * `onCampus` defaults to true because the live-location check is part of
+ * signing in: a real session that reached the ordering screens has passed
+ * it, so that is what a fixture session should look like. Tests that are
+ * ABOUT the location gate pass `onCampus: false` to get a session that has
+ * not confirmed one, which is exactly the state a browser that refused
+ * permission leaves behind.
+ */
+export async function sessionFor(pool, userId, { ttlMinutes = 720, onCampus = true, method = 'code' } = {}) {
   const token = randomBytes(32).toString('base64url');
   await pool.query(
-    `INSERT INTO session (token_hash, user_id, expires_at)
-     VALUES ($1,$2, now() + ($3 || ' minutes')::interval)`,
-    [createHash('sha256').update(token).digest('hex'), userId, String(ttlMinutes)]);
+    `INSERT INTO session (token_hash, user_id, expires_at, auth_method, passkey_verified_at,
+                          campus_presence_at, campus_presence_site_id)
+     VALUES ($1,$2, now() + ($3 || ' minutes')::interval, $4,
+             CASE WHEN $4 IN ('passkey','admin_totp') THEN now() END,
+             CASE WHEN $5 THEN now() END,
+             CASE WHEN $5 THEN (SELECT campus_site_id FROM app_user WHERE id = $2) END)`,
+    [createHash('sha256').update(token).digest('hex'), userId, String(ttlMinutes), method, onCampus]);
   return token;
 }
 

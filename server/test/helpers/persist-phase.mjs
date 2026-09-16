@@ -32,9 +32,12 @@ const app = await build();
 const ORIGIN = 'http://localhost:3000';
 async function session(userId) {
   const token = randomBytes(32).toString('base64url');
+  /* Signed in AND on campus: the live-location check is part of signing in,
+     so a fixture session that is about to order has passed it. */
   await pool.query(
-    `INSERT INTO session (token_hash, user_id, expires_at)
-     VALUES ($1,$2, now() + interval '720 minutes')`,
+    `INSERT INTO session (token_hash, user_id, expires_at, campus_presence_at, campus_presence_site_id)
+     VALUES ($1,$2, now() + interval '720 minutes', now(),
+             (SELECT campus_site_id FROM app_user WHERE id = $2))`,
     [createHash('sha256').update(token).digest('hex'), userId]);
   return token;
 }
@@ -96,9 +99,10 @@ try {
        VALUES ('Restart Campus', '[[30.41,77.96],[30.41,77.98],[30.43,77.98],[30.43,77.96]]',
                (SELECT id FROM campus_site WHERE slug = 'upes-bidholi'), 'active', true, 'test fixture', now())`);
     const stu = (await pool.query(
-      `INSERT INTO app_user (phone,name,student_status,campus_site_id)
+      `INSERT INTO app_user (phone,name,student_status,campus_site_id,contact_phone)
        VALUES ('+919500000002','Restart Student','approved',
-               (SELECT id FROM campus_site WHERE slug = 'upes-bidholi')) RETURNING *`)).rows[0];
+               (SELECT id FROM campus_site WHERE slug = 'upes-bidholi'),
+               '+919810000501') RETURNING *`)).rows[0];
     await pool.query(`INSERT INTO user_role (user_id,role) VALUES ($1,'student')`, [stu.id]);
     const studentToken = await session(stu.id);
     const cs = client(studentToken);

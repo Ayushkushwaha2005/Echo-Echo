@@ -18,6 +18,7 @@
    ========================================================================== */
 import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/data/client.js';
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
+import { campusOption } from '../../packages/ui/campus-option.js';
 
 restoreTheme();
 
@@ -52,7 +53,11 @@ const S = {
   destination: null,      // { id, name, path }
   sheet: null,
   toast: null,
-  auth: { phone: '', email: '', resendAfter: 0, error: '' },
+  auth: { local: '', email: '', college: '', campusId: '', resendAfter: 0, error: '' },
+  /* Checkout inputs that are not part of the cart: the delivery contact
+     number and the two free-text refinements to the campus address. */
+  checkout: { phone: '', landmark: '', instructions: '' },
+  pricing: null,          // /pricing/current - what the fees are right now
   verify: {},             // mailbox-link flow on the verify screen
   campuses: null,         // /campuses
   setup: {},              // profile completion: { campusId, error }
@@ -80,6 +85,9 @@ const campusLabel = () => {
   return c ? `UPES ${c.name.replace(/ Campus$/, '')}` : 'UPES';
 };
 const campusOpen = () => !browseCampus() || browseCampus().available;
+/* The campus row as the SERVER described it. `available` is the server's
+   word, never a local guess, and it is what every campus control checks. */
+const campusById = (id) => (S.campuses || []).find((c) => c.id === id) || null;
 const prettyPhone = (p) => String(p || '').replace(/^\+91(\d{5})(\d{5})$/, '+91 $1 $2');
 
 let poll = null;
@@ -99,6 +107,11 @@ function go(route, params = {}) {
   /* Open/closed and availability change during the day; show today's, not
      whatever was true when the tab was first opened. */
   if (['home', 'cafes', 'welcome'].includes(route)) drop('vendors');
+  /* The fees the server would charge, so the bill is honest before payment.
+     Fetched once and reused; it changes only when an admin changes it. */
+  if (['cart', 'checkout'].includes(route) && !S.pricing) {
+    quad.currentPricing().then((p2) => { S.pricing = p2; render(); }).catch(() => {});
+  }
   if (route === 'menu' && params.caf) drop(`menu:${params.caf}`);
   if (['join', 'profile', 'partner'].includes(route)) { drop('me'); S.joinError = ''; }
   if (route === 'partner') drop('partner');
@@ -342,7 +355,7 @@ function ScrWelcome() {
         <div class="row g2"><div class="cafmark" style="background:var(--surface-ink);width:40px;height:40px;border-radius:12px;font-size:1rem">E.</div>
           <span class="t-label" style="color:var(--text-2)">${BRAND} · UPES Bidholi</span></div>
         <h1 class="t-hero">Food from your campus.<br>Brought to wherever<br>you <em style="font-style:normal;color:var(--accent-text)">actually are</em>.</h1>
-        <p class="t-body" style="color:var(--text-2);max-width:30ch">Library, ground, school blocks. Order from campus cafés, delivered by students between classes.</p>
+        <p class="t-body" style="color:var(--text-2);max-width:32ch">Order from the cafés on campus and have it brought to the library, the ground or your block by another student on their way past.</p>
         <div class="row g2" style="flex-wrap:wrap">
           <span class="sticker">Campus only</span>
           ${open === null ? '' : `<span class="badge badge-rose">${open} café${open === 1 ? '' : 's'} open now</span>`}
@@ -352,11 +365,11 @@ function ScrWelcome() {
     <div class="pad stack g3 welcome-cta" style="padding-block:var(--s-5) var(--s-6);background:var(--bg)">
       <div class="stack g1 only-lg" style="margin-bottom:var(--s-2)">
         <div class="t-h1">Order in two minutes</div>
-        <p class="t-sm muted">Sign in with your university student email, or look around the menus first.</p>
+        <p class="t-sm muted">Sign in with your university email, or have a look at the menus first.</p>
       </div>
-      <button class="btn btn-primary btn-lg btn-block" data-act="go" data-route="ob-email">Continue with your student email</button>
+      <button class="btn btn-primary btn-lg btn-block" data-act="go" data-route="ob-college">Sign in with your student email</button>
       <button class="btn btn-ghost btn-block" data-act="go" data-route="cafes">Browse cafés first</button>
-      <p class="t-xs faint center">Only verified students can order. That's the whole point.</p>
+      <p class="t-xs faint center">Only students with a verified university email can order here.</p>
     </div>
   </div>`;
 }
@@ -366,36 +379,100 @@ function ScrWelcome() {
    the server — not this form — enforces that. */
 const studentDomains = () => S.providers?.student_email?.domains || ['stu.upes.ac.in'];
 
-function ScrObEmail() {
+/* ---------- step 1: which college ---------------------------------------
+   One college today. It is still a step rather than an assumption, because
+   the campus list, the cafeterias and the delivery boundary all hang off it,
+   and a second college is then a row in campus_site rather than a rewrite. */
+function collegesFromCampuses() {
+  const byName = new Map();
+  for (const c of S.campuses || []) {
+    const name = c.collegeName || 'Unknown college';
+    if (!byName.has(name)) byName.set(name, { name, campuses: [] });
+    byName.get(name).campuses.push(c);
+  }
+  return [...byName.values()];
+}
+
+function ScrObCollege() {
   const a = S.auth;
-  const emailOff = S.providers && !S.providers.student_email?.configured;
-  const smsOn = S.providers?.otp?.configured;
+  const colleges = collegesFromCampuses();
   return `<div class="screen no-nav narrow">
     ${TopBar('', { back: 'welcome' })}
+    <div class="pad stack g5 enter" style="padding-top:var(--s-3)">
+      <div class="stack g2">
+        <h1 class="t-display">Choose your<br>college.</h1>
+      </div>
+      ${!S.campuses ? Loading('Loading colleges') : `
+        <div class="stack g2" role="radiogroup" aria-label="College">
+          ${colleges.map((col) => `
+            <button type="button" class="loccard" role="radio" data-act="pickCollege" data-name="${esc(col.name)}"
+                    aria-checked="${a.college === col.name}" aria-pressed="${a.college === col.name}"
+                    style="width:100%;text-align:left">
+              <span class="t-h3">${esc(col.name)}</span>
+              <span class="t-xs muted">${col.campuses.length} campus${col.campuses.length === 1 ? '' : 'es'}</span>
+            </button>`).join('')}
+        </div>`}
+      ${a.error ? `<p class="t-xs" role="alert" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
+    </div>
+  </div>`;
+}
+
+/* ---------- step 2: which campus ----------------------------------------
+   Bidholi takes orders. Kandholi is listed because it is real and students
+   look for it, and it is plainly marked as not open yet - choosing it is
+   allowed, ordering from it is not, and the server says so too. */
+function ScrObCampus() {
+  const a = S.auth;
+  const campuses = (S.campuses || []).filter((c) => !a.college || c.collegeName === a.college);
+  return `<div class="screen no-nav narrow">
+    ${TopBar('', { back: 'ob-college' })}
+    <div class="pad stack g5 enter" style="padding-top:var(--s-3)">
+      <div class="stack g2">
+        <h1 class="t-display">Which campus<br>are you on?</h1>
+        <p class="t-sm muted">${esc(a.college || COLLEGE())}</p>
+      </div>
+      ${!S.campuses ? Loading('Loading campuses') : `
+        <div class="stack g2" role="radiogroup" aria-label="Campus">
+          ${campuses.map((c) => campusOption(c, {
+            act: 'pickObCampus', selected: a.campusId === c.id,
+            note: 'Cafeterias here are taking orders.',
+          })).join('')}
+        </div>`}
+      ${a.error ? `<p class="t-xs" role="alert" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
+    </div>
+  </div>`;
+}
+
+/* ---------- step 3: the student mailbox ---------------------------------
+   The domain is fixed and shown beside the field, not typed, so the
+   commonest sign-in mistake - a personal address, or a typo in the domain -
+   cannot be made. The server still checks the whole address against the
+   allowed domain; this field is a convenience, never the rule.
+
+   The placeholder is deliberately generic. A real-looking address here would
+   put somebody's actual account on a screen anyone can walk past. */
+const studentDomain = () => (S.providers?.student_email?.domains || ['stu.upes.ac.in'])[0];
+
+function ScrObEmail() {
+  const a = S.auth;
+  return `<div class="screen no-nav narrow">
+    ${TopBar('', { back: 'ob-campus' })}
     <form class="pad stack g5 enter" data-form="email" style="padding-top:var(--s-3)">
       <div class="stack g2">
-        ${Label('Step 1 of 2 · Student email')}
-        <h1 class="t-display">What's your<br>student email?</h1>
-        <p class="t-sm muted">We email a 6-digit code to your university mailbox. No password, no SMS.</p>
+        <h1 class="t-display">Your student<br>email.</h1>
+        <p class="t-sm muted">Enter your university email to continue.</p>
       </div>
       <div class="field">
-        <label class="t-label" for="ob-em">University student email</label>
-        <input class="input" id="ob-em" name="email" type="email" inputmode="email" autocomplete="email"
-               autocapitalize="none" spellcheck="false" maxlength="254"
-               placeholder="name.12345@${esc(studentDomains()[0])}" value="${esc(a.email || '')}">
-        <p class="t-xs faint">Only @${esc(studentDomains().join(' or @'))} addresses can be verified.</p>
+        <label class="t-label" for="ob-em">Student email</label>
+        <div class="emailsplit">
+          <input class="input emailsplit-local" id="ob-em" name="local" type="text" inputmode="email"
+                 autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64"
+                 placeholder="your email" value="${esc(a.local || '')}">
+          <span class="emailsplit-domain">@${esc(studentDomain())}</span>
+        </div>
       </div>
-      ${a.error ? `<p class="t-xs" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
-      ${emailOff
-        ? NotConfigured('Student email sign-in is not available',
-            'No email provider is configured on this server, so a code cannot be sent yet.')
-        : `<button class="btn btn-primary btn-lg btn-block" type="submit">Email me a code</button>`}
-      ${smsOn ? `<button class="btn btn-ghost btn-block t-sm" type="button" data-act="go" data-route="ob-phone">Use my phone number instead</button>` : ''}
-      <button class="btn btn-ghost btn-block t-sm" type="button" data-act="go" data-route="ob-enrol">Staff sign-in with an enrolment code</button>
-      <div class="campusnote">
-        ${Ico(I.lock, 18)}
-        <p class="t-xs" style="color:var(--text-2)">Receiving the code in your university mailbox is what proves you are a current student. ${BRAND} never asks for your mailbox password.</p>
-      </div>
+      ${a.error ? `<p class="t-xs" role="alert" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
+      <button class="btn btn-primary btn-lg btn-block" type="submit">Send code</button>
     </form>
   </div>`;
 }
@@ -406,93 +483,54 @@ function ScrObEmailCode() {
     ${TopBar('', { back: 'ob-email' })}
     <form class="pad stack g5 enter" data-form="emailcode" style="padding-top:var(--s-3)">
       <div class="stack g2">
-        ${Label('Step 2 of 2 · Verify')}
-        <h1 class="t-display">Check your<br>university inbox.</h1>
-        <p class="t-sm muted">Code sent to <b class="code" style="color:var(--text)">${esc(a.email)}</b>. It expires in 10 minutes. Check Junk if you don't see it.</p>
+        <h1 class="t-display">Check your<br>inbox.</h1>
+        <p class="t-sm muted">We sent a code to <b style="color:var(--text)">${esc(a.email)}</b>.
+          It expires in 10 minutes.</p>
       </div>
       <div class="otp">${[0, 1, 2, 3, 4, 5].map((i) =>
         `<input inputmode="numeric" maxlength="1" aria-label="Digit ${i + 1}" data-otp="${i}">`).join('')}</div>
-      ${a.error ? `<p class="t-xs" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
-      <button class="btn btn-primary btn-lg btn-block" type="submit">Verify &amp; continue</button>
-      <button class="btn btn-ghost btn-block t-sm" type="button" data-act="resendEmail">Send a new code</button>
+      ${a.error ? `<p class="t-xs" role="alert" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
+      <button class="btn btn-primary btn-lg btn-block" type="submit">Verify</button>
+      <button class="btn btn-ghost btn-block t-sm" type="button" data-act="resendEmail">Send another code</button>
     </form>
   </div>`;
 }
 
-function ScrObPhone() {
+/* ---------- step 4: are you actually on campus? -------------------------
+   Required, and required on the server: POST /campus/presence tests the fix
+   against the confirmed campus boundary and writes the result onto the
+   session. Nothing here can wave it through - if the browser refuses, or
+   the reading is too vague to tell which side of the edge you are on, the
+   ordering screens stay shut. */
+function ScrObLocation() {
   const a = S.auth;
-  const smsOff = S.providers && !S.providers.otp?.configured;
+  const loc = S.me?.location;
   return `<div class="screen no-nav narrow">
-    ${TopBar('', { back: 'ob-email' })}
-    <form class="pad stack g5 enter" data-form="phone" style="padding-top:var(--s-3)">
+    ${TopBar('')}
+    <div class="pad stack g5 enter" style="padding-top:var(--s-3)">
       <div class="stack g2">
-        ${Label('Step 1 of 2 · Identity')}
-        <h1 class="t-display">What's your<br>mobile number?</h1>
-        <p class="t-sm muted">We text a 6-digit code. No password to forget.</p>
+        <h1 class="t-display">Are you on<br>campus?</h1>
+        <p class="t-sm muted">${BRAND} delivers on campus only, so we check your location once each
+          time you sign in.</p>
       </div>
-      <div class="field">
-        <label class="t-label" for="ob-ph">Mobile number</label>
-        <input class="input" id="ob-ph" name="phone" inputmode="numeric" maxlength="10"
-               autocomplete="tel" placeholder="10-digit number" value="${esc(a.phone)}">
-        <p class="t-xs faint">India (+91)</p>
-      </div>
-      ${a.error ? `<p class="t-xs" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
-      ${smsOff
-        ? NotConfigured('Text-message sign-in is not available',
-            'No SMS provider is configured on this server, so a code cannot be sent. ' +
-            'Students can sign in once it is set up. Cafeteria and campus staff can use an enrolment code from an administrator.')
-        : `<button class="btn btn-primary btn-lg btn-block" type="submit">Send code</button>`}
-      <button class="btn btn-ghost btn-block t-sm" type="button" data-act="go" data-route="ob-enrol">Staff sign-in with an enrolment code</button>
-      <div class="campusnote">
-        ${Ico(I.lock, 18)}
-        <p class="t-xs" style="color:var(--text-2)">Every account must verify student status before it can order. This is what keeps ${BRAND} a closed campus network — and what makes every order accountable to a real student.</p>
-      </div>
-    </form>
-  </div>`;
-}
 
-function ScrObOtp() {
-  const a = S.auth;
-  return `<div class="screen no-nav narrow">
-    ${TopBar('', { back: 'ob-phone' })}
-    <form class="pad stack g5 enter" data-form="otp" style="padding-top:var(--s-3)">
-      <div class="stack g2">
-        ${Label('Step 2 of 2 · Verify')}
-        <h1 class="t-display">Check your<br>messages.</h1>
-        <p class="t-sm muted">Code sent to <b class="code" style="color:var(--text)">+91 ${esc(a.phone)}</b></p>
-      </div>
-      <div class="otp">${[0, 1, 2, 3, 4, 5].map((i) =>
-        `<input inputmode="numeric" maxlength="1" aria-label="Digit ${i + 1}" data-otp="${i}">`).join('')}</div>
-      ${a.error ? `<p class="t-xs" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
-      <button class="btn btn-primary btn-lg btn-block" type="submit">Verify &amp; continue</button>
-      <button class="btn btn-ghost btn-block t-sm" type="button" data-act="resendOtp">Send a new code</button>
-    </form>
-  </div>`;
-}
-
-function ScrObEnrol() {
-  const a = S.auth;
-  return `<div class="screen no-nav narrow">
-    ${TopBar('', { back: 'ob-email' })}
-    <form class="pad stack g5 enter" data-form="enrol" style="padding-top:var(--s-3)">
-      <div class="stack g2">
-        ${Label('Sign in · Enrolment code')}
-        <h1 class="t-display">Enter the code<br>you were given.</h1>
-        <p class="t-sm muted">An administrator issues these. Each works once and expires.</p>
-      </div>
-      <div class="field">
-        <label class="t-label" for="en-ph">Mobile number</label>
-        <input class="input" id="en-ph" name="phone" inputmode="numeric" maxlength="10"
-               autocomplete="tel" placeholder="10-digit number" value="${esc(a.phone)}">
-      </div>
-      <div class="field">
-        <label class="t-label" for="en-code">Enrolment code</label>
-        <input class="input code" id="en-code" name="code" maxlength="14" autocomplete="one-time-code"
-               placeholder="XXXX-XXXX-XXXX" style="text-transform:uppercase;letter-spacing:.12em">
-      </div>
-      ${a.error ? `<p class="t-xs" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
-      <button class="btn btn-primary btn-lg btn-block" type="submit">Sign in</button>
-    </form>
+      ${loc?.confirmed ? `
+        <div class="card card-pad stack g2">
+          <div class="row g2">${Ico(I.check, 20)}<span class="t-h3">You are on campus</span></div>
+          <p class="t-xs muted">Checked just now${loc.accuracyM ? `, accurate to about ${Math.round(loc.accuracyM)} m` : ''}.</p>
+        </div>
+        <button class="btn btn-primary btn-lg btn-block" data-act="go" data-route="home">Start ordering</button>`
+      : `
+        ${a.error ? `<div class="campusnote" role="alert">${Ico(I.lock, 18)}
+          <p class="t-xs" style="color:var(--text-2)">${esc(a.error)}</p></div>` : ''}
+        <button class="btn btn-primary btn-lg btn-block" data-act="confirmLocation">
+          ${a.error ? 'Try again' : 'Share my location'}</button>
+        <div class="campusnote">${Ico(I.pin, 18)}
+          <p class="t-xs" style="color:var(--text-2)">We check once, and keep only whether the check passed.
+            ${BRAND} does not track you around campus.</p>
+        </div>
+        <button class="btn btn-ghost btn-block t-sm" data-act="logout">Sign out</button>`}
+    </div>
   </div>`;
 }
 
@@ -501,6 +539,7 @@ function ScrObEnrol() {
    is typed twice. Completion is whatever GET /me/profile says, never a flag
    this screen sets. */
 const loadVendors = () => quad.vendors({ campusId: browseCampus()?.id });
+const loadCampuses = () => quad.campuses().then((r) => { S.campuses = r.campuses; render(); return r; });
 
 function ScrSetup() {
   const p = myProfile();
@@ -534,29 +573,20 @@ function ScrSetup() {
       </div>
 
       <div class="card card-pad stack g3">
-        ${step(2, 'About you', !p.missing.includes('name') && !p.missing.includes('contact_phone'))}
+        ${step(2, 'Your name', !p.missing.includes('name'))}
         <div class="field"><label class="t-label" for="su-name">Full name</label>
           <input class="input" id="su-name" name="name" autocomplete="name" maxlength="80" required
-                 value="${esc(st.name ?? p.name ?? '')}" placeholder="As in university records"></div>
-        <div class="field"><label class="t-label" for="su-phone">Contact number</label>
-          <input class="input" id="su-phone" name="contactPhone" type="tel" inputmode="numeric" autocomplete="tel" maxlength="14" required
-                 value="${esc(st.contactPhone ?? (p.contactPhone || '').replace(/^\+91/, ''))}" placeholder="10-digit mobile number">
-          <p class="t-xs faint">For order updates and the payment gateway. It is not used to sign in.</p></div>
+                 value="${esc(st.name ?? p.name ?? '')}" placeholder="As it appears in university records">
+          <p class="t-xs faint">This is the name your delivery partner sees.</p></div>
       </div>
 
       <div class="card card-pad stack g3">
         ${step(3, 'Your campus', !!chosen)}
         <div class="t-h3">${esc(college)}</div>
         ${campuses.length ? `<div class="stack g2" role="radiogroup" aria-label="Campus">
-          ${campuses.map((c) => `
-            <button type="button" class="loccard" role="radio" data-act="pickCampus" data-id="${c.id}"
-                    aria-pressed="${c.id === chosen}" aria-checked="${c.id === chosen}" style="width:100%;text-align:left">
-              <span class="row g2" style="justify-content:space-between;width:100%">
-                <span class="t-h3">${esc(c.name)}</span>
-                <span class="badge ${c.available ? 'badge-open' : 'badge-closed'}">${c.available ? 'Available' : 'Coming soon'}</span>
-              </span>
-              ${c.available ? '' : `<span class="t-xs muted">${esc(c.message)}</span>`}
-            </button>`).join('')}
+          ${campuses.map((c) => campusOption(c, {
+            act: 'pickCampus', selected: c.id === chosen, openLabel: 'Available',
+          })).join('')}
         </div>` : Loading('Loading campuses')}
         ${chosenCampus && !chosenCampus.available ? `<div class="campusnote">${Ico(I.clock, 18)}<p class="t-xs" style="color:var(--text-2)">
           <b>${esc(chosenCampus.message)}</b> ${BRAND} is not available at ${esc(chosenCampus.name)} yet, so you will not be able to order. You can still save it as your campus.</p></div>` : ''}
@@ -600,7 +630,7 @@ function ScrHome() {
       </div>
       ${signedIn()
         ? `<button class="avatar avatar-sm hide-lg" data-act="go" data-route="profile" aria-label="Profile">${esc(initials(S.me.user.name))}</button>`
-        : `<button class="btn btn-secondary btn-sm hide-lg" data-act="go" data-route="ob-email">Sign in</button>`}
+        : `<button class="btn btn-secondary btn-sm hide-lg" data-act="go" data-route="ob-college">Sign in</button>`}
     </div>
 
     <div class="pad stack g5 enter">
@@ -849,15 +879,35 @@ const FulfilTile = (vendorName, cta) => S.fulfilment === 'delivery' ? `
 
 /* The item total is indicative: the server prices the order from the live
    menu, and delivery fee and total come from its pricing policy. */
-const Bill = () => `
+/* The fees ECHO ECHO charges, read from the server's live pricing policy so
+   this screen can never quote a number the server would not charge. It is
+   still indicative: the order is priced again, from the menu, when it is
+   placed. */
+const fees = () => S.pricing || null;
+
+const Bill = () => {
+  const f = fees();
+  const sub2 = cartSubtotal();
+  const delivering = S.fulfilment === 'delivery';
+  const deliveryFee = f && delivering ? f.deliveryFeePaise : 0;
+  const platformFee = f ? f.platformFeeFlatPaise : null;
+  const total = f ? sub2 + (platformFee || 0) + deliveryFee : null;
+  return `
   <div class="card card-pad stack g2">
     ${Label('Bill')}
-    <div class="between t-sm"><span class="muted">Item total</span><span class="money t-sm">${money(cartSubtotal())}</span></div>
-    <div class="between t-sm"><span class="muted">${S.fulfilment === 'delivery' ? 'Campus delivery' : 'Self pickup'}</span><span class="t-sm muted">Set by the server</span></div>
+    <div class="between t-sm"><span class="muted">Food</span><span class="money t-sm">${money(sub2)}</span></div>
+    ${platformFee === null ? '' : `
+      <div class="between t-sm"><span class="muted">Platform fee</span><span class="money t-sm">${money(platformFee)}</span></div>`}
+    ${delivering
+      ? `<div class="between t-sm"><span class="muted">Campus delivery</span><span class="money t-sm">${f ? money(deliveryFee) : 'Set by the server'}</span></div>`
+      : `<div class="between t-sm"><span class="muted">Self pickup</span><span class="t-sm muted">No delivery fee</span></div>`}
     <hr class="dashline" style="margin-block:4px">
-    <div class="between"><span class="t-h3">Total</span><span class="t-sm muted">Confirmed before you pay</span></div>
-    <p class="t-xs faint">Priced by ${BRAND}'s server when you place the order. Item prices are frozen onto your order.</p>
+    <div class="between"><span class="t-h3">Total</span>
+      <span class="money t-h3">${total === null ? 'Confirmed before you pay' : money(total)}</span></div>
+    <p class="t-xs faint">${BRAND}'s server prices the order from the live menu when you place it, and freezes
+      those prices onto it. The total you are charged is the one it works out.</p>
   </div>`;
+};
 
 function ScrCheckout() {
   if (!S.cart.length) return ScrCart();
@@ -865,6 +915,9 @@ function ScrCheckout() {
   const payReady = S.providers?.payments?.configured;
   const needsDest = S.fulfilment === 'delivery' && !S.destination;
   const verified = S.me?.user?.studentStatus === 'approved';
+  const phoneDigits = String(S.checkout.phone || (S.me?.user?.contactPhone || '').replace(/^\+91/, '')).replace(/\D/g, '');
+  const needsPhone = !/^[6-9]\d{9}$/.test(phoneDigits);
+  const needsLocation = S.me?.location?.required && !S.me?.location?.confirmed;
   return `<div class="screen">
     ${TopBar('Confirm & pay', { back: 'cart' })}
     <div class="pad site-split enter">
@@ -874,16 +927,51 @@ function ScrCheckout() {
         ${S.cart.map((l) => `<div class="between t-sm"><span>${esc(l.name)} × ${l.qty}</span><span class="money t-sm">${money(l.pricePaise * l.qty)}</span></div>`).join('')}
       </div>
       ${FulfilTile(vendorName, 'Change')}
+      ${S.fulfilment === 'delivery' ? `
+        <div class="card card-pad stack g3">
+          ${Label('Delivery address')}
+          ${S.destination ? `
+            <div class="stack g1">
+              <div class="t-h3">${esc(S.destination.name)}</div>
+              ${S.destination.path ? `<div class="t-xs muted">${esc(S.destination.path)}</div>` : ''}
+            </div>` : `<p class="t-sm muted">Choose a campus spot above.</p>`}
+          <div class="field">
+            <label class="t-label" for="co-landmark">Landmark <span class="faint">(optional)</span></label>
+            <input class="input" id="co-landmark" data-co="landmark" maxlength="120"
+                   placeholder="Next to the stationery shop" value="${esc(S.checkout.landmark || '')}">
+          </div>
+          <div class="field">
+            <label class="t-label" for="co-notes">Notes for the delivery partner <span class="faint">(optional)</span></label>
+            <input class="input" id="co-notes" data-co="instructions" maxlength="300"
+                   placeholder="Call when you reach the gate" value="${esc(S.checkout.instructions || '')}">
+          </div>
+        </div>` : ''}
+
+      <div class="card card-pad stack g3">
+        ${Label('Delivery contact number')}
+        <div class="field">
+          <label class="t-label" for="co-phone">Mobile number</label>
+          <div class="auth-phone">
+            <span class="auth-cc">+91</span>
+            <input class="input" id="co-phone" data-co="phone" type="tel" inputmode="numeric" maxlength="10"
+                   autocomplete="tel" placeholder="00000 00000"
+                   value="${esc(S.checkout.phone || (S.me?.user?.contactPhone || '').replace(/^\+91/, ''))}">
+          </div>
+          <p class="t-xs faint">Your delivery partner rings this number when they reach you.
+            It is not used to sign in, and nobody is sent a code on it.</p>
+        </div>
+      </div>
+
       <div class="stack g2">
         ${Label('Payment method')}
         <div class="row g3">
-          <button class="loccard grow" aria-pressed="true" disabled style="max-width:300px">
-            <span class="glyph">${Ico(I.card, 22)}</span><span class="t-h3">Online Pay</span><span class="t-xs muted">UPI · cards · paid now</span></button>
+          <button class="loccard grow" aria-pressed="true" disabled style="max-width:320px">
+            <span class="glyph">${Ico(I.card, 22)}</span><span class="t-h3">Pay online</span>
+            <span class="t-xs muted">UPI, credit card or debit card</span></button>
         </div>
-        <p class="t-xs faint">${BRAND} is prepaid only. There is no cash on delivery.</p>
-        ${!payReady ? NotConfigured('Online payment is not available',
-            'No payment gateway is configured on this server, so no order can be placed. ' +
-            'Since there is no cash option, ordering is unavailable until it is configured.') : ''}
+        <p class="t-xs faint">Orders are paid for up front. There is no cash on delivery.</p>
+        ${!payReady ? NotConfigured('Payments are temporarily unavailable',
+            'We cannot take payments right now, so orders are paused. Please try again shortly.') : ''}
         ${payReady && !verified ? NotConfigured('Student verification required',
             S.me?.verificationStatus?.nextStep || 'Only verified students can place orders. Verify with your university student email from the You tab.') : ''}
       </div>
@@ -891,13 +979,107 @@ function ScrCheckout() {
     <aside class="stack g4">
       ${Bill()}
       <div class="actionbar">
-        <button class="btn btn-primary btn-lg btn-block" data-act="placeOrder" ${payReady && !needsDest && verified ? '' : 'disabled'}>
-          ${!payReady ? 'Online payment unavailable' : needsDest ? 'Choose where to deliver' : !verified ? 'Student verification required' : 'Pay & place order'}
+        <button class="btn btn-primary btn-lg btn-block" data-act="placeOrder"
+                ${payReady && !needsDest && !needsPhone && !needsLocation && verified ? '' : 'disabled'}>
+          ${!payReady ? 'Online payment unavailable'
+            : needsLocation ? 'Confirm you are on campus'
+            : needsDest ? 'Choose where to deliver'
+            : needsPhone ? 'Add a delivery contact number'
+            : !verified ? 'Student verification needed'
+            : 'Pay and place order'}
         </button>
+        ${needsLocation ? `<button class="btn btn-ghost btn-block t-sm" data-act="go" data-route="ob-location">Check my location</button>` : ''}
       </div>
     </aside>
     </div>
   </div>`;
+}
+
+/* What the partner needs in front of them while carrying an order: where to
+   go, what the student wrote down, who to ring, and what this delivery pays.
+   The earning is the server's figure, taken from the policy pinned to the
+   order - never worked out here. */
+function DeliveryBrief(o) {
+  const t = need(`track:${o.id}`, () => quad.tracking(o.id));
+  const detail = need(`order:${o.id}`, () => quad.order(o.id));
+  const earning = detail?.ok ? detail.v.earning : null;
+  const addr = t?.ok ? t.v.address : null;
+  return `
+    <div class="card card-pad stack g3">
+      <div class="between">
+        ${Label('This delivery')}
+        ${earning ? `<span class="badge badge-open">You earn ${money(earning.paise)}</span>` : ''}
+      </div>
+      ${t?.ok && t.v.pickup ? `<div class="stack g1">
+        <div class="t-label">Collect from</div>
+        <div class="t-h3">${esc(t.v.vendorName)}${t.v.pickup.name ? ` · ${esc(t.v.pickup.name)}` : ''}</div>
+      </div>` : ''}
+      <div class="stack g1">
+        <div class="t-label">Take it to</div>
+        <div class="t-h3">${esc(addr?.name || t?.v?.destination?.name || 'Loading…')}</div>
+        ${addr?.label ? `<div class="t-xs muted">${esc(addr.label)}</div>` : ''}
+        ${o.delivery_landmark ? `<div class="t-xs">Landmark: ${esc(o.delivery_landmark)}</div>` : ''}
+        ${o.delivery_instructions ? `<div class="t-xs">Note: ${esc(o.delivery_instructions)}</div>` : ''}
+      </div>
+      ${o.delivery_contact_phone ? `<div class="stack g1">
+        <div class="t-label">Contact on arrival</div>
+        <a class="t-h3" style="color:var(--accent-text)" href="tel:${esc(o.delivery_contact_phone)}">${esc(prettyPhone(o.delivery_contact_phone))}</a>
+      </div>` : ''}
+      ${MapCard(o.id, { self: true })}
+      ${earning ? `<p class="t-xs faint">${esc(earning.note)}</p>` : ''}
+    </div>`;
+}
+
+/* ===================== the map =========================================
+   A placeholder in the markup, filled in after the screen is on the page.
+   Everything drawn comes from GET /orders/:id/tracking, which has already
+   decided what this viewer is allowed to see - including whether the
+   delivery partner's position is disclosed at all. */
+const MapCard = (orderId, { self = false } = {}) => `
+  <div class="stack g2" style="margin-top:var(--s-3)">
+    ${Label('Where it is going')}
+    <div class="echo-map-slot" data-map-order="${esc(orderId)}" data-map-self="${self ? '1' : ''}">
+      <div class="map-empty"><p class="t-sm muted">Loading the map…</p></div>
+    </div>
+    <p class="echo-map-note t-xs faint"></p>
+  </div>`;
+
+/* ---------- the partner's own position ----------------------------------
+   Reported only while an order is actually in their care, and only to the
+   order it belongs to. The server refuses it in any other state and drops
+   whatever it held, so there is no way to accumulate a movement trail. */
+let positionTimer = null;
+function shareWhileCarrying(orderId) {
+  if (positionTimer) clearInterval(positionTimer);
+  if (!orderId) return quad.clearLocation().catch(() => {});
+  const send = () => quad.reportLocation(orderId).catch(() => {});
+  send();
+  positionTimer = setInterval(send, 20_000);
+}
+
+/* Draws every map placeholder currently on screen. Called after each render;
+   a slot that has already been drawn for the same order is left alone, so
+   re-rendering for an unrelated reason does not restart the map. */
+const drawnMaps = new WeakSet();
+async function paintMaps() {
+  for (const slot of document.querySelectorAll('.echo-map-slot')) {
+    if (drawnMaps.has(slot)) continue;
+    drawnMaps.add(slot);
+    const orderId = slot.dataset.mapOrder;
+    const note = slot.parentElement?.querySelector('.echo-map-note');
+    try {
+      const tracking = await quad.tracking(orderId);
+      const { drawTrackingMap, partnerVisibilityNote } = await import('../../packages/ui/map.js');
+      await drawTrackingMap(slot, tracking);
+      if (note) {
+        const why = partnerVisibilityNote(tracking.partnerVisibility);
+        note.textContent = why || tracking.note || '';
+      }
+    } catch (e) {
+      drawnMaps.delete(slot);
+      slot.innerHTML = `<div class="map-empty"><p class="t-sm muted">${esc(explain(e))}</p></div>`;
+    }
+  }
 }
 
 /* ===================== STUDENT: tracking ================================ */
@@ -933,6 +1115,8 @@ function ScrTracking() {
         </div>
         <span class="badge ${done ? 'badge-open' : 'badge-rose'}"><i class="dot ${done ? '' : 'dot-live'}"></i>${esc(ORDER_LABEL[o.state])}</span>
       </div>
+      ${!pickup && ['assigned', 'picked_up', 'ready', 'preparing', 'confirmed'].includes(o.state)
+        ? MapCard(o.id) : ''}
       ${!pickup && ['assigned', 'picked_up'].includes(o.state) ? `
         <hr class="dashline">
         ${PartnerCard(partner, o.state === 'picked_up' ? 'is bringing your order' : 'is collecting your order')}
@@ -1156,7 +1340,7 @@ function NotificationsCard() {
       ${list.length ? list.slice(0, 6).map((n) => `<div><div class="t-sm" style="font-weight:700">${esc(n.title)}</div>
         <div class="t-xs muted">${esc(n.body || '')} · ${when(n.created_at)}</div></div>`).join('')
         : '<p class="t-sm muted">Nothing yet.</p>'}
-      ${!channels?.sms?.configured ? '<p class="t-xs faint">SMS notifications are not configured on this server, so you will only see them here.</p>' : ''}
+      ${!channels?.sms?.configured ? '<p class="t-xs faint">Updates about your orders appear here.</p>' : ''}
     </div>
   </div>`;
 }
@@ -1443,6 +1627,7 @@ function ScrPartner() {
     <div class="pad stack g4 enter" style="margin-top:var(--s-4)">
       ${carrying ? `<div class="campusnote">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)">
         Order #${esc(carrying.code)} is in your care. Keep it sealed and bring it straight to the customer. It stays assigned to you until the customer's code is entered; it cannot be cancelled, swapped or handed to someone else. If something goes wrong, report it now.</p></div>` : ''}
+      ${carrying ? DeliveryBrief(carrying) : ''}
       <div class="stack g2">
         ${Label('Available now')}
         ${carrying ? '<p class="t-sm muted">Finish your current delivery to receive new offers.</p>' : ''}
@@ -1546,15 +1731,15 @@ function ScrAI() {
       ${empty ? `
         <div class="poster poster-grid" style="margin-top:var(--s-2)">
           <div class="poster-arc" style="width:170px;height:170px;bottom:-90px;left:-50px"></div>
-          <div class="t-label">Campus concierge</div>
-          <div class="t-display" style="font-size:1.9rem;margin-top:8px">Tell ${BRAND}<br>what you want.</div>
-          <p class="t-sm" style="color:var(--text-2);margin-top:10px">Say it how you'd say it to a friend. It looks at the real menu, checks what's actually available, and builds the order — you confirm before anything is paid.</p>
+          <div class="t-label">Order by asking</div>
+          <div class="t-display" style="font-size:1.9rem;margin-top:8px">Just say what<br>you want.</div>
+          <p class="t-sm" style="color:var(--text-2);margin-top:10px">Type it the way you would say it to a friend. It reads the real menu, checks what is actually available today, and puts the order together. Nothing is paid for until you say so.</p>
         </div>
         ${!st ? Loading('Checking the assistant') : unavailable || !st.ok
           ? NotConfigured('The ordering assistant is unavailable',
-              `${st.ok ? st.v.message || '' : explain(st.e)} You can still browse and order normally.`)
+              'You can still browse and order normally.')
           : ''}
-        <div class="campusnote">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)">${BRAND}'s assistant can build and price an order, but it can never pay, place, or dispatch on its own. Every order needs your tap.</p></div>
+        <div class="campusnote">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)">It can put an order together and tell you what it costs. It cannot pay for one, place one or send anyone out. That is always your decision.</p></div>
       ` : `<div class="stack g4">${S.chat.messages.map((m) => m.who === 'user'
           ? `<div class="bubble-user msg-in">${esc(m.text)}</div>`
           : `<div class="row g2 msg-in" style="align-items:flex-start"><span class="ai-mark">E.</span><div class="bubble-ai grow">${esc(m.text)}</div></div>`).join('')}
@@ -1574,7 +1759,7 @@ async function aiSend() {
   const input = $('#ai-in');
   const text = input?.value.trim();
   if (!text || S.chat.busy) return;
-  if (!signedIn()) return go('ob-email');
+  if (!signedIn()) return go('ob-college');
   S.chat.messages.push({ who: 'user', text });
   S.chat.busy = true; render();
   try {
@@ -1619,7 +1804,7 @@ function Sheet() {
       <div class="sheet-body stack g4">
         <div class="stack g1">
           <h2 class="t-display" style="font-size:1.7rem">Where should<br>we bring it?</h2>
-          <p class="t-sm muted">${parent ? esc(S.sheet.parentName || '') : `Campus spots only — that's how ${BRAND} stays fast.`}</p>
+          <p class="t-sm muted">${parent ? esc(S.sheet.parentName || '') : 'Somewhere on campus. Pick the building, then the floor or room.'}</p>
         </div>
         ${parent ? `<button class="btn btn-ghost btn-sm" data-act="sheetUp" style="align-self:flex-start;padding-inline:0">${I.back} All areas</button>` : ''}
         ${deliveryOff ? `<div class="campusnote">${Ico(I.clock, 18)}<div class="stack g1">
@@ -1641,7 +1826,7 @@ function Sheet() {
         <button class="btn btn-secondary btn-sm" data-act="useGps" style="align-self:flex-start">${I.pin} Use my live location</button>
         <div id="gps-results" class="stack g2"></div>
         <div class="campusnote">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">
-          ${BRAND} doesn't deliver outside campus and never asks for a street address. Off-campus isn't an option we hide — it doesn't exist in the system.</p></div>
+          ${BRAND} delivers on campus only, so there is nowhere to type a street address. Off campus is not hidden away in a menu somewhere; the system has no way to store one.</p></div>
       </div>
       <div class="sheet-foot"><button class="btn btn-primary btn-block btn-lg" data-act="closeSheet" ${S.destination ? '' : 'disabled'}>
         ${S.destination ? `Deliver to ${esc(S.destination.name)}` : 'Choose a spot'}</button></div>`;
@@ -1717,12 +1902,14 @@ function Sheet() {
 
 /* ===================== render =========================================== */
 const ROUTES = {
-  welcome: ScrWelcome, 'ob-email': ScrObEmail, 'ob-email-code': ScrObEmailCode, 'ob-phone': ScrObPhone, 'ob-otp': ScrObOtp, 'ob-enrol': ScrObEnrol,
+  welcome: ScrWelcome, 'ob-college': ScrObCollege, 'ob-campus': ScrObCampus,
+  'ob-email': ScrObEmail, 'ob-email-code': ScrObEmailCode, 'ob-location': ScrObLocation,
   home: ScrHome, cafes: ScrCafes, menu: ScrMenu, cart: ScrCart, checkout: ScrCheckout,
   tracking: ScrTracking, orders: ScrOrders, profile: ScrProfile, ai: ScrAI,
   verify: ScrVerify, partner: ScrPartner, join: ScrJoin, setup: ScrSetup,
 };
-const NAVLESS = ['welcome', 'ob-email', 'ob-email-code', 'ob-phone', 'ob-otp', 'ob-enrol', 'checkout', 'setup'];
+const NAVLESS = ['welcome', 'ob-college', 'ob-campus', 'ob-email', 'ob-email-code',
+                 'ob-location', 'checkout', 'setup'];
 
 /* The page frame. On desktop the header carries the navigation; below
    1024px the header slims down and the app's bottom nav takes over. */
@@ -1744,7 +1931,7 @@ const SiteHeader = () => {
       <button class="site-icon" data-act="theme" aria-label="Toggle theme">${I.moon}</button>
       ${signedIn()
         ? `<button class="avatar avatar-sm only-lg" data-act="go" data-route="profile" aria-label="Your account">${esc(initials(S.me.user.name))}</button>`
-        : `<button class="btn btn-secondary btn-sm" data-act="go" data-route="ob-email">Sign in</button>`}
+        : `<button class="btn btn-secondary btn-sm" data-act="go" data-route="ob-college">Sign in</button>`}
     </div>
   </div></header>`;
 };
@@ -1766,6 +1953,18 @@ function render(fresh = false) {
   window.scrollTo?.(0, keep);
   /* The page behind an open sheet/dialog stays put; it scrolls again after. */
   if (document.body?.style) document.body.style.overflow = S.sheet ? 'hidden' : '';
+  /* Maps are drawn once the markup they attach to is on the page. */
+  paintMaps();
+  /* If this render put an active delivery on screen, the partner's position
+     goes to the server while they carry it - and stops as soon as it is not
+     on screen any more. */
+  if (S.route === 'partner') {
+    const p2 = cache.partner?.v;
+    const carrying = p2?.mine?.orders?.find((o) => ['assigned', 'picked_up'].includes(o.state));
+    shareWhileCarrying(carrying?.id || null);
+  } else if (positionTimer) {
+    clearInterval(positionTimer); positionTimer = null;
+  }
 }
 
 const when = (ts) => {
@@ -1789,12 +1988,28 @@ async function withBusy(btn, fn) {
 async function signedInNow() {
   S.me = await quad.me();
   drop('orders', 'me', 'notifs', 'partner');
+
+  /* The campus chosen in step 2, saved now that there is an account to save
+     it against. A student who picked one before signing in should not be
+     asked again on the profile screen. */
+  if (S.auth.campusId && !S.me.profile?.campus?.id) {
+    try { await quad.saveProfile({ campusId: S.auth.campusId }); S.me = await quad.me(); drop('me'); }
+    catch { /* The profile screen will ask for it properly. */ }
+  }
+
   let next = S.auth.next || { route: 'home', params: {} };
   /* A new account completes its profile before anything else. */
   if (profileIncomplete() && S.me.surfaces?.includes('web') && S.me.roles?.includes('student')) {
     S.setupNext = next; next = { route: 'setup', params: {} };
   }
-  S.auth = { phone: '', email: '', resendAfter: 0, error: '' };
+  /* The live-location check. Required, so it comes before any ordering
+     screen; the server enforces the same thing on every ordering call, so
+     this is the polite version of a refusal that exists either way. */
+  if (S.me.location?.required && !S.me.location?.confirmed &&
+      S.me.surfaces?.includes('web') && S.me.roles?.includes('student')) {
+    S.locationNext = next; next = { route: 'ob-location', params: {} };
+  }
+  S.auth = { local: '', email: '', college: '', campusId: '', resendAfter: 0, error: '' };
   if (!S.me.surfaces?.includes('web')) {
     toast('This account does not open the customer site', 'bad');
   }
@@ -1835,7 +2050,46 @@ document.addEventListener('click', async (e) => {
     case 'pickupMode': S.fulfilment = 'pickup'; go('cafes'); toast('Self pickup selected'); break;
 
     case 'sheet': setSheet(a.sheet, { order: a.order, role: a.role }); break;
-    case 'pickCampus': S.setup.campusId = a.id; keepSetupInputs(); render(); break;
+    /* A campus that is not open is not selectable. The card is rendered as a
+       disabled element, so this is the second line of defence: it holds even
+       if the markup is edited in place. The server refuses it as well. */
+    case 'pickCampus':
+      if (!campusById(a.id)?.available) break;
+      S.setup.campusId = a.id; keepSetupInputs(); render(); break;
+
+    /* ---- sign-in steps 1, 2 and 4 ---- */
+    case 'pickCollege':
+      S.auth.college = a.name; S.auth.error = '';
+      go('ob-campus');
+      break;
+    case 'pickObCampus':
+      if (!campusById(a.id)?.available) break;   // coming soon: goes nowhere
+      S.auth.campusId = a.id; S.auth.error = '';
+      go('ob-email');
+      break;
+    case 'confirmLocation':
+      await withBusy(t, async () => {
+        try {
+          await quad.confirmPresence();
+          S.auth.error = '';
+          drop('me'); S.me = await quad.me();
+          const next = S.locationNext || { route: 'home', params: {} };
+          S.locationNext = null;
+          toast('You are on campus');
+          go(next.route, next.params);
+        } catch (err) {
+          /* Every refusal lands here, and every one of them keeps the door
+             shut. The server has already decided; this only says why. */
+          S.auth.error = explain(err);
+          render();
+        }
+      });
+      break;
+    case 'logout':
+      await quad.logout().catch(() => {});
+      S.me = null; S.cart = []; drop('orders', 'me', 'notifs', 'partner');
+      go('welcome');
+      break;
     case 'pickStars': {
       S.review[a.order] = { ...(S.review[a.order] || {}), [a.target]: +a.stars };
       render(); break;
@@ -1907,11 +2161,17 @@ document.addEventListener('click', async (e) => {
 
     case 'placeOrder':
       await withBusy(t, async () => {
+        const digits = String(S.checkout.phone || (S.me?.user?.contactPhone || '').replace(/^\+91/, '')).replace(/\D/g, '');
         const draft = await quad.draft({
           vendorId: S.cart[0].vendorId,
           lines: S.cart.map((l) => ({ itemId: l.itemId, qty: l.qty })),
           fulfilment: S.fulfilment,
           destinationId: S.fulfilment === 'delivery' ? S.destination?.id : undefined,
+          /* The delivery contact number, and the two things that turn a
+             confirmed campus spot into a door somebody can find. */
+          contactPhone: '+91' + digits,
+          landmark: S.fulfilment === 'delivery' ? (S.checkout.landmark || undefined) : undefined,
+          instructions: S.fulfilment === 'delivery' ? (S.checkout.instructions || undefined) : undefined,
         });
         const intent = await quad.paymentIntent(draft.id);
         await openGateway(intent, draft);
@@ -1933,12 +2193,6 @@ document.addEventListener('click', async (e) => {
       });
       break;
     }
-    case 'resendOtp':
-      await withBusy(t, async () => {
-        await quad.sendOtp('+91' + S.auth.phone);
-        toast('A new code is on its way');
-      });
-      break;
     case 'signout':
       await quad.logout().catch(() => {});
       S.me = null; S.cart = []; drop('orders', 'me', 'notifs', 'partner');
@@ -2003,24 +2257,13 @@ document.addEventListener('submit', async (e) => {
   const btn = form.querySelector('[type=submit]');
   const kind = form.dataset.form;
 
-  if (kind === 'phone') {
-    const digits = form.phone.value.replace(/\D/g, '');
-    S.auth.phone = digits;
-    if (digits.length !== 10) { S.auth.error = 'Enter a 10-digit mobile number.'; return render(); }
-    await withBusy(btn, async () => {
-      try {
-        const out = await quad.sendOtp('+91' + digits);
-        S.auth.error = ''; S.auth.resendAfter = out.resendAfterSeconds || 0;
-        go('ob-otp');
-      } catch (err) { S.auth.error = explain(err); render(); }
-    });
-  }
-
   if (kind === 'setup') {
-    const data = { name: form.name.value, contactPhone: form.contactPhone.value };
+    /* No phone number here any more: it is asked for at checkout, where it
+       is actually needed, as the delivery contact number. */
+    const data = { name: form.name.value };
     const campusId = S.setup.campusId || myProfile()?.campus?.id;
     if (campusId) data.campusId = campusId;
-    S.setup = { ...S.setup, name: data.name, contactPhone: data.contactPhone, error: '' };
+    S.setup = { ...S.setup, name: data.name, error: '' };
     if (!campusId) { S.setup.error = 'Choose your campus.'; return render(); }
     await withBusy(btn, async () => {
       try {
@@ -2072,8 +2315,16 @@ document.addEventListener('submit', async (e) => {
   }
 
   if (kind === 'email') {
-    S.auth.email = form.email.value.trim();
-    if (!S.auth.email.includes('@')) { S.auth.error = 'Enter your university student email.'; return render(); }
+    /* The student types the part before the @; the domain is fixed and is
+       added here. Pasting a whole address still works - the domain is
+       stripped and replaced, so a personal address cannot slip through. */
+    const local = form.local.value.trim().replace(/@.*$/, '').toLowerCase();
+    S.auth.local = local;
+    if (!local) { S.auth.error = 'Enter the part of your email before the @.'; return render(); }
+    if (!/^[a-z0-9._-]+$/.test(local)) {
+      S.auth.error = 'Use only letters, numbers, dots, dashes and underscores.'; return render();
+    }
+    S.auth.email = `${local}@${studentDomain()}`;
     await withBusy(btn, async () => {
       try {
         const out = await quad.sendEmailCode(S.auth.email);
@@ -2124,26 +2375,6 @@ document.addEventListener('submit', async (e) => {
     });
   }
 
-  if (kind === 'otp') {
-    const code = [...form.querySelectorAll('[data-otp]')].map((i) => i.value).join('').replace(/\D/g, '');
-    if (code.length !== 6) { S.auth.error = 'Enter the 6-digit code.'; return render(); }
-    await withBusy(btn, async () => {
-      try { await quad.verifyOtp('+91' + S.auth.phone, code); await signedInNow(); }
-      catch (err) { S.auth.error = explain(err); render(); }
-    });
-  }
-
-  if (kind === 'enrol') {
-    const digits = form.phone.value.replace(/\D/g, '');
-    S.auth.phone = digits;
-    if (digits.length !== 10) { S.auth.error = 'Enter a 10-digit mobile number.'; return render(); }
-    if (!form.code.value.trim()) { S.auth.error = 'Enter the code you were given.'; return render(); }
-    await withBusy(btn, async () => {
-      try { await quad.enrol('+91' + digits, form.code.value); await signedInNow(); }
-      catch (err) { S.auth.error = explain(err); render(); }
-    });
-  }
-
   if (kind === 'verify') {
     await withBusy(btn, async () => {
       /* An empty optional file input is still sent as a zero-byte file, which
@@ -2173,9 +2404,14 @@ document.addEventListener('submit', async (e) => {
 /* Typed text survives a re-render (choosing stars or a campus redraws the screen). */
 function keepSetupInputs() {
   const f = document.querySelector('[data-form=setup]');
-  if (f) S.setup = { ...S.setup, name: f.name.value, contactPhone: f.contactPhone.value };
+  if (f) S.setup = { ...S.setup, name: f.name.value };
 }
 document.addEventListener('input', (e) => {
+  /* Checkout fields keep their value in state rather than in the DOM, so a
+     re-render (a toast, a cart change) does not wipe what was typed. */
+  const co = e.target.closest?.('[data-co]');
+  if (co) S.checkout = { ...S.checkout, [co.dataset.co]: co.value };
+
   const rb = e.target.closest?.('[data-review-body]');
   if (rb) {
     const [orderId, target] = rb.dataset.reviewBody.split(':');
@@ -2288,5 +2524,11 @@ async function openGateway(intent, draft) {
       return;
     }
   }
-  go(!signedIn() ? 'welcome' : profileIncomplete() && S.me.roles?.includes('student') ? 'setup' : 'home');
+  go(!signedIn() ? 'welcome'
+    : profileIncomplete() && S.me.roles?.includes('student') ? 'setup'
+    /* Reloading the page does not get you past the location check: it is
+       recorded on the session, so the answer survives the refresh and a
+       session that never passed it lands back here. */
+    : S.me.location?.required && !S.me.location?.confirmed && S.me.roles?.includes('student') ? 'ob-location'
+    : 'home');
 })();

@@ -30,6 +30,28 @@ import { BadRequest } from '../auth/rbac.js';
 const bps = (amount, points) => Math.round((amount * points) / 10000);
 
 /**
+ * What the delivery partner earns for carrying one order.
+ *
+ * A bigger basket is a heavier bag and usually a longer wait at the counter,
+ * so the policy can pay more for one. The rule is two numbers and a
+ * threshold, all configured in Campus Control and all read from the pinned
+ * policy row — never from the request, and never hard-coded here.
+ *
+ * With no threshold configured, there is one earning and this is the
+ * behaviour the product had before the tier existed.
+ *
+ * @param policy   a pricing_policy row
+ * @param netFood  the food subtotal after any discount
+ */
+export function deliveryEarningFor(policy, netFood) {
+  const base = policy.delivery_earning_paise;
+  const threshold = policy.delivery_earning_threshold_paise;
+  const high = policy.delivery_earning_high_paise;
+  if (threshold === null || threshold === undefined || high === null || high === undefined) return base;
+  return netFood >= threshold ? high : base;
+}
+
+/**
  * The commercial terms in force for a vendor, right now.
  *
  * A vendor-specific live policy wins over the platform default. The row is
@@ -81,13 +103,13 @@ export function quote(policy, { subtotalPaise, fulfilment, discountPaise = 0 }) 
      into a negative payable for whoever funds it. */
   const discount = Math.min(discountPaise, subtotalPaise);
 
-  const delivering = fulfilment === 'delivery';
-  const deliveryFee     = delivering ? policy.delivery_fee_paise : 0;
-  const deliveryEarning = delivering ? policy.delivery_earning_paise : 0;
-
   /* Commission and tax are proportions of the food actually sold, i.e. after
      a discount, so a discounted meal is not commissioned at its list price. */
   const netFood    = subtotalPaise - discount;
+
+  const delivering = fulfilment === 'delivery';
+  const deliveryFee     = delivering ? policy.delivery_fee_paise : 0;
+  const deliveryEarning = delivering ? deliveryEarningFor(policy, netFood) : 0;
   const commission = bps(netFood, policy.commission_bps);
   const tax        = bps(netFood, policy.tax_bps);
   const platformFee = policy.platform_fee_flat_paise + bps(netFood, policy.platform_fee_bps);

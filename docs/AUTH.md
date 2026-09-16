@@ -2,8 +2,10 @@
 
 > **This document describes the original in-browser prototype and is kept for
 > history only.** The live product authenticates on the server: students with
-> an institutional email code (`docs/STUDENT-VERIFICATION.md`), administrators
-> with passkeys (`docs/ADMIN-ACCESS.md`), cafeteria staff with enrolment codes.
+> a code emailed to their institutional mailbox followed by a live-location
+> check (`docs/STUDENT-VERIFICATION.md`), administrators with an email, a
+> password and an authenticator code (`docs/ADMIN-ACCESS.md`), cafeteria
+> staff with enrolment codes. There is no phone sign-in anywhere.
 > Nothing below applies to a deployment.
 
 **Status (prototype): implemented, tested, and NOT activated.** `AUTH_ENABLED` is `false`.

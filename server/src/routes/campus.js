@@ -5,9 +5,29 @@
    service. Boundaries are proposed, then confirmed by an administrator; only
    a confirmed boundary is ever used. */
 import { q, one, tx } from '../db/index.js';
-import { authorize, can, BadRequest, NotFound, Conflict } from '../auth/rbac.js';
+import { authorize, can, BadRequest, NotFound, Conflict, Forbidden, Unauthenticated } from '../auth/rbac.js';
 import * as campus from '../services/campus.js';
 import { audit } from '../audit.js';
+
+/* What a student is told when the location check refuses them. One place,
+   so the gate and the screen can never disagree about why. */
+const PRESENCE_COPY = {
+  no_boundary_configured: {
+    title: 'Campus delivery is not switched on yet',
+    detail: 'An administrator still has to confirm the campus outline. Nothing can be ordered until they do.' },
+  accuracy_unknown: {
+    title: 'Your device did not report how accurate its location is',
+    detail: 'Turn on precise location for your browser and try again, ideally outdoors.' },
+  low_accuracy: {
+    title: 'Your location is not precise enough',
+    detail: 'Move outdoors or somewhere with a clearer view of the sky and try again.' },
+  outside_campus: {
+    title: 'You are not on campus',
+    detail: 'ECHO ECHO only takes orders from students who are physically on campus.' },
+  near_boundary: {
+    title: 'You are right on the edge of campus',
+    detail: 'Your location is not precise enough to tell which side of the boundary you are on. Move further inside and try again.' },
+};
 import { assertRecentPasskey } from '../auth/passkey-policy.js';
 import { PLACE_TYPES, VERIFICATION_METHODS } from '../services/geo-import.js';
 
@@ -93,6 +113,50 @@ export default async function campusRoutes(app) {
     await audit(req, { action: 'campus.locate', outcome: 'ok',
                        detail: { inside: out.inside, reason: out.reason } });
     return out;
+  });
+
+  /* ---------- the live-location gate --------------------------------------
+     Required once per session, after the student proves their mailbox and
+     before the ordering screens open.
+
+     Every refusal below is a refusal: there is no branch that shrugs and
+     lets the student through. Permission denied, no fix, an unknown or poor
+     accuracy, no confirmed campus boundary, outside the boundary, or so
+     close to the edge that the reading cannot tell which side they are on —
+     all of them end here, and the session stays without presence.
+
+     The verdict is written onto the session row, so a client that simply
+     never calls this is refused by the ordering gate rather than trusted. */
+  app.post('/campus/presence', async (req) => {
+    if (!req.actor) throw Unauthenticated('Sign in required');
+    const { lat, lng, accuracy } = req.body || {};
+    const coord = (v) => {
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+      return NaN;
+    };
+    const campusId = await campusFor(req);
+    const out = await campus.resolveFix(coord(lat), coord(lng), { accuracy, campusId });
+
+    if (!out.inside) {
+      await audit(req, { action: 'campus.presence', outcome: 'denied',
+                         detail: { reason: out.reason, accuracy: out.accuracy ?? null } });
+      throw Forbidden(PRESENCE_COPY[out.reason]?.title || 'We could not confirm you are on campus',
+        out.note || PRESENCE_COPY[out.reason]?.detail ||
+        'Ordering on ECHO ECHO is only open to students who are physically on campus.');
+    }
+
+    await q(`UPDATE session SET campus_presence_at = now(), campus_presence_lat = $2,
+                    campus_presence_lng = $3, campus_presence_accuracy_m = $4,
+                    campus_presence_site_id = $5
+              WHERE token_hash = $1`,
+      [req.actor.tokenHash, coord(lat), coord(lng),
+       Number.isFinite(Number(accuracy)) ? Number(accuracy) : null, campusId]);
+    await audit(req, { action: 'campus.presence', outcome: 'ok',
+                       detail: { accuracy: out.accuracy ?? null, boundary: out.boundaryName } });
+
+    return { confirmed: true, boundaryName: out.boundaryName, accuracy: out.accuracy ?? null,
+             candidates: out.candidates, confirmedAt: new Date().toISOString() };
   });
 
   /* ---------- admin: locations -------------------------------------------- */

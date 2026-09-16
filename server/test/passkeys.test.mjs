@@ -106,7 +106,7 @@ test('an administrator from an email-code session holds no admin power until a p
   const { c } = await adminWithCodeSession();
   const r = await c.get('/admin/users');
   assert.equal(r.status, 403);
-  assert.equal(r.body.code, 'passkey_required');
+  assert.equal(r.body.code, 'admin_signin_required');
   const me = (await c.get('/auth/me')).body;
   assert.deepEqual(me.roles, ['student']);
   assert.deepEqual(me.passkey.withheldRoles, ['platform_admin']);

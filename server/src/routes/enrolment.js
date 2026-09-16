@@ -82,6 +82,27 @@ export default async function enrolmentRoutes(app) {
       `SELECT role FROM user_role WHERE user_id = $1 AND status = 'active'`, [userId]
     )).rows.map((r) => r.role);
 
+    /* ---- what an enrolment code is, and is not -------------------------
+       It is how CAFETERIA staff sign in at the counter: a number and a code
+       an administrator reads out, needing no SMS gateway and no mailbox.
+
+       It is not a way into a student account, and it is not a way into
+       Campus Control. Students sign in with their university mailbox;
+       administrators with a password and an authenticator code. Allowing
+       either here would be a second door onto a flow this product
+       deliberately has one door for, so the session is refused after the
+       code is spent rather than before — the code is burnt either way, so
+       this cannot be used to probe which accounts are staff. */
+    const COUNTER_ROLES = ['vendor_owner', 'vendor_staff'];
+    if (!roles.some((r) => COUNTER_ROLES.includes(r))) {
+      await audit(req, { action: 'auth.enrol', resource: 'user', resourceId: userId,
+                         outcome: 'denied', detail: { reason: 'not_counter_staff', roles } });
+      throw Forbidden('This code is for cafeteria counter staff',
+        roles.includes('student') && roles.length === 1
+          ? 'Students sign in with their university student email.'
+          : 'Administrators sign in to Campus Control with their password and authenticator code.');
+    }
+
     const token = await issueSession(userId, { ip: req.ip, userAgent: req.headers['user-agent'] });
     reply.setCookie(SESSION.cookieName, token, cookieOptions());
 
