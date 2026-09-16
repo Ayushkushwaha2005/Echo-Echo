@@ -1,0 +1,24 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "node build.mjs --production",
+  "outputDirectory": "dist",
+  "installCommand": "echo 'no dependencies: the surfaces are plain ES modules'",
+  "framework": null,
+  "trailingSlash": true,
+  "cleanUrls": false,
+  "redirects": [
+    { "source": "/", "destination": "/web/", "permanent": false },
+    { "source": "/favicon.ico", "destination": "/favicon.svg", "permanent": true }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "no-referrer" },
+        { "key": "Cache-Control", "value": "no-cache" }
+      ]
+    }
+  ]
+}

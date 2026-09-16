@@ -15,13 +15,21 @@ import { fileURLToPath } from 'node:url';
 const root = dirname(fileURLToPath(import.meta.url));
 const dist = join(root, 'dist');
 const PRODUCTION = process.argv.includes('--production');
-const API_BASE = process.env.QUAD_API_BASE || (PRODUCTION ? null : 'http://localhost:8080');
+/* `same-origin` is an explicit choice, not an empty default: the surfaces are
+   served from the same origin as the API, so nothing is injected and
+   client.js falls back to location.origin. That is the arrangement a static
+   host with a rewrite to the API uses, and it is the only one where a
+   SameSite=Lax session cookie reaches the API at all. */
+const SAME_ORIGIN = process.env.QUAD_API_BASE === 'same-origin';
+const API_BASE = SAME_ORIGIN ? ''
+  : process.env.QUAD_API_BASE || (PRODUCTION ? null : 'http://localhost:8080');
 
-if (PRODUCTION && !API_BASE) {
-  console.error('✗ QUAD_API_BASE must be set for a production build.');
+if (PRODUCTION && API_BASE === null) {
+  console.error('✗ QUAD_API_BASE must be set for a production build '
+    + '(an https URL, or "same-origin" when the API is served from this origin).');
   process.exit(1);
 }
-if (PRODUCTION && !/^https:\/\//.test(API_BASE)) {
+if (PRODUCTION && !SAME_ORIGIN && !/^https:\/\//.test(API_BASE)) {
   console.error(`✗ QUAD_API_BASE must be https in production (got ${API_BASE}).`);
   process.exit(1);
 }
