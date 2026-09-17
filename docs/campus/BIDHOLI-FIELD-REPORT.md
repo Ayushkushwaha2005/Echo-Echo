@@ -1,8 +1,11 @@
 # UPES Bidholi — field photo survey, 14 and 16 September 2026
 
-**Status: read-only dry run. Nothing in this report has been imported.** No
-database was mutated, no boundary was confirmed, no location was made
-deliverable. The campus geofence remains fail-closed.
+**Status: nothing in this report has been imported.** No database was mutated,
+no boundary was confirmed, no location was made deliverable, no image was
+published. The campus geofence remains fail-closed.
+
+Code *was* written this round — the room-plate parser, its migration and its
+tests, plus offline tooling (§9). None of it puts a row in a database.
 
 This is the reconciliation of the photo archive Ayush supplied against what
 ECHO ECHO already holds (`CAMPUS-UPES-BIDHOLI.md`, migrations 013 and 016).
@@ -204,66 +207,59 @@ few metres; that is enough to *stage* them, not to make them deliverable.
 
 ---
 
-## 6. Room numbering — the rule, and a conflict to resolve
+## 6. Room numbering — the rule, implemented
 
-Nine room plates were photographed. Seven were re-read at full resolution and
-are certain:
-
-| Code | Photo | Caption area |
-|---|---|---|
-| `1001` | `20260916_40045PM…` | Main Block |
-| `1006` | `20260916_35936PM…` | Main Block |
-| `1104` | `20260916_40428PM…` | Main Block |
-| `2002` | `20260916_34252PM…` | Cx89+h43 |
-| `9204` | `20260916_51117PM…` | New Porta |
-| `11011` | `20260916_45547PM…` | Chitrakoot |
-| `11012` | `20260916_45543PM…` | Chitrakoot |
-
-Plus `11217` (probable — read once at reduced resolution, not re-confirmed) and
-one plate on a roller shutter reading `200?` whose last digit is illegible.
-
-### The conflict
-
-The brief states the convention is **block + room**:
-
-> `1001` = Block 1, Room 01 `11011` = Block 11, Room 11
-
-Both examples are consistent with that. But they are also consistent with a
-**three-part** reading, and the wider dataset only fits the three-part one:
+**Resolved.** The convention is confirmed as three-part, read from the right:
 
 ```
-<block><floor><room, 2 digits>
+<block><floor><room>
+                └──── the last two digits are the room
+         └─────────── the digit before them is the floor
+└──────────────────── everything before that is the block
 ```
 
-| Code | Brief's rule (block + room) | Three-part rule |
-|---|---|---|
-| `1001` | Block 1, Room 01 ✓ | Block 1, **Floor 0**, Room 01 ✓ |
-| `11011` | Block 11, Room 11 ✓ | Block 11, **Floor 0**, Room 11 ✓ |
-| `1104` | Block 1, Room 104? | Block 1, **Floor 1**, Room 04 |
-| `9204` | Block 9, Room 204? | Block 9, **Floor 2**, Room 04 |
-| `11217` | Block 11, Room 217? | Block 11, **Floor 2**, Room 17 |
+This is now implemented in `server/src/services/room-code.js`, with
+`server/test/room-code.test.mjs` covering every worked example and a long list
+of malformed inputs. Migration 021 adds `source_code`, `block_number`,
+`floor_number` and `room_number` to `campus_node`.
 
-The brief's two examples both happen to have a **`0` in the floor position**,
-which is why they look like a two-part code. `1104`, `9204` and `11217` are the
-cases that distinguish the rules, and all three favour the three-part reading.
-`9204` and `11217` were also photographed on upper levels, which matches.
+A floor digit of `0` is stored as 0 and **deliberately not given a name**. The
+observed ground-level plates all carry it, but nothing in the evidence says
+what "0" is called, so the label omits it rather than inventing "Ground Floor".
 
-**I am not treating this as settled.** Seven certain plates is a small sample,
-and the brief explicitly says to derive the rule from the dataset and report
-exceptions — this is the exception. The parser has **not** been written, and no
-room has been imported.
+### Every plate read, and what it parses to
 
-**This needs Ayush's decision**, ideally checked against one upper-floor plate
-in a single-digit block (a `1`2`xx` room) and the official UPES room list.
-Until then: **store `source_code` verbatim and derive nothing.** Inventing a
-floor number is exactly what the brief forbids.
+| Code | Parses to | Photo | Status |
+|---|---|---|---|
+| `1001` | Block 1, Room 01 | `20260916_40045PM…` | confirmed |
+| `1006` | Block 1, Room 06 | `20260916_35936PM…` | confirmed |
+| `1104` | Block 1, Floor 1, Room 04 | `20260916_40428PM…` | confirmed |
+| `2002` | Block 2, Room 02 | `20260916_34252PM…` | confirmed |
+| `9204` | Block 9, Floor 2, Room 04 | `20260916_51117PM…` | confirmed |
+| `11011` | Block 11, Room 11 | `20260916_45547PM…` | confirmed |
+| `11012` | Block 11, Room 12 | `20260916_45543PM…` | confirmed |
+| `11217` | Block 11, Floor 2, Room 17 | `20260916_50149PM…` | **confirmed** (upgraded) |
+| `200?` | — refused, `not_digits` | `20260916_34241PM…` | **unresolved** |
 
-Also unestablished: whether *every* numeric string on campus is a room (the
-`200?` plate is on a roller shutter, possibly a service bay), and which block
-number belongs to which named block. The captions suggest Main Block ↔ block 1
-and New Porta ↔ block 9, but neither is confirmed by signage.
+`11217` was previously recorded as *probable*, read once at reduced
+resolution. Cropping the caption band off that frame (§10) made the blue plate
+legible: it reads **11217**. It is now confirmed. The same frame turned out to
+show a laboratory notice bearing a staff member's **name, email address and
+phone number**, which is recorded against that photo as a redaction
+requirement.
 
----
+The `200?` plate is on a roller shutter and its last digit is not legible. The
+parser refuses it outright rather than picking a digit, and it stays out of
+every derived file.
+
+### What parsing still does not settle
+
+Parsing is not verification. The parser turns a string into parts; it has no
+opinion on whether the plate was read correctly, which building block 9 is, or
+whether anybody may have food delivered there. Migration 016 already holds the
+line that matters — `verification = 'confirmed' OR deliverable = false` — so a
+room stays undeliverable until an administrator confirms it on site.
+
 
 ## 7. Block ↔ number mapping — not established
 
@@ -311,11 +307,49 @@ block list, or photographs of the block identification boards at each entrance.
 - No database mutation of any kind.
 - No campus boundary confirmed, activated, replaced or proposed.
 - No location created, and none made deliverable.
-- No room-code parser written, and no room imported.
+- **No room imported.** The parser now exists (§6), but parsing a plate and
+  creating a destination are different things and only the first has happened.
 - No cafeteria pickup point set.
-- No image uploaded to storage (storage is not configured yet).
+- No image uploaded to storage (storage is not configured yet), and no
+  derivative published.
 - The archive was not modified, moved or committed.
 - The catalog seed was not run.
+
+### What was built
+
+| | |
+|---|---|
+| `server/src/services/room-code.js` | the room-plate parser (§6) |
+| `server/test/room-code.test.mjs` | 33 tests: every worked example, and every malformed form refused |
+| `server/src/db/021_room_codes.sql` | `source_code`, `block_number`, `floor_number`, `room_number` on `campus_node`. Adds no rows |
+| `docs/campus/bidholi-field-2026-09-evidence.csv` | all 114 frames with signage, status, confidence and publish-safety |
+| `docs/campus/bidholi-campus-layer.draft.geojson` | the owned campus layer — every feature `DRAFT`, every one `deliverable: false` |
+| `tools/campus-build-layer.mjs` | regenerates that layer from the committed CSVs |
+| `tools/campus-import-dryrun.mjs` | offline dry run through the **existing** importer's parser |
+| `tools/campus-photo-derivatives.py` | caption-band crop, metadata strip, resize |
+| `tools/campus-field-verify.mjs` | re-checks all 114 SHA-256 against the archive |
+
+No second importer was written. The existing admin importer
+(`server/src/routes/geodata.js`) remains the only way anything reaches the
+database, with its dry-run preview, duplicate detection, passkey requirement
+and audit trail intact.
+
+### Photo derivatives
+
+44 frames that actually show something — signage, a door plate or an
+identifiable subject — were processed into `campus-field/derivatives/`
+(git-ignored): caption band cropped off, **all metadata stripped**, long edge
+1600 px, JPEG q82. 814 MB becomes 10.4 MB.
+
+Cropping the band is not cosmetic. Every original carries a Google Maps
+thumbnail and a "Google" watermark, and publishing that as ECHO ECHO artwork
+would be passing off someone else's branding.
+
+**Every derivative is `publishable=no` and `needs_redaction_review=yes`.** No
+face or number-plate detection was run — claiming otherwise would be the
+dangerous kind of wrong, because somebody would publish believing the image had
+been cleaned. The Frisco and Tulips frames both show identifiable customers;
+frame 96 shows a staff member's name, email and phone on a lab notice.
 
 ---
 
@@ -333,7 +367,7 @@ In the order that removes the most doubt per trip:
    does not block.
 4. **The official block list** from the estates or academic office, so block
    numbers stop being inferred from proximity.
-5. **One upper-floor room plate in a single-digit block** (e.g. any `12xx` or
-   `13xx` room) — that single data point settles the numbering rule.
+5. **The official UPES room list**, to check the parser against more than the
+   nine plates photographed so far.
 6. **Confirm the hostel delivery policy** before either hostel gate is made
    deliverable.

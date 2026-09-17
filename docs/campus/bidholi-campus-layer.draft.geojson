@@ -1,0 +1,448 @@
+{
+  "type": "FeatureCollection",
+  "name": "UPES Bidholi campus layer (DRAFT)",
+  "generated_by": "tools/campus-build-layer.mjs",
+  "generated_from": [
+    "docs/campus/bidholi-candidate-points.csv",
+    "docs/campus/bidholi-observed-room-codes.csv",
+    "server/src/db/013_campus_geography.sql (OpenStreetMap way 321638232)"
+  ],
+  "licence_note": "The outline is OpenStreetMap data under ODbL and must keep its attribution. Everything else is ECHO ECHO's own field evidence.",
+  "status": "DRAFT — nothing here is confirmed, nothing here is deliverable, and the server does not read this file. The geofence uses the confirmed boundary in PostgreSQL and refuses delivery when there is none.",
+  "features": [
+    {
+      "type": "Feature",
+      "id": "bidholi-boundary-osm-draft",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              77.9660971,
+              30.4156492
+            ],
+            [
+              77.9664503,
+              30.4156873
+            ],
+            [
+              77.9671567,
+              30.415408
+            ],
+            [
+              77.9673628,
+              30.4157126
+            ],
+            [
+              77.9687903,
+              30.4152811
+            ],
+            [
+              77.9689375,
+              30.4155223
+            ],
+            [
+              77.9701149,
+              30.4151415
+            ],
+            [
+              77.9704828,
+              30.4160046
+            ],
+            [
+              77.970262,
+              30.4163472
+            ],
+            [
+              77.9698647,
+              30.4166772
+            ],
+            [
+              77.9696292,
+              30.4185428
+            ],
+            [
+              77.9676718,
+              30.4192028
+            ],
+            [
+              77.9658911,
+              30.4159919
+            ],
+            [
+              77.9659752,
+              30.415852
+            ],
+            [
+              77.9660971,
+              30.4156492
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "type": "CAMPUS",
+        "name": "UPES Bidholi campus (proposed outline)",
+        "status": "DRAFT",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "public_map",
+        "source_reference": "OpenStreetMap way 321638232, retrieved 2026-09-13, ODbL",
+        "gps_accuracy_m": null,
+        "evidence": "inferred",
+        "note": "NOT VERIFIED ON THE GROUND. Nobody has walked this perimeter. 113 of 114 field readings fall inside it and the official UPES pin is 9 m from the nearest reading, which is corroboration, not confirmation — every reading is an interior point. Reading #098 (30.414623, 77.970043) falls OUTSIDE and is unresolved. The campus geofence stays fail-closed until an administrator confirms a walked perimeter."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "candidate-caf-frisco",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.968012,
+          30.416223
+        ]
+      },
+      "properties": {
+        "type": "CAFETERIA",
+        "place_type": "cafeteria_pickup",
+        "name": "Café Frisco",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "Name from the shop's own signboard (\"Café Frisco\"). Photo 20260916_34420PMByGPSMapCamera.jpg, 16 Sep 2026 15:44. Reading is the photographer's position ~10 m in front of the counter, not the counter itself — stand at the counter and re-record before making this deliverable.",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "signage_photograph",
+        "note": "Position is where the photographer stood, not the hand-over point. Re-record at the counter or door before this is made deliverable."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "candidate-tulips-cafe",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.969702,
+          30.416383
+        ]
+      },
+      "properties": {
+        "type": "CAFETERIA",
+        "place_type": "cafeteria_pickup",
+        "name": "Tulips Cafe",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "Name from the shop's own signboard (\"Tulips CAFE\", tulip-and-cup logo, menu boards). Photo 20260916_45232PMByGPSMapCamera.jpg, 16 Sep 2026 16:52. Reading is the photographer's position ~10 m in front of the counter — re-record at the counter before making this deliverable.",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "signage_photograph",
+        "note": "Position is where the photographer stood, not the hand-over point. Re-record at the counter or door before this is made deliverable."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "candidate-management-development-centre",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.969181,
+          30.418251
+        ]
+      },
+      "properties": {
+        "type": "OFFICE",
+        "place_type": "administrative",
+        "name": "Management Development Centre",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "Name from the building's own signboard (\"MANAGEMENT DEVELOPMENT CENTRE\"). Photo 20260916_44011PMByGPSMapCamera.jpg, 16 Sep 2026 16:40. Reading taken from the forecourt, ~20 m from the entrance steps.",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "signage_photograph",
+        "note": "Position is where the photographer stood, not the hand-over point. Re-record at the counter or door before this is made deliverable."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "candidate-girls-hostel-gate",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.969246,
+          30.418098
+        ]
+      },
+      "properties": {
+        "type": "HOSTEL",
+        "place_type": "hostel",
+        "name": "Girls Hostel gate",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "Name from the gate signboard (\"GIRLS HOSTEL\"). Photo 20260916_44210PMByGPSMapCamera.jpg, 16 Sep 2026 16:42. Whether UPES permits delivery hand-over at this gate is NOT established — confirm with the hostel office before making this deliverable.",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "signage_photograph",
+        "note": "Position is where the photographer stood, not the hand-over point. Re-record at the counter or door before this is made deliverable."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "candidate-enrollment-office",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.966459,
+          30.416529
+        ]
+      },
+      "properties": {
+        "type": "OFFICE",
+        "place_type": "administrative",
+        "name": "Enrollment Office",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "Name from the building's own signboard (\"ENROLLMENT OFFICE\"). Photo 20260916_41027PMByGPSMapCamera.jpg, 16 Sep 2026 16:10.",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "signage_photograph",
+        "note": "Position is where the photographer stood, not the hand-over point. Re-record at the counter or door before this is made deliverable."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "candidate-the-huddle",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.966492,
+          30.416423
+        ]
+      },
+      "properties": {
+        "type": "LANDMARK",
+        "place_type": "student_facility",
+        "name": "The Huddle",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "Name from the building's own signboard (\"THE HUDDLE\"). Photo 20260916_41105PMByGPSMapCamera.jpg, 16 Sep 2026 16:11. Reading taken from the approach path, ~30 m from the entrance.",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "signage_photograph",
+        "note": "Position is where the photographer stood, not the hand-over point. Re-record at the counter or door before this is made deliverable."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "candidate-career-services-placement-block",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.967602,
+          30.418386
+        ]
+      },
+      "properties": {
+        "type": "OFFICE",
+        "place_type": "administrative",
+        "name": "Career Services / Placement Block",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "Signboards \"Career Services\" and \"UPES 100% PLACEMENT\" on the building. Photo 20260916_43138PMByGPSMapCamera.jpg, 16 Sep 2026 16:31. Google's reverse geocoder independently names this area \"Placement Block, University Of Petroleum And Energy Studies, Bidoli Dunga Rd\".",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "signage_photograph",
+        "note": "Position is where the photographer stood, not the hand-over point. Re-record at the counter or door before this is made deliverable."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "room-1001",
+      "geometry": null,
+      "properties": {
+        "type": "ROOM",
+        "name": "Block 1, Room 01",
+        "source_code": "1001",
+        "block_number": 1,
+        "floor_number": 0,
+        "room_number": "01",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "door plate photographed in 20260916_40045PMByGPSMapCamera.jpg",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "plate_photograph",
+        "note": "No geometry: the reading is the photographer's corridor position, not the room. Which named block is block 1 is NOT established."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "room-1006",
+      "geometry": null,
+      "properties": {
+        "type": "ROOM",
+        "name": "Block 1, Room 06",
+        "source_code": "1006",
+        "block_number": 1,
+        "floor_number": 0,
+        "room_number": "06",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "door plate photographed in 20260916_35936PMByGPSMapCamera.jpg",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "plate_photograph",
+        "note": "No geometry: the reading is the photographer's corridor position, not the room. Which named block is block 1 is NOT established."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "room-1104",
+      "geometry": null,
+      "properties": {
+        "type": "ROOM",
+        "name": "Block 1, Floor 1, Room 04",
+        "source_code": "1104",
+        "block_number": 1,
+        "floor_number": 1,
+        "room_number": "04",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "door plate photographed in 20260916_40428PMByGPSMapCamera.jpg",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "plate_photograph",
+        "note": "No geometry: the reading is the photographer's corridor position, not the room. Which named block is block 1 is NOT established."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "room-2002",
+      "geometry": null,
+      "properties": {
+        "type": "ROOM",
+        "name": "Block 2, Room 02",
+        "source_code": "2002",
+        "block_number": 2,
+        "floor_number": 0,
+        "room_number": "02",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "door plate photographed in 20260916_34252PMByGPSMapCamera.jpg",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "plate_photograph",
+        "note": "No geometry: the reading is the photographer's corridor position, not the room. Which named block is block 2 is NOT established."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "room-9204",
+      "geometry": null,
+      "properties": {
+        "type": "ROOM",
+        "name": "Block 9, Floor 2, Room 04",
+        "source_code": "9204",
+        "block_number": 9,
+        "floor_number": 2,
+        "room_number": "04",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "door plate photographed in 20260916_51117PMByGPSMapCamera.jpg",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "plate_photograph",
+        "note": "No geometry: the reading is the photographer's corridor position, not the room. Which named block is block 9 is NOT established."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "room-11011",
+      "geometry": null,
+      "properties": {
+        "type": "ROOM",
+        "name": "Block 11, Room 11",
+        "source_code": "11011",
+        "block_number": 11,
+        "floor_number": 0,
+        "room_number": "11",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "door plate photographed in 20260916_45547PMByGPSMapCamera.jpg",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "plate_photograph",
+        "note": "No geometry: the reading is the photographer's corridor position, not the room. Which named block is block 11 is NOT established."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "room-11012",
+      "geometry": null,
+      "properties": {
+        "type": "ROOM",
+        "name": "Block 11, Room 12",
+        "source_code": "11012",
+        "block_number": 11,
+        "floor_number": 0,
+        "room_number": "12",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "door plate photographed in 20260916_45543PMByGPSMapCamera.jpg",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "plate_photograph",
+        "note": "No geometry: the reading is the photographer's corridor position, not the room. Which named block is block 11 is NOT established."
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "room-11217",
+      "geometry": null,
+      "properties": {
+        "type": "ROOM",
+        "name": "Block 11, Floor 2, Room 17",
+        "source_code": "11217",
+        "block_number": 11,
+        "floor_number": 2,
+        "room_number": "17",
+        "status": "CANDIDATE",
+        "deliverable": false,
+        "confidence": "medium",
+        "source": "gps_on_site",
+        "source_reference": "door plate photographed in 20260916_50149PMByGPSMapCamera.jpg",
+        "gps_accuracy_m": null,
+        "gps_accuracy": "unknown",
+        "evidence": "plate_photograph",
+        "note": "No geometry: the reading is the photographer's corridor position, not the room. Which named block is block 11 is NOT established."
+      }
+    }
+  ]
+}

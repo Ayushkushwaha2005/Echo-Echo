@@ -39,6 +39,7 @@ const FILES = [
   ['campus', 'test/campus-config.test.mjs'],
   ['campus', 'test/campus-option.test.mjs'],
   ['campus', 'test/geodata.test.mjs'],
+  ['campus', 'test/room-code.test.mjs'],
   ['config', 'test/config-safety.test.mjs'],
   ['schema', 'test/schema-contract.test.mjs'],
   ['persistence', 'test/persistence.test.mjs'],
