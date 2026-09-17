@@ -15,3 +15,8 @@ dist/
 
 # deployment secrets live only on the VM
 deploy/server.env
+
+# field geodata: the source photo archive and anything derived from it
+# stay out of Git. 814 MB of JPEGs, and the photos show identifiable people.
+Google map*/
+campus-field/

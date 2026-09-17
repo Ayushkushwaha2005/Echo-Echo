@@ -1,0 +1,10 @@
+source_code,block_number,floor_number,room_number,confidence,source_photo,lat,lng,nearby_label,note
+1001,1,0,01,confirmed,20260916_40045PMByGPSMapCamera.jpg,30.416547,77.967194,Main Block,"Door plate read at full resolution. Also visible on 20260916_40102PMByGPSMapCamera.jpg."
+1006,1,0,06,confirmed,20260916_35936PMByGPSMapCamera.jpg,30.416294,77.967360,Main Block,"Door plate read at full resolution."
+1104,1,1,04,confirmed,20260916_40428PMByGPSMapCamera.jpg,30.416440,77.967276,Main Block,"Door plate read at full resolution. First-floor room — the key evidence for the middle floor digit."
+2002,2,0,02,confirmed,20260916_34252PMByGPSMapCamera.jpg,30.416491,77.967866,Cx89+h43,"Door plate read at full resolution."
+9204,9,2,04,confirmed,20260916_51117PMByGPSMapCamera.jpg,30.416108,77.969204,New Porta,"Door plate read at full resolution. Second-floor room."
+11011,11,0,11,confirmed,20260916_45547PMByGPSMapCamera.jpg,30.415748,77.969912,Chitrakoot,"Door plate read at full resolution."
+11012,11,0,12,confirmed,20260916_45543PMByGPSMapCamera.jpg,30.415750,77.969910,Chitrakoot,"Door plate read at full resolution."
+11217,11,2,17,probable,20260916_50149PMByGPSMapCamera.jpg,30.415753,77.969675,Chitrakoot,"Read once at reduced resolution; NOT re-confirmed at full resolution. Treat as unverified until re-read."
+200?,2,0,?,unresolved,20260916_34241PMByGPSMapCamera.jpg,30.416508,77.967878,Cx89+h43,"Roller-shutter plate, last digit not legible. Do NOT import."
