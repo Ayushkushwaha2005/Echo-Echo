@@ -1,0 +1,98 @@
+# ===========================================================================
+# ECHO ECHO — CI
+#
+# Everything here runs with NO credentials and NO external service. That is
+# deliberate: a pipeline that needs a secret cannot run on a pull request,
+# and one that quietly skips when a secret is absent tells you nothing.
+#
+#   build      the production surface bundle, including its audit (which is
+#              what keeps a demo password or a hardcoded OTP out of dist/)
+#   test       the full server suite against REAL PostgreSQL binaries, so
+#              foreign keys, partial unique indexes and transaction
+#              semantics are exercised rather than asserted
+#   workflows  every workflow in this directory parses as YAML
+#
+# The API base used for the build check is a placeholder host. It never
+# reaches a deployment; it exists so the production path of build.mjs
+# (including the https and forbidden-content checks) is what CI runs.
+# ===========================================================================
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Production build (same-origin path prefix)
+        run: QUAD_API_BASE=/api node build.mjs --production
+
+      - name: Production build (separate https origin)
+        run: QUAD_API_BASE=https://api.example.invalid node build.mjs --production
+
+      # The build must REFUSE these, so a misconfigured deployment fails in
+      # CI rather than shipping a bundle that calls a developer's laptop.
+      - name: An unset or insecure API base fails the build
+        run: |
+          set -euo pipefail
+          if node build.mjs --production > /dev/null 2>&1; then
+            echo "::error::build.mjs accepted an unset QUAD_API_BASE"; exit 1
+          fi
+          if QUAD_API_BASE=http://insecure.example node build.mjs --production > /dev/null 2>&1; then
+            echo "::error::build.mjs accepted a plain-http QUAD_API_BASE"; exit 1
+          fi
+          echo "Both rejected, as they must be."
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      # initdb is slow and is a one-time cost per runner. Kept as its own
+      # step so a cluster that fails to come up is not reported as a test
+      # failure, which would send you looking in the wrong place.
+      - name: Create the PostgreSQL cluster
+        working-directory: server
+        run: npm run test:init
+
+      - name: Test
+        working-directory: server
+        run: npm test
+
+  workflows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Every workflow parses
+        run: |
+          set -euo pipefail
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -e "$f" ] || continue
+            npx --yes js-yaml@4.1.0 "$f" > /dev/null
+            echo "ok  $f"
+          done
