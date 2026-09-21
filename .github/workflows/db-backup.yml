@@ -13,6 +13,11 @@
 #   B2_BACKUP_ENDPOINT       e.g. https://s3.us-west-004.backblazeb2.com
 #   B2_BACKUP_REGION         e.g. us-west-004
 #
+# Until those seven secrets exist the preflight job reports "production
+# database not configured" and the backup job is skipped. It never fabricates
+# a backup, and a PARTIAL configuration is a hard failure so a half-finished
+# setup is never mistaken for a working one.
+#
 # Cost: ~1-2 minutes per run. Private repos include 2,000 minutes/month and
 # jobs are blocked (not billed) at the quota without a payment method. Set a
 # B2 lifecycle rule on the backup bucket to keep 30 days of files.
@@ -20,24 +25,171 @@ name: db-backup
 on:
   schedule:
     - cron: '30 21 * * *'   # 03:00 IST
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: 'Fail the run (instead of skipping) when backup secrets are absent'
+        type: boolean
+        default: false
 permissions:
   contents: read
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
 jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      # Only the NAMES of the secrets are ever emitted, never their values.
+      - name: Check backup configuration
+        id: check
+        env:
+          HAVE_BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL != '' }}
+          HAVE_BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE != '' }}
+          HAVE_B2_BACKUP_BUCKET: ${{ secrets.B2_BACKUP_BUCKET != '' }}
+          HAVE_B2_BACKUP_KEY_ID: ${{ secrets.B2_BACKUP_KEY_ID != '' }}
+          HAVE_B2_BACKUP_APP_KEY: ${{ secrets.B2_BACKUP_APP_KEY != '' }}
+          HAVE_B2_BACKUP_ENDPOINT: ${{ secrets.B2_BACKUP_ENDPOINT != '' }}
+          HAVE_B2_BACKUP_REGION: ${{ secrets.B2_BACKUP_REGION != '' }}
+          STRICT: ${{ inputs.strict }}
+        run: |
+          set -euo pipefail
+          required="BACKUP_DATABASE_URL BACKUP_PASSPHRASE B2_BACKUP_BUCKET B2_BACKUP_KEY_ID B2_BACKUP_APP_KEY B2_BACKUP_ENDPOINT B2_BACKUP_REGION"
+          present=""
+          missing=""
+          for name in $required; do
+            flag="HAVE_${name}"
+            if [ "${!flag}" = "true" ]; then present="$present $name"; else missing="$missing $name"; fi
+          done
+          n_missing=$(echo $missing | wc -w)
+          n_present=$(echo $present | wc -w)
+
+          if [ "$n_missing" -eq 0 ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "All 7 backup secrets are configured."
+            echo "Backup configuration: complete (7/7 secrets)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ "$n_present" -gt 0 ]; then
+            # Half-configured is always an error: it means the setup was started
+            # and abandoned, and a silent skip would hide that forever.
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::error title=Backup partially configured::Missing secrets:$missing"
+            {
+              echo "## Backup NOT taken - partial configuration"
+              echo ""
+              echo "$n_present of 7 secrets are set. Missing:"
+              for name in $missing; do echo "- $name"; done
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # Nothing is configured: the documented pre-launch state.
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          echo "::warning title=Production database not configured::No backup was taken. None of the 7 backup secrets are set."
+          {
+            echo "## Production database not configured"
+            echo ""
+            echo "No backup was taken, and none was fabricated."
+            echo ""
+            echo "None of the 7 required repository secrets are set:"
+            for name in $missing; do echo "- $name"; done
+            echo ""
+            echo "Set them under Settings -> Secrets and variables -> Actions, then run this workflow manually to verify."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${STRICT:-false}" = "true" ]; then
+            echo "::error::strict=true was requested and the backup is not configured."
+            exit 1
+          fi
+          exit 0
+
   backup:
+    needs: preflight
+    if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Install PostgreSQL 17 client
         run: |
+          set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y -qq postgresql-client-17
-      - name: Dump, encrypt, upload
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: Verify database connectivity
+        env:
+          DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          # Refuse to dump over an unencrypted link. Neither the URL nor any
+          # part of it is ever echoed.
+          case "$DATABASE_URL" in
+            postgres://*|postgresql://*) ;;
+            *) echo "::error title=Bad BACKUP_DATABASE_URL::Value is not a postgres:// or postgresql:// URL."; exit 1 ;;
+          esac
+          case "$DATABASE_URL" in
+            *sslmode=disable*|*sslmode=allow*|*sslmode=prefer*)
+              echo "::error title=Insecure BACKUP_DATABASE_URL::sslmode must be require, verify-ca or verify-full."; exit 1 ;;
+            *sslmode=*) ;;
+            *) echo "::error title=Insecure BACKUP_DATABASE_URL::No sslmode given; append ?sslmode=require."; exit 1 ;;
+          esac
+          PGCONNECT_TIMEOUT=15 psql --dbname="$DATABASE_URL" -Atc 'select 1' > /dev/null
+          echo "Database reachable over TLS."
+
+      - name: Dump and encrypt
         env:
           DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
           PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          name="echoecho-$(date -u +%Y-%m-%dT%H%MZ).dump.gpg"
+          echo "BACKUP_NAME=$name" >> "$GITHUB_ENV"
+
+          # Dump to disk first so a mid-dump failure cannot be swallowed by a
+          # pipe into gpg, which is how the previous version turned an
+          # unreachable database into a confusing gpg error.
+          PGCONNECT_TIMEOUT=15 pg_dump --format=custom --no-owner --no-privileges \
+            --dbname="$DATABASE_URL" --file=raw.dump
+          test -s raw.dump
+
+          # Sanity-check the dump BEFORE encrypting: a custom-format dump that
+          # pg_restore cannot list is not a backup.
+          tables=$(pg_restore --list raw.dump | grep -c 'TABLE DATA' || true)
+          echo "Dump contains $tables table-data entries ($(stat -c%s raw.dump) bytes)."
+          if [ "$tables" -lt 1 ]; then
+            echo "::error title=Empty dump::pg_dump produced no table data."
+            exit 1
+          fi
+
+          # Passphrase arrives on fd 3, never as an argv the process list shows.
+          gpg --batch --yes --symmetric --cipher-algo AES256 \
+            --pinentry-mode loopback --passphrase-fd 3 \
+            -o "$name" raw.dump 3<<<"$PASSPHRASE"
+          test -s "$name"
+          shred -u raw.dump
+          echo "DUMP_TABLES=$tables" >> "$GITHUB_ENV"
+
+      - name: Verify the encrypted file decrypts and restores
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          gpg --batch --yes --decrypt --pinentry-mode loopback --passphrase-fd 3 \
+            -o verify.dump "$BACKUP_NAME" 3<<<"$PASSPHRASE" 2>/dev/null
+          pg_restore --list verify.dump > /dev/null
+          echo "Round-trip verified: the uploaded file decrypts and is a valid pg_restore archive."
+          shred -u verify.dump
+
+      - name: Upload to Backblaze B2
+        env:
           AWS_ACCESS_KEY_ID: ${{ secrets.B2_BACKUP_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_BACKUP_APP_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.B2_BACKUP_REGION }}
@@ -45,9 +197,26 @@ jobs:
           BUCKET: ${{ secrets.B2_BACKUP_BUCKET }}
         run: |
           set -euo pipefail
-          name="echoecho-$(date -u +%Y-%m-%dT%H%MZ).dump.gpg"
-          /usr/lib/postgresql/17/bin/pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL" \
-            | gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$PASSPHRASE" -o "$name"
-          test -s "$name"
-          aws s3 cp "$name" "s3://$BUCKET/$name" --endpoint-url "$ENDPOINT" --only-show-errors
-          echo "uploaded $name ($(stat -c%s "$name") bytes)"
+          local_size=$(stat -c%s "$BACKUP_NAME")
+          aws s3 cp "$BACKUP_NAME" "s3://$BUCKET/$BACKUP_NAME" \
+            --endpoint-url "$ENDPOINT" --only-show-errors
+          # Confirm the object actually landed and is the size we sent.
+          remote_size=$(aws s3api head-object --bucket "$BUCKET" --key "$BACKUP_NAME" \
+            --endpoint-url "$ENDPOINT" --query ContentLength --output text)
+          if [ "$remote_size" != "$local_size" ]; then
+            echo "::error title=Upload mismatch::local $local_size bytes, remote $remote_size bytes."
+            exit 1
+          fi
+          {
+            echo "## Backup uploaded"
+            echo ""
+            echo "- File: $BACKUP_NAME"
+            echo "- Size: $local_size bytes"
+            echo "- Tables dumped: $DUMP_TABLES"
+            echo "- Verified: decrypts and lists as a valid pg_restore archive"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "uploaded $BACKUP_NAME ($local_size bytes, verified)"
+
+      - name: Remove local artefacts
+        if: always()
+        run: rm -f -- *.dump *.dump.gpg
