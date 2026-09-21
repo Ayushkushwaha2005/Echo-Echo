@@ -20,6 +20,21 @@
 const LEAFLET_VERSION = '1.9.4';
 const CDN = `https://cdnjs.cloudflare.com/ajax/libs/leaflet/${LEAFLET_VERSION}`;
 
+/* Subresource Integrity. A third party serves this script into a page that
+   holds the student's session, so "whatever the CDN sends today" is not an
+   acceptable answer: a compromised or substituted file would run with full
+   access to the surface. The browser hashes the bytes and refuses to execute
+   anything that does not match, which turns a CDN compromise into the same
+   outcome as the CDN being down - and that case is already handled, because
+   onerror degrades the map to the plain list of the same places.
+   These values are cdnjs's published SRI for 1.9.4, re-derived from the
+   fetched bytes independently. Both must be updated together with the
+   version above, or the map will simply stop loading. */
+const SRI = {
+  js: 'sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g==',
+  css: 'sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==',
+};
+
 let leafletPromise = null;
 
 /* One load, shared by every map on the page. */
@@ -30,12 +45,22 @@ function loadLeaflet() {
     const css = document.createElement('link');
     css.rel = 'stylesheet';
     css.href = `${CDN}/leaflet.min.css`;
+    css.integrity = SRI.css;
+    /* SRI needs a CORS-enabled fetch; without this the browser cannot read
+       the bytes to hash them and blocks the resource outright. */
+    css.crossOrigin = 'anonymous';
+    css.referrerPolicy = 'no-referrer';
     document.head.append(css);
 
     const js = document.createElement('script');
     js.src = `${CDN}/leaflet.min.js`;
+    js.integrity = SRI.js;
+    js.crossOrigin = 'anonymous';
+    js.referrerPolicy = 'no-referrer';
     js.async = true;
     js.onload = () => (window.L ? resolve(window.L) : reject(new Error('Leaflet did not load')));
+    /* Also fires when the integrity check fails, so a substituted file lands
+       on the same degraded path as an unreachable CDN. */
     js.onerror = () => reject(new Error('Could not load the map library'));
     document.head.append(js);
   }).catch((e) => { leafletPromise = null; throw e; });

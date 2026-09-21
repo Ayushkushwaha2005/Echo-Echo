@@ -143,6 +143,31 @@ for (const file of files) {
   }
 }
 
+/* Third-party code loaded at runtime must be pinned by hash. A CDN script
+   runs inside a page holding the student's session, so "whatever the CDN
+   sends today" is not acceptable; SRI turns a substituted file into the same
+   outcome as an unreachable one. The rule is per FILE rather than per line:
+   whatever builds the URL must also set the integrity, and a new CDN
+   dependency added without one fails the build instead of shipping. */
+const CDN_HOST = /https?:\/\/[A-Za-z0-9.-]*(cdnjs\.cloudflare\.com|unpkg\.com|jsdelivr\.net|cdn\.[A-Za-z0-9.-]+)/;
+for (const file of files) {
+  const rel = relative(dist, file).replace(/\\/g, '/');
+  if (rel.startsWith('prototype/')) continue;
+  const src = readFileSync(file, 'utf8');
+  const m = src.match(CDN_HOST);
+  if (!m) continue;
+  /* Tiles are images; SRI does not apply to them and they carry no code. */
+  if (/tile\.openstreetmap\.org/.test(m[0])) continue;
+  if (!/\bintegrity\b/.test(src)) {
+    findings.push({ rel, label: 'loads third-party code from a CDN with no Subresource Integrity',
+                    snippet: m[0] });
+  }
+  if (!/crossOrigin|crossorigin/.test(src)) {
+    findings.push({ rel, label: 'CDN resource has no crossorigin attribute, so SRI cannot be checked',
+                    snippet: m[0] });
+  }
+}
+
 /* Prove nothing that IS shipped references the modules we refused to copy. */
 for (const file of walk(dist).filter((f) => /\.(js|mjs|html)$/.test(f))) {
   const rel = relative(dist, file).replace(/\\/g, '/');
@@ -171,5 +196,6 @@ console.log('   no demo credentials, no dev password, no hardcoded OTP');
 console.log('   no fake GPS control, no hardcoded rating');
 console.log('   no secrets or secret names');
 console.log('   no prototype data-layer imports; those modules are not shipped');
+console.log('   every CDN dependency is pinned by Subresource Integrity');
 if (PRODUCTION) console.log('   no localhost references; API base is https');
 console.log('');
