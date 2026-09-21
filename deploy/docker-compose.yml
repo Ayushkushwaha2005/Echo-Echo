@@ -77,6 +77,14 @@ services:
     restart: unless-stopped
     # The proxy is the only thing on the public interface.
     network_mode: host
+    # The Caddyfile names the site with {$API_HOSTNAME}. Compose substitutes
+    # these from deploy/.env, which is NOT a secret file: both values are
+    # public (a hostname and a contact address) and both are wrong-by-default
+    # on purpose, so Caddy refuses to start rather than requesting a
+    # certificate for somebody else's name. See deploy/.env.example.
+    environment:
+      API_HOSTNAME: ${API_HOSTNAME:?set API_HOSTNAME in deploy/.env - see .env.example}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in deploy/.env - see .env.example}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Certificates and keys. This volume is what stops Let's Encrypt being

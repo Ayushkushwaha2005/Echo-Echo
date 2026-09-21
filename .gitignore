@@ -12,6 +12,12 @@ dist/
 
 .vercel
 .env*
+# Re-exempt the templates. The `.env*` line above is a catch-all added later
+# than the `!.env.example` negation further up, and Git takes the LAST
+# matching rule -- so without this the documented templates would be silently
+# untracked, which is how a deployment ends up with no example to copy.
+!.env.example
+!**/.env.example
 
 # deployment secrets live only on the VM
 deploy/server.env
