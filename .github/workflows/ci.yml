@@ -43,6 +43,16 @@ jobs:
       - name: Production build (separate https origin)
         run: QUAD_API_BASE=https://api.example.invalid node build.mjs --production
 
+      # What a browser would catch and this cannot is rendered layout. What
+      # it does catch without a browser is the decidable half: an
+      # unresolvable asset, a box wider than a phone, a missing viewport, an
+      # API key in a bundle.
+      - name: Static QA of the built surfaces
+        run: node tools/frontend-qa.mjs
+
+      - name: Every surface executes and renders
+        run: node tests/bundle-smoke.mjs
+
       # The build must REFUSE these, so a misconfigured deployment fails in
       # CI rather than shipping a bundle that calls a developer's laptop.
       - name: An unset or insecure API base fails the build
