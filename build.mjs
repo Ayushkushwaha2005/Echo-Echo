@@ -21,16 +21,27 @@ const PRODUCTION = process.argv.includes('--production');
    host with a rewrite to the API uses, and it is the only one where a
    SameSite=Lax session cookie reaches the API at all. */
 const SAME_ORIGIN = process.env.QUAD_API_BASE === 'same-origin';
+/* A leading-slash value is a same-origin PATH PREFIX, which is what a static
+   host with a rewrite actually needs. `same-origin` (empty prefix) only works
+   when the API answers at the site root; on Vercel the rewrite has to claim a
+   prefix, because `/auth/*` at the root would also swallow the surfaces. So
+   QUAD_API_BASE=/api pairs with
+     { "source": "/api/:path*", "destination": "https://<api host>/:path*" }
+   and the browser still sees ONE origin, which is the only arrangement where
+   a SameSite=Lax session cookie reaches the API at all. */
+const PREFIX = /^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(process.env.QUAD_API_BASE || '');
 const API_BASE = SAME_ORIGIN ? ''
   : process.env.QUAD_API_BASE || (PRODUCTION ? null : 'http://localhost:8080');
 
 if (PRODUCTION && API_BASE === null) {
-  console.error('✗ QUAD_API_BASE must be set for a production build '
-    + '(an https URL, or "same-origin" when the API is served from this origin).');
+  console.error('✗ QUAD_API_BASE must be set for a production build (one of:\n'
+    + '    https://api.example.com   a separate API origin (needs cross-site cookies)\n'
+    + '    /api                      a same-origin path prefix served by a rewrite\n'
+    + '    same-origin               the API answers at this origin\'s root).');
   process.exit(1);
 }
-if (PRODUCTION && !SAME_ORIGIN && !/^https:\/\//.test(API_BASE)) {
-  console.error(`✗ QUAD_API_BASE must be https in production (got ${API_BASE}).`);
+if (PRODUCTION && !SAME_ORIGIN && !PREFIX && !/^https:\/\//.test(API_BASE)) {
+  console.error(`✗ QUAD_API_BASE must be https, a /path prefix, or "same-origin" in production (got ${API_BASE}).`);
   process.exit(1);
 }
 

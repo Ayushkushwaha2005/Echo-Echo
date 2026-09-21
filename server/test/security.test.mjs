@@ -508,3 +508,45 @@ test('client errors raised by the framework keep their status and never look lik
   assert.equal(media.statusCode, 415);
   assert.ok(!/stack|Error:|FST_/.test(media.body), 'no framework internals in the body');
 });
+
+/* ---------- edge normalisation ------------------------------------------
+   A static host in front of the surfaces (Vercel, `serve`) redirects to the
+   trailing-slash spelling BEFORE it applies its rewrites, so an API call
+   proxied through it arrives as /auth/email/send/. If that 404s, the browser
+   reports "cannot reach the server" and the outage looks like the API being
+   down. These fix the two spellings to one answer, in both directions. */
+test('a trailing slash reaches the same route, and the same public/private answer', async () => {
+  for (const [plain, slashed] of [['/health', '/health/'],
+                                  ['/auth/status', '/auth/status/'],
+                                  ['/campuses', '/campuses/']]) {
+    const a = await client(app).get(plain);
+    const b = await client(app).get(slashed);
+    assert.equal(b.status, a.status, `${slashed} answered ${b.status}, ${plain} answered ${a.status}`);
+    assert.notEqual(b.status, 404, `${slashed} must not 404`);
+  }
+});
+
+test('a trailing slash does not turn a public route into a sign-in wall', async () => {
+  /* /auth/email/send is on the default-deny allowlist. Reached with a slash
+     it must still be handled (503 with no provider configured, or 400) and
+     never answer 401, which is what an unnormalised allowlist would do. */
+  const r = await client(app).post('/auth/email/send/', { email: 'someone@gmail.com' });
+  assert.notEqual(r.status, 401, 'a public route must not become private because of a slash');
+  assert.notEqual(r.status, 404);
+  assert.equal(r.status, 400, 'the domain check still runs');
+});
+
+test('a trailing slash does not smuggle a private route past the default-deny list', async () => {
+  for (const url of ['/admin/users/', '/orders/', '/me/', '/partner/earnings/']) {
+    const r = await client(app).get(url);
+    assert.ok(r.status === 401 || r.status === 404,
+      `${url} without a session answered ${r.status}`);
+  }
+});
+
+test('repeated slashes do not defeat the default-deny list', async () => {
+  for (const url of ['/admin/users//', '/admin/users///']) {
+    const r = await client(app).get(url);
+    assert.ok(r.status >= 400 && r.status !== 200, `${url} answered ${r.status}`);
+  }
+});

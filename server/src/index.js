@@ -73,6 +73,16 @@ export function build() {
     genReqId: (req) => req.headers['x-request-id'] || randomUUID(),
     trustProxy: process.env.TRUST_PROXY === 'true',
     bodyLimit: 1_048_576,
+    /* A static host in front of the surfaces normalises trailing slashes so
+       that /web resolves to /web/index.html. Vercel does it with a 308 that
+       runs BEFORE its rewrites, so an API call proxied through that host
+       arrives here as /auth/email/send/ rather than /auth/email/send. With
+       Fastify's default that is a 404 the browser reports as "cannot reach
+       the server", which is indistinguishable from the API being down.
+       Treating the two spellings as one route removes a whole class of
+       deployment-shaped outage; the default-deny check below normalises the
+       path the same way so the two cannot disagree. */
+    ignoreTrailingSlash: true,
   });
 
   return (async () => {
@@ -178,7 +188,12 @@ export function build() {
 
     app.addHook('preHandler', async (req) => {
       req.actor = await actorFromToken(req.cookies?.[SESSION.cookieName]);
-      const path = req.url.split('?')[0];
+      /* Matches ignoreTrailingSlash above: /auth/email/send/ and
+         /auth/email/send reach the same handler, so they must also get the
+         same answer from the default-deny list. Without this the slashed
+         spelling would fall through to "sign in required" on a route that is
+         deliberately public. The root path is left alone. */
+      const path = req.url.split('?')[0].replace(/(.)\/+$/, '$1');
       if (!req.actor && !PUBLIC.some((re) => re.test(path))) {
         throw Unauthenticated('Sign in required', `${path} requires an account.`);
       }
