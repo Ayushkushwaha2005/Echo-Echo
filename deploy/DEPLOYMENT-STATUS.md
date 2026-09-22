@@ -1,5 +1,11 @@
 # ECHO ECHO — deployment checkpoint
 
+> **Superseded on 23 September 2026.** This file is the 17 September
+> checkpoint and is kept as history. The API, database and storage described
+> below as "not deployed" are now live on Render, Neon and Backblaze B2; the
+> Azure path was abandoned. For the current state see
+> [docs/DEPLOY.md](../docs/DEPLOY.md), "What is actually deployed".
+
 **Written:** 17 September 2026
 **Commit at checkpoint:** `551254f` — *deploy: one-time VM preparation script*
 **Working tree:** clean, `main` in sync with `origin/main`

@@ -230,10 +230,15 @@ ADMIN_PASSKEY_INVITE_TTL_HOURS=24
 
 First sign-in, once the API is live:
 
-1. Ayush opens `https://admin.echoecho.in`, signs in with the email code. The
-   proven mailbox grants `platform_owner`.
-2. On the server (Render → Shell): `npm run admin:invite -- ayush.17551@stu.upes.ac.in`
-   prints a one-time code (shell access is the proof of ownership).
+1. Ayush opens `https://echo-echo-nu.vercel.app/admin/`, signs in with the
+   email code. The proven mailbox grants `platform_owner`. **This step needs
+   a verified email domain** — until then no code can be delivered.
+2. `npm run admin:invite -- ayush.17551@stu.upes.ac.in` prints a one-time code.
+
+   Render's **free plan has no shell**, so run it from a trusted machine with
+   `DATABASE_URL` pointing at Neon: the script only touches the database, and
+   holding the production database credential is the same proof of ownership
+   that shell access was. Do not run it anywhere the credential should not be.
 3. Enter it in Campus Control and create the passkey (fingerprint, Face ID,
    Windows Hello or device PIN). **Save the 10 recovery codes offline.**
 4. Administrators → "Add a passkey on this device" on a second device.
@@ -296,11 +301,48 @@ writes into `dist/serve.json`, so the deployed site behaves the way
 `npm run web` does locally: `/` redirects to `/web/`, and every response
 carries `nosniff`, `DENY`, `no-referrer` and `no-cache`.
 
-**Only the surfaces are on Vercel. The API is not, and cannot be.** It is a
+**Only the surfaces are on Vercel. The API is not, and must not be.** It is a
 long-running Fastify process holding a PostgreSQL pool and running in-process
 schedulers; a serverless function is neither long-running nor a stable place
-to hold either. Nothing about that should be worked around — see section 6 for
-hosting it on Render.
+to hold either. Nothing about that should be worked around — the API runs on
+Render (section 6) and the surfaces reach it through a rewrite, so the
+browser still only ever talks to one origin.
+
+### What is actually deployed (23 September 2026)
+
+| | |
+|---|---|
+| Surfaces | https://echo-echo-nu.vercel.app — Vercel project `echo-echo` |
+| API | https://echo-echo-api.onrender.com — Render `echo-echo-api`, free, Virginia, Docker from `server/Dockerfile` |
+| Database | Neon project `lingering-bar-50764365`, AWS `us-east-1`, 21 migrations applied |
+| Storage | Backblaze B2 `echo-echo-production-storage-2026`, `allPrivate`, SSE-B2, `us-east-005` |
+| Email | Resend, `onboarding@resend.dev` — **no domain verified yet**, see below |
+| Payments | deferred (`PAYMENTS_DEFERRED=true`) |
+| Sweeper | `SWEEPER=off` while there are no orders to sweep |
+
+The API base is `/api`, rewritten by `vercel.json` to the Render service.
+Everything is co-located in `us-east-1`: the Vercel marketplace does not
+expose a Neon region, and an API request runs several queries, so the API
+sits next to the database rather than next to the students. Measured from
+the deployed service, a database round trip is 6–8 ms.
+
+Two consequences of the rewrite worth keeping in mind:
+
+- The rewrite source must be `/api/(.*)`, not `/api/:path*`. Vercel's
+  trailing-slash 308 runs **before** rewrites, so calls arrive spelled
+  `/api/auth/status/`, and `:path*` does not match a trailing slash. With the
+  wrong pattern every proxied call falls through to the static site and
+  returns Vercel's own 404, which looks exactly like the API being down.
+- That 308 is paid per API call (~30 ms). It disappears when the API moves to
+  `api.<your-domain>`; it is not worth contorting the surfaces to avoid,
+  because `trailingSlash: true` is what makes relative asset paths resolve
+  under `/web/`.
+
+**Student sign-in does not work for students yet.** Resend's free tier only
+delivers to the account holder's own mailbox until a domain is DNS-verified,
+so `POST /auth/email/send` for an `@stu.upes.ac.in` address returns 503 and
+the log records Resend's refusal. The server, the code path and the budget
+ledger are all correct and verified; the domain is the only missing piece.
 
 ### The API base, and why it is `same-origin`
 
