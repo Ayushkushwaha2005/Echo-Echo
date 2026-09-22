@@ -17,8 +17,13 @@ let failed = 0;
 const ok = (m) => console.log(`  ✓ ${m}`);
 const bad = (m) => { console.error(`  ✗ ${m}`); failed++; };
 
+/* Redirects are FOLLOWED, because a browser follows them: a static host in
+   front of the API answers /api/health with a 308 to /api/health/ before any
+   rewrite runs, and refusing to follow it would report a working deployment
+   as broken. The cost of that hop is measured once, below, rather than
+   hidden. */
 const call = async (path, init = {}) => {
-  const res = await fetch(base + path, { redirect: 'manual', ...init });
+  const res = await fetch(base + path, { redirect: 'follow', ...init });
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch { /* not every response is JSON */ }
@@ -45,6 +50,23 @@ console.log(`\nECHO ECHO live check — ${base}\n`);
   const { res } = await call('/health/');
   res.status === 200 ? ok('/health/ 200 — trailing-slash spelling survives the rewrite')
                      : bad(`/health/ returned ${res.status} — a proxied call would 404`);
+}
+
+/* ---- what the redirect actually costs ----------------------------------
+   Reported, not asserted: it is a property of the host's trailing-slash
+   policy, not a fault. It matters because it is paid on API calls, and the
+   custom-domain arrangement removes it entirely. */
+{
+  const t0 = Date.now();
+  const direct = await fetch(base + '/health', { redirect: 'manual' });
+  const hop = direct.status === 308 || direct.status === 301;
+  const t1 = Date.now();
+  await fetch(base + '/health');
+  const total = Date.now() - t1;
+  console.log(hop
+    ? `      note: /health is reached via a ${direct.status} to "${direct.headers.get('location')}"`
+      + ` — ${total} ms with the extra hop, ${t1 - t0} ms for the redirect alone`
+    : `      note: no redirect hop — the API is reached directly (${total} ms)`);
 }
 
 /* ---- readiness: the database, the schema, and every provider ----------- */
