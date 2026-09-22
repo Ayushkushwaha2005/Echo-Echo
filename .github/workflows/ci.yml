@@ -98,10 +98,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      # render.yaml is joined to this check because it is deployment
+      # configuration that nothing else validates: a typo in it does not
+      # surface until a deploy is attempted, which is the worst moment.
       - name: Every workflow parses
         run: |
           set -euo pipefail
-          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+          for f in .github/workflows/*.yml .github/workflows/*.yaml render.yaml; do
             [ -e "$f" ] || continue
             npx --yes js-yaml@4.1.0 "$f" > /dev/null
             echo "ok  $f"

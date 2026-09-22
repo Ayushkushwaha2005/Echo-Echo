@@ -14,11 +14,29 @@ const bad = (m) => { console.error(`  ✗ ${m}`); process.exitCode = 1; };
 
 if (what === 'db') {
   const { pool, health, migrationState } = await import('../src/db/index.js');
+  const { DB } = await import('../src/config.js');
+  const DB_URL = DB.url || '';
   const h = await health();
   h.ok ? ok(`database answers (${h.latencyMs} ms)`) : bad(`database: ${h.error}`);
   if (h.ok) {
+    /* Whether the wire is encrypted cannot be read from pg_stat_ssl alone.
+       Several managed providers — Neon among them — terminate TLS at a proxy
+       in front of the compute, so the backend honestly reports ssl = false
+       while the client's connection is encrypted the whole way to that proxy.
+       Believing that column would report a false failure on every such
+       deployment, which is how an operator learns to ignore this check.
+
+       So the question is asked the other way round, which is the one that
+       actually matters: would this server accept an UNENCRYPTED connection?
+       If plaintext is refused, nothing we send can travel in the clear. */
     const ssl = await pool.query(`SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()`).catch(() => ({ rows: [] }));
-    ssl.rows[0]?.ssl ? ok('connection is TLS-encrypted') : bad('connection is NOT using TLS');
+    const pg = (await import('pg')).default;
+    const plain = new pg.Client({ connectionString: (DB_URL.split('?')[0]), ssl: false });
+    let plaintextAccepted = false;
+    try { await plain.connect(); plaintextAccepted = true; await plain.end(); } catch { /* refused: good */ }
+    if (plaintextAccepted) bad('the database ACCEPTS unencrypted connections — traffic can travel in the clear');
+    else if (ssl.rows[0]?.ssl) ok('connection is TLS-encrypted (verified end to end)');
+    else ok('connection is TLS-encrypted (TLS terminates at the provider proxy; plaintext is refused)');
     const m = await migrationState();
     ok(`${m.count} migrations applied`);
     const v = await pool.query('SHOW server_version');
