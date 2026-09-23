@@ -8,7 +8,8 @@
      node build.mjs                         # dev build, localhost API
      QUAD_API_BASE=https://api.quad.app node build.mjs --production
    ========================================================================== */
-import { readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, readdirSync, statSync, renameSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -56,20 +57,71 @@ mkdirSync(dist, { recursive: true });
 const PROTOTYPE_MODULES = ['api.js', 'catalog.js', 'campus.js', 'auth.js', 'config.js']
   .map((f) => join('packages', 'data', f));
 
-for (const dir of ['packages', 'brand', 'web', 'admin', 'shop']) {
-  cpSync(join(root, dir), join(dist, dir), {
+/* Every script and stylesheet lives under dist/_v/<content hash>/, and only
+   the three index.html files sit outside it. The hash changes whenever any
+   byte of any asset does, so the host can mark /_v/ immutable for a year:
+   a returning visitor re-downloads nothing but the page itself, and a new
+   deploy can never pair a fresh page with a stale module, because it names a
+   directory that did not exist before. The tree keeps its shape inside the
+   hashed folder, so every relative import still resolves exactly as written. */
+const SURFACES = ['web', 'admin', 'shop'];
+const staging = join(dist, '_v', 'staging');
+for (const dir of ['packages', 'brand', ...SURFACES]) {
+  cpSync(join(root, dir), join(staging, dir), {
     recursive: true,
     filter: (src) => !PROTOTYPE_MODULES.some((m) => src.endsWith(m)),
   });
 }
+for (const surface of SURFACES) {
+  mkdirSync(join(dist, surface), { recursive: true });
+  cpSync(join(staging, surface, 'index.html'), join(dist, surface, 'index.html'));
+  rmSync(join(staging, surface, 'index.html'));
+}
+const listFiles = (dir) => readdirSync(dir).flatMap((f) => {
+  const p = join(dir, f);
+  return statSync(p).isDirectory() ? listFiles(p) : [p];
+}).sort();
+const digest = createHash('sha256');
+for (const f of listFiles(staging)) {
+  digest.update(relative(staging, f).replace(/\\/g, '/')).update('\0').update(readFileSync(f)).update('\0');
+}
+const VERSION = digest.digest('hex').slice(0, 12);
+const assets = join(dist, '_v', VERSION);
+renameSync(staging, assets);
 
-/* Inject the API base and drop the dev default. */
-for (const surface of ['web', 'admin', 'shop']) {
+/* The static import graph of a module, as the browser will discover it one
+   level at a time. Declaring it up front with modulepreload lets every level
+   download in parallel with the entry instead of after it. Dynamic import()s
+   are left out on purpose: they are the parts that are meant to load late. */
+function importGraph(entry) {
+  const seen = new Set();
+  const visit = (file) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const src = readFileSync(file, 'utf8');
+    for (const m of src.matchAll(/^\s*(?:import|export)\s[^'"]*?from\s*['"](\.{1,2}\/[^'"]+)['"]|^\s*import\s*['"](\.{1,2}\/[^'"]+)['"]/gm)) {
+      visit(join(dirname(file), m[1] || m[2]));
+    }
+  };
+  visit(entry);
+  return [...seen];
+}
+
+/* Inject the API base, point the page at the versioned assets, and drop the
+   dev default. */
+for (const surface of SURFACES) {
   const p = join(dist, surface, 'index.html');
   let html = readFileSync(p, 'utf8');
   html = html.replace(
     /window\.QUAD_API_BASE = window\.QUAD_API_BASE \|\| '[^']*';/,
     `window.QUAD_API_BASE = ${JSON.stringify(API_BASE)};`);
+  const base = `../_v/${VERSION}`;
+  html = html.replaceAll('href="../packages/', `href="${base}/packages/`)
+             .replace('src="./src/app.js"', `src="${base}/${surface}/src/app.js"`);
+  const preload = importGraph(join(assets, surface, 'src', 'app.js'))
+    .map((f) => `<link rel="modulepreload" href="${base}/${relative(assets, f).replace(/\\/g, '/')}">`)
+    .join('\n');
+  html = html.replace('</head>', `${preload}\n</head>`);
   writeFileSync(p, html);
 }
 
@@ -101,6 +153,10 @@ writeFileSync(join(dist, 'serve.json'), JSON.stringify({
       { key: 'Referrer-Policy', value: 'no-referrer' },
       { key: 'Cache-Control', value: 'no-cache' },
     ],
+  }, {
+    /* Content-addressed: the path changes whenever the bytes do. */
+    source: '_v/**',
+    headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
   }],
 }, null, 2));
 

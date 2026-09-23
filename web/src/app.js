@@ -345,7 +345,7 @@ const BottomNav = () => {
 
 /* ===================== STUDENT: welcome + sign-in ======================= */
 function ScrWelcome() {
-  const vs = need('vendors', loadVendors);
+  const vs = needVendors();
   const open = vs?.ok ? vs.v.vendors.filter((v) => v.is_open && v.accepting).length : null;
   return `<div class="screen no-nav welcome" style="display:flex;flex-direction:column">
     <div class="poster poster-grid" style="border-radius:0;flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding:var(--s-6) var(--s-5) var(--s-7)">
@@ -539,6 +539,10 @@ function ScrObLocation() {
    is typed twice. Completion is whatever GET /me/profile says, never a flag
    this screen sets. */
 const loadVendors = () => quad.vendors({ campusId: browseCampus()?.id });
+/* Outlets are listed per campus, and which campus is only known once boot
+   has read /campuses and /auth/me. Asking before that fetched the unscoped
+   list, threw it away and asked again: one wasted round trip per visit. */
+const needVendors = () => (S.campuses === null ? null : need('vendors', loadVendors));
 const loadCampuses = () => quad.campuses().then((r) => { S.campuses = r.campuses; render(); return r; });
 
 function ScrSetup() {
@@ -615,7 +619,7 @@ const LIVE = ['confirmed', 'preparing', 'ready', 'assigned', 'picked_up'];
 function ScrHome() {
   const hour = new Date().getHours();
   const greet = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const vs = need('vendors', loadVendors);
+  const vs = needVendors();
   const os = signedIn() ? need('orders', () => quad.orders({ scope: 'own' })) : null;
   const orders = os?.ok ? os.v.orders : [];
   const active = orders.filter((o) => LIVE.includes(o.state));
@@ -721,7 +725,7 @@ function ActiveOrderCard(o) {
 
 /* ===================== STUDENT: cafés + menu ============================ */
 function ScrCafes() {
-  const vs = need('vendors', loadVendors);
+  const vs = needVendors();
   const cafs = vs?.ok ? vs.v.vendors.map(cafVM) : [];
   const open = cafs.filter((c) => c.open).length;
   const campus = browseCampus();
@@ -1089,7 +1093,7 @@ function ScrTracking() {
   if (!r) return `<div class="screen">${TopBar('Order', { back: 'orders' })}${Loading('Loading order')}</div>`;
   if (!r.ok) return `<div class="screen">${TopBar('Order', { back: 'orders' })}${Problem(r.e)}</div>`;
   const { order: o, items, events, payment, partner, myReviews = [] } = r.v;
-  const vs = need('vendors', loadVendors);
+  const vs = needVendors();
   const vendorName = vs?.ok ? (vs.v.vendors.find((v) => v.id === o.vendor_id)?.name || '') : '';
   const pickup = o.fulfilment === 'pickup';
   const stages = stagesFor(o.fulfilment);
@@ -2456,7 +2460,28 @@ document.addEventListener('keydown', (e) => {
    failing, closing the sheet, or pressing Back. None of them resolves with a
    result, because none of them knows one. What actually happened is a
    question only the server can answer, and openGateway() asks it below. */
+/* A gateway's script is fetched the first time checkout needs it, and only
+   the one the server's intent names. Nothing on the way to checkout waits
+   for a payment provider, and nobody who never pays loads one. */
+const GATEWAY_SDK = {
+  cashfree: 'https://sdk.cashfree.com/js/v3/cashfree.js',
+  razorpay: 'https://checkout.razorpay.com/v1/checkout.js',
+};
+const sdkLoads = {};
+function loadGateway(name) {
+  sdkLoads[name] ??= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = GATEWAY_SDK[name]; s.async = true;
+    s.onload = resolve;
+    s.onerror = () => { delete sdkLoads[name]; s.remove();
+      reject(new Error('Could not load the payment gateway. Check your connection and try again.')); };
+    document.head.append(s);
+  });
+  return sdkLoads[name];
+}
+
 async function openCashfree(intent) {
+  await loadGateway('cashfree');
   if (!window.Cashfree) throw new Error('Payment gateway script is not loaded on this page.');
   const cf = window.Cashfree({ mode: intent.mode === 'sandbox' ? 'sandbox' : 'production' });
   await cf.checkout({
@@ -2466,6 +2491,7 @@ async function openCashfree(intent) {
 }
 
 async function openRazorpay(intent) {
+  await loadGateway('razorpay');
   if (!window.Razorpay) throw new Error('Payment gateway script is not loaded on this page.');
   await new Promise((resolve) => {
     const rz = new window.Razorpay({
@@ -2524,6 +2550,7 @@ async function openGateway(intent, draft) {
       return;
     }
   }
+  S.campuses ??= [];
   go(!signedIn() ? 'welcome'
     : profileIncomplete() && S.me.roles?.includes('student') ? 'setup'
     /* Reloading the page does not get you past the location check: it is
