@@ -179,7 +179,7 @@ export function build() {
       /* Passkey sign-in proves possession of a registered private key. */
       /^\/auth\/passkey\/login\/(options|verify)$/,
       /^\/payments\/webhook$/,
-      /^\/vendors(\/[^/]+\/(menu|contact))?$/,      // browsing before sign-in
+      /^\/vendors(\/[^/]+\/(menu|contact|categories))?$/,   // browsing before sign-in
       /^\/menu\/search/, /^\/reviews/,
       /^\/campus\/(tree|destinations|search|resolve|boundary)/,
       /^\/ai\/status$/, /^\/campuses$/, /^\/partner\/policy$/, /^\/pricing\/current$/,
@@ -251,7 +251,11 @@ export function build() {
     /* ---------- probes ---------------------------------------------------
        health  = the process is up.
        ready   = it can actually serve: the database answers.              */
-    app.get('/health', async () => ({ ok: true, platform: PLATFORM.name }));
+    /* `commit` is the Git revision Render built this instance from (Render
+       sets RENDER_GIT_COMMIT). The repository is public, so it discloses
+       nothing, and it is how a deploy is proven live rather than assumed. */
+    const COMMIT = /^[0-9a-f]{7,40}$/.test(process.env.RENDER_GIT_COMMIT || '') ? process.env.RENDER_GIT_COMMIT : null;
+    app.get('/health', async () => ({ ok: true, platform: PLATFORM.name, commit: COMMIT }));
 
     /* ready = the database answers AND every migration shipped with this
        build has been applied. A half-migrated instance is kept out of the

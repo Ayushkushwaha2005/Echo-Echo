@@ -64,7 +64,7 @@ if (what === 'db') {
 } else if (what === 'email') {
   if (!arg) { bad('usage: ops-check.mjs email <recipient>'); process.exit(1); }
   const { NOTIFY } = await import('../src/config.js');
-  if (!NOTIFY.email.configured) bad('EMAIL_PROVIDER=resend, RESEND_API_KEY and EMAIL_FROM are required');
+  if (!NOTIFY.email.configured) bad('EMAIL_PROVIDER (resend or brevo), its API key (RESEND_API_KEY or BREVO_API_KEY) and EMAIL_FROM are required');
   else {
     const { sendEmail, budgetState } = await import('../src/services/email.js');
     try {

@@ -81,6 +81,7 @@ const get = (p) => call('GET', p);
 const post = (p, b) => call('POST', p, b);
 const patch = (p, b) => call('PATCH', p, b);
 const put = (p, b) => call('PUT', p, b);
+const del = (p) => call('DELETE', p);
 const qs = (o) => {
   const s = new URLSearchParams(Object.entries(o || {})
     .filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
@@ -170,6 +171,11 @@ export const quad = {
   createItem: (vendorId, data) => post(`/vendors/${vendorId}/menu`, data),
   updateItem: (id, patchBody) => patch(`/menu/${id}`, patchBody),
   priceHistory: (id) => get(`/menu/${id}/price-history`),
+  deleteItem: (id) => del(`/menu/${id}`),
+  categories: (vendorId) => get(`/vendors/${vendorId}/categories`),
+  createCategory: (vendorId, data) => post(`/vendors/${vendorId}/categories`, data),
+  updateCategory: (id, data) => patch(`/categories/${id}`, data),
+  deleteCategory: (id) => del(`/categories/${id}`),
 
   /* ---------- campus ----------------------------------------------------- */
   campusChildren: (parent, opts = {}) => get('/campus/destinations' + qs({ parent, ...opts })),

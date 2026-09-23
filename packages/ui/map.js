@@ -163,6 +163,69 @@ export async function drawTrackingMap(el, tracking, { self = null } = {}) {
   return map;
 }
 
+/**
+ * Campus Control's map: every campus place the server holds a position for,
+ * and every boundary outline, on OpenStreetMap.
+ *
+ * Nothing is placed that the server did not position. A place without lat/lng
+ * is counted and named below the map instead - that includes every room,
+ * because a door-plate photo records where the photographer stood in the
+ * corridor, not where the room is. Pending places are drawn hollow so a
+ * candidate cannot be mistaken for a confirmed hand-over point.
+ *
+ * @param el          the container element
+ * @param nodes       GET /campus/tree nodes
+ * @param boundaries  GET /admin/campuses/:id/boundaries (optional)
+ */
+export async function drawCampusMap(el, { nodes = [], boundaries = [] } = {}) {
+  const placed = nodes.filter((n) => Number.isFinite(Number(n.lat)) && Number.isFinite(Number(n.lng))
+    && n.lat !== null && n.lng !== null);
+  const outlines = boundaries.filter((b) => b.status !== 'retired' && b.polygon?.length >= 3);
+  if (!placed.length && !outlines.length) {
+    el.innerHTML = `<div class="map-empty"><p class="t-sm muted">No campus place has a recorded position yet,
+      and there is no boundary outline to draw.</p></div>`;
+    return null;
+  }
+  let L;
+  try {
+    L = await loadLeaflet();
+  } catch {
+    el.innerHTML = `<div class="map-empty"><p class="t-sm muted">The map could not load.
+      ${placed.length} place(s) have a recorded position; they are listed under Locations.</p></div>`;
+    return null;
+  }
+  el.innerHTML = '';
+  el.classList.add('echo-map');
+  const map = L.map(el, { zoomControl: true, attributionControl: true, scrollWheelZoom: false });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map);
+
+  const bounds = [];
+  for (const b of outlines) {
+    const active = b.status === 'active';
+    L.polygon(b.polygon, {
+      color: active ? '#2F7D5F' : '#E0567A', weight: active ? 2 : 1.5, opacity: 0.8,
+      fillOpacity: active ? 0.08 : 0.03, dashArray: active ? null : '6,5',
+    }).addTo(map).bindTooltip(`${b.name} · ${active ? 'active boundary' : `${b.status}, not in force`}`);
+    bounds.push(...b.polygon);
+  }
+  for (const n of placed) {
+    const confirmed = n.verification === 'confirmed';
+    L.circleMarker([Number(n.lat), Number(n.lng)], {
+      radius: 7, weight: 2, color: confirmed ? '#2F7D5F' : '#B45309',
+      fillColor: confirmed ? '#2F7D5F' : '#FFFFFF', fillOpacity: confirmed ? 0.85 : 0.9,
+    }).addTo(map).bindPopup(`<b>${escapeText(n.name)}</b><br>${confirmed ? 'Confirmed' : 'Pending — not deliverable'}`
+      + `${n.gps_accuracy_m ? ` · ±${escapeText(n.gps_accuracy_m)} m` : ''}`
+      + `${n.source_note ? `<br><span style="font-size:11px">${escapeText(n.source_note)}</span>` : ''}`);
+    bounds.push([Number(n.lat), Number(n.lng)]);
+  }
+  map.fitBounds(L.latLngBounds(bounds), { padding: [24, 24], maxZoom: 18 });
+  requestAnimationFrame(() => map.invalidateSize());
+  return map;
+}
+
 /** What to tell someone when there is no partner marker. */
 export const partnerVisibilityNote = (v) => ({
   no_partner_yet: 'No delivery partner has picked this up yet.',

@@ -43,11 +43,37 @@ export async function budgetState() {
   return { sentToday: r.day, sentThisMonth: r.month, dailyBudget, monthlyBudget, reserveForAdmin };
 }
 
+/* "ECHO ECHO <verify@example.com>" or a bare address. */
+export function parseSender(from) {
+  const m = String(from || '').trim().match(/^(?:"?([^"<]*?)"?\s*)?<([^<>\s]+@[^<>\s]+)>$/);
+  if (m) return { name: m[1]?.trim() || undefined, email: m[2] };
+  return { email: String(from || '').trim() };
+}
+
+/* One request shape per provider. Each returns the fetch arguments and a
+   function that pulls the provider's message id out of a success body. */
+const PROVIDERS = {
+  resend: ({ to, subject, text }) => ({
+    base: 'resendBase', path: '/emails',
+    headers: { Authorization: `Bearer ${NOTIFY.email.apiKey}`, 'Content-Type': 'application/json' },
+    body: { from: NOTIFY.email.from, to: [to], subject, text },
+    idOf: (json) => json?.id,
+  }),
+  brevo: ({ to, subject, text }) => ({
+    base: 'brevoBase', path: '/v3/smtp/email',
+    headers: { 'api-key': NOTIFY.email.apiKey, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: { sender: parseSender(NOTIFY.email.from), to: [{ email: to }], subject, textContent: text },
+    idOf: (json) => json?.messageId,
+  }),
+};
+
 export async function sendEmail({ to, subject, text, secret, kind = 'notification', log: logger = console }) {
   if (!NOTIFY.email.configured) {
     throw ProviderUnavailable('Email service not configured',
-      'Set EMAIL_PROVIDER=resend, RESEND_API_KEY and EMAIL_FROM on the server.');
+      'Set EMAIL_PROVIDER (resend or brevo), its API key and EMAIL_FROM on the server.');
   }
+  const provider = NOTIFY.email.provider;
+  const call = PROVIDERS[provider]({ to, subject, text });
   /* Administrator invitations may use the reserved headroom; nothing else can. */
   const b = await budgetState();
   const reserve = kind === 'admin_invite' ? 0 : b.reserveForAdmin;
@@ -58,10 +84,9 @@ export async function sendEmail({ to, subject, text, secret, kind = 'notificatio
   }
   let res, body;
   try {
-    res = await fetch(`${NOTIFY.email.resendBase}/emails`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${NOTIFY.email.apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: NOTIFY.email.from, to: [to], subject, text }),
+    /* The host is always server configuration (NOTIFY.email.*Base). */
+    res = await fetch(`${NOTIFY.email[call.base]}${call.path}`, {
+      method: 'POST', headers: call.headers, body: JSON.stringify(call.body),
       signal: AbortSignal.timeout(10_000),
     });
     body = await res.text();
@@ -73,16 +98,17 @@ export async function sendEmail({ to, subject, text, secret, kind = 'notificatio
   if (!res.ok) {
     const quota = res.status === 429;
     await log(kind, quota ? 'provider_quota' : 'provider_error');
-    logger.error?.(`resend ${res.status}: ${scrub(body, secret)}`);
+    logger.error?.(`${provider} ${res.status}: ${scrub(body, secret)}`);
     throw EmailUnavailable();
   }
   let json = null;
   try { json = JSON.parse(body); } catch { /* not JSON */ }
-  if (!json?.id) {
+  const id = call.idOf(json);
+  if (!id) {
     await log(kind, 'provider_error');
-    logger.error?.(`resend did not confirm the message: ${scrub(body, secret)}`);
+    logger.error?.(`${provider} did not confirm the message: ${scrub(body, secret)}`);
     throw EmailUnavailable();
   }
-  await log(kind, 'sent', json.id);
-  return json.id;
+  await log(kind, 'sent', id);
+  return id;
 }

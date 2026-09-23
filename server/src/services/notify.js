@@ -55,7 +55,7 @@ const senders = {
     const to = user.student_email || user.email;
     if (!to) return { state: 'failed', error: 'no email address on account' };
     const ref = await sendEmail({ to, subject: n.title, text: n.body || n.title });
-    return { state: 'sent', provider: 'resend', ref };
+    return { state: 'sent', provider: NOTIFY.email.provider, ref };
   },
 
   async push() { return { state: 'unsent_no_provider' }; },

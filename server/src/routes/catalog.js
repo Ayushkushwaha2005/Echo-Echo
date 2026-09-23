@@ -12,7 +12,7 @@
      never touches order_item — historical orders carry their own snapshot.
    ========================================================================== */
 import { q, one, tx } from '../db/index.js';
-import { authorize, can, BadRequest, NotFound } from '../auth/rbac.js';
+import { authorize, can, BadRequest, NotFound, HttpError } from '../auth/rbac.js';
 import { audit } from '../audit.js';
 
 /* The owning vendor of a resource is always re-read from the database.
@@ -65,7 +65,7 @@ export default async function catalogRoutes(app) {
     const { rows } = await q(
       `SELECT i.id, i.name, i.description, i.price_paise, i.veg, i.prep_minutes,
               i.tags, i.aliases, i.available, i.active, i.photo_asset,
-              c.name AS category,
+              i.category_id, c.name AS category,
               ${RATING} r.item_id = i.id AND NOT r.hidden) AS rating
          FROM menu_item i LEFT JOIN category c ON c.id = i.category_id
         WHERE i.vendor_id = $1 AND ($2::boolean OR i.active)
@@ -104,8 +104,16 @@ export default async function catalogRoutes(app) {
   });
 
   app.patch('/vendors/:id', async (req) => {
-    authorize(req.actor, 'vendor.update', { vendorId: req.params.id });
     const b = req.body || {};
+    /* Opening, closing and pausing orders is its own capability, so it can be
+       held without the right to rename the outlet or move its pickup point. */
+    const TOGGLES = ['isOpen', 'accepting'];
+    const keys = Object.keys(b).filter((k) => b[k] !== undefined);
+    if (keys.length && keys.every((k) => TOGGLES.includes(k))) {
+      authorize(req.actor, 'vendor.toggle', { vendorId: req.params.id });
+    } else {
+      authorize(req.actor, 'vendor.update', { vendorId: req.params.id });
+    }
     const map = { name: b.name, kind: b.kind, description: b.description,
                   campus_node_id: b.campusNodeId, opens_at: b.opensAt, closes_at: b.closesAt,
                   is_open: b.isOpen, accepting: b.accepting, prep_minutes: b.prepMinutes,
@@ -153,13 +161,14 @@ export default async function catalogRoutes(app) {
   app.post('/vendors/:id/menu', async (req) => {
     authorize(req.actor, 'menu.create', { vendorId: req.params.id });
     const b = req.body || {};
-    if (!b.name) throw BadRequest('Item name is required');
+    if (!String(b.name || '').trim()) throw BadRequest('Item name is required');
     const paise = toPaise(b.price);
+    await assertCategoryOf(b.categoryId, req.params.id);
     const row = await one(
       `INSERT INTO menu_item (vendor_id, category_id, name, description, price_paise,
                               veg, prep_minutes, tags, aliases, available, photo_asset)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [req.params.id, b.categoryId || null, b.name, b.description || null, paise,
+      [req.params.id, b.categoryId || null, String(b.name).trim(), b.description || null, paise,
        b.veg ?? null, b.prepMinutes || null, b.tags || [], b.aliases || [],
        b.available !== false, b.photoAsset || null]);
     await q(`INSERT INTO menu_price_history (item_id, old_paise, new_paise, changed_by)
@@ -177,9 +186,12 @@ export default async function catalogRoutes(app) {
     if (b.price !== undefined) authorize(req.actor, 'menu.price', { vendorId });
     if (b.available !== undefined) authorize(req.actor, 'menu.availability', { vendorId });
     if (b.photoAsset !== undefined) authorize(req.actor, 'menu.photo', { vendorId });
-    const other = ['name', 'description', 'veg', 'prepMinutes', 'tags', 'aliases', 'categoryId', 'active']
+    if (b.active !== undefined) authorize(req.actor, 'menu.archive', { vendorId });
+    const other = ['name', 'description', 'veg', 'prepMinutes', 'tags', 'aliases', 'categoryId']
       .some((k) => b[k] !== undefined);
     if (other) authorize(req.actor, 'menu.update', { vendorId });
+    if (b.name !== undefined && !String(b.name || '').trim()) throw BadRequest('Item name is required');
+    await assertCategoryOf(b.categoryId, vendorId);
 
     return tx(async (c) => {
       const cur = (await c.query(`SELECT * FROM menu_item WHERE id = $1 FOR UPDATE`, [req.params.id])).rows[0];
@@ -187,7 +199,8 @@ export default async function catalogRoutes(app) {
 
       const map = { name: b.name, description: b.description, veg: b.veg,
                     prep_minutes: b.prepMinutes, tags: b.tags, aliases: b.aliases,
-                    category_id: b.categoryId, available: b.available, active: b.active,
+                    category_id: b.categoryId === '' ? null : b.categoryId,
+                    available: b.available, active: b.active,
                     photo_asset: b.photoAsset };
       if (b.price !== undefined) map.price_paise = toPaise(b.price);
 
@@ -210,6 +223,91 @@ export default async function catalogRoutes(app) {
       await audit(req, { action: 'menu.update', resource: 'menu_item', resourceId: row.id, outcome: 'ok' });
       return row;
     });
+  });
+
+  /* Deleting is for a mistake: an item nobody has ever ordered. Anything that
+     appears on an order stays, because the order, its receipt and any review
+     point at it; that item is archived instead, which hides it from students
+     and keeps the history whole. The database enforces this too: order_item
+     references menu_item with no cascade. */
+  app.delete('/menu/:id', async (req) => {
+    const vendorId = await vendorOfItem(req.params.id);
+    authorize(req.actor, 'menu.archive', { vendorId });
+    return tx(async (c) => {
+      const cur = (await c.query(`SELECT id, name, photo_asset FROM menu_item WHERE id = $1 FOR UPDATE`,
+        [req.params.id])).rows[0];
+      if (!cur) throw NotFound('No such menu item');
+      const used = (await c.query(
+        `SELECT (SELECT count(*) FROM order_item WHERE item_id = $1)
+              + (SELECT count(*) FROM review WHERE item_id = $1) AS n`, [cur.id])).rows[0];
+      if (Number(used.n) > 0) {
+        throw new HttpError(409, 'item_has_orders', 'This item has been ordered, so it cannot be deleted',
+          'Archive it instead: it disappears from the menu and its order history stays intact.');
+      }
+      await c.query(`DELETE FROM menu_price_history WHERE item_id = $1`, [cur.id]);
+      await c.query(`DELETE FROM menu_item WHERE id = $1`, [cur.id]);
+      await audit(req, { action: 'menu.delete', resource: 'menu_item', resourceId: cur.id,
+                         outcome: 'ok', detail: { name: cur.name, vendor: vendorId } });
+      return { deleted: true, id: cur.id };
+    });
+  });
+
+  /* ---------- categories ------------------------------------------------------
+     A cafeteria's own sections ("Chai", "Snacks"). They belong to one outlet,
+     are named by its owner, and are never shared across outlets. */
+  app.get('/vendors/:id/categories', async (req) => {
+    if (!(await one(`SELECT 1 FROM vendor WHERE id = $1`, [req.params.id]))) throw NotFound('No such cafeteria');
+    const { rows } = await q(
+      `SELECT c.id, c.name, c.sort,
+              (SELECT count(*)::int FROM menu_item i WHERE i.category_id = c.id AND i.active) AS items
+         FROM category c WHERE c.vendor_id = $1 ORDER BY c.sort, c.name`, [req.params.id]);
+    return { categories: rows };
+  });
+
+  app.post('/vendors/:id/categories', async (req) => {
+    authorize(req.actor, 'menu.update', { vendorId: req.params.id });
+    const name = categoryName(req.body?.name);
+    if (!(await one(`SELECT 1 FROM vendor WHERE id = $1`, [req.params.id]))) throw NotFound('No such cafeteria');
+    if (await one(`SELECT 1 FROM category WHERE vendor_id = $1 AND lower(name) = lower($2)`, [req.params.id, name])) {
+      throw BadRequest('This cafeteria already has a category with that name');
+    }
+    const sort = Number.isInteger(req.body?.sort) ? req.body.sort
+      : (await one(`SELECT coalesce(max(sort), -1) + 1 AS n FROM category WHERE vendor_id = $1`, [req.params.id])).n;
+    const row = await one(`INSERT INTO category (vendor_id, name, sort) VALUES ($1,$2,$3) RETURNING *`,
+      [req.params.id, name, sort]);
+    await audit(req, { action: 'menu.category.create', resource: 'category', resourceId: row.id,
+                       outcome: 'ok', detail: { name, vendor: req.params.id } });
+    return row;
+  });
+
+  app.patch('/categories/:id', async (req) => {
+    const cat = await categoryById(req.params.id);
+    authorize(req.actor, 'menu.update', { vendorId: cat.vendor_id });
+    const b = req.body || {};
+    const name = b.name !== undefined ? categoryName(b.name) : cat.name;
+    if (await one(
+      `SELECT 1 FROM category WHERE vendor_id = $1 AND lower(name) = lower($2) AND id <> $3`,
+      [cat.vendor_id, name, cat.id])) {
+      throw BadRequest('This cafeteria already has a category with that name');
+    }
+    const sort = Number.isInteger(b.sort) ? b.sort : cat.sort;
+    const row = await one(`UPDATE category SET name = $1, sort = $2 WHERE id = $3 RETURNING *`, [name, sort, cat.id]);
+    await audit(req, { action: 'menu.category.update', resource: 'category', resourceId: cat.id, outcome: 'ok' });
+    return row;
+  });
+
+  /* Removing a category never removes food: its items become uncategorised. */
+  app.delete('/categories/:id', async (req) => {
+    const cat = await categoryById(req.params.id);
+    authorize(req.actor, 'menu.update', { vendorId: cat.vendor_id });
+    const moved = await tx(async (c) => {
+      const r = await c.query(`UPDATE menu_item SET category_id = NULL WHERE category_id = $1`, [cat.id]);
+      await c.query(`DELETE FROM category WHERE id = $1`, [cat.id]);
+      return r.rowCount;
+    });
+    await audit(req, { action: 'menu.category.delete', resource: 'category', resourceId: cat.id,
+                       outcome: 'ok', detail: { name: cat.name, itemsUncategorised: moved } });
+    return { deleted: true, itemsUncategorised: moved };
   });
 
   app.get('/menu/:id/price-history', async (req) => {
@@ -242,6 +340,31 @@ export default async function catalogRoutes(app) {
         LIMIT 40`, [term, `%${term}%`, maxPaise]);
     return { items: rows.map(shapeRating) };
   });
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function categoryById(id) {
+  const cat = UUID.test(String(id)) ? await one(`SELECT * FROM category WHERE id = $1`, [id]) : null;
+  if (!cat) throw NotFound('No such category');
+  return cat;
+}
+
+/* A category named on an item must belong to that item's own cafeteria.
+   Without this, an owner could file their dish under another outlet's
+   category id: a cross-tenant write that the FK alone would allow. */
+async function assertCategoryOf(categoryId, vendorId) {
+  if (categoryId === undefined || categoryId === null || categoryId === '') return;
+  const ok = UUID.test(String(categoryId))
+    && await one(`SELECT 1 FROM category WHERE id = $1 AND vendor_id = $2`, [categoryId, vendorId]);
+  if (!ok) throw BadRequest("Choose one of this cafeteria's own categories");
+}
+
+function categoryName(v) {
+  const name = String(v ?? '').trim().replace(/\s+/g, ' ');
+  if (!name) throw BadRequest('Category name is required');
+  if (name.length > 40) throw BadRequest('Keep the category name under 40 characters');
+  return name;
 }
 
 /* ₹ to paise, via integers only — no float ever holds money. */

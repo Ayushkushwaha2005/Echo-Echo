@@ -71,6 +71,7 @@ export function client(app, token) {
     post: (u, p) => call('POST', u, p),
     patch: (u, p) => call('PATCH', u, p),
     put: (u, p) => call('PUT', u, p),
+    del: (u) => call('DELETE', u),
     /* For the CSRF test: same session, different origin. */
     postFrom: async (origin, u, p) => {
       const res = await app.inject({ method: 'POST', url: u, payload: p,

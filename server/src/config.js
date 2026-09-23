@@ -319,17 +319,24 @@ export const ROSTER = {
    Nothing here fakes delivery: see services/notify.js.                    */
 export const NOTIFY = {
   email: {
-    provider: env('EMAIL_PROVIDER', null),        // 'resend' | null
-    apiKey: env('RESEND_API_KEY'),
+    /* 'resend' needs a DNS-verified domain before it will deliver to anyone
+       but its own account holder. 'brevo' delivers to any recipient from a
+       single verified sender address, so it works without owning a domain. */
+    provider: env('EMAIL_PROVIDER', null),        // 'resend' | 'brevo' | null
+    apiKey: env('EMAIL_PROVIDER') === 'brevo' ? env('BREVO_API_KEY') : env('RESEND_API_KEY'),
     from: env('EMAIL_FROM'),
     /* Overridable for an egress proxy and for a local stub in tests, like
        the SMS and payment base URLs. Production refuses non-https. */
     resendBase: env('RESEND_BASE_URL', 'https://api.resend.com'),
-    /* Stay below the Resend Free quota (100/day, 3,000/month). */
-    dailyBudget: Number(env('EMAIL_DAILY_BUDGET', 95)),
-    monthlyBudget: Number(env('EMAIL_MONTHLY_BUDGET', 2900)),
+    brevoBase: env('BREVO_BASE_URL', 'https://api.brevo.com'),
+    /* Stay below the provider's free quota: Resend Free is 100/day and
+       3,000/month; Brevo Free is 300/day with no separate monthly cap. */
+    dailyBudget: Number(env('EMAIL_DAILY_BUDGET', env('EMAIL_PROVIDER') === 'brevo' ? 290 : 95)),
+    monthlyBudget: Number(env('EMAIL_MONTHLY_BUDGET', env('EMAIL_PROVIDER') === 'brevo' ? 8700 : 2900)),
     reserveForAdmin: Number(env('EMAIL_ADMIN_RESERVE', 5)),
-    get configured() { return this.provider === 'resend' && !!(this.apiKey && this.from); },
+    get configured() {
+      return ['resend', 'brevo'].includes(this.provider) && !!(this.apiKey && this.from);
+    },
   },
 };
 
@@ -527,6 +534,7 @@ export function assertBootable() {
                                  ['RAZORPAYX_BASE_URL', PAYOUTS.apiBase],
                                  ['CASHFREE_PAYOUT_BASE_URL', PAYOUTS.cashfreeBase],
                                  ['RESEND_BASE_URL', NOTIFY.email.resendBase],
+                                 ['BREVO_BASE_URL', NOTIFY.email.brevoBase],
                                  ...(STORAGE.s3.endpoint ? [['S3_ENDPOINT', STORAGE.s3.endpoint]] : [])]) {
       if (!/^https:\/\//.test(value)) {
         fatal.push(`${name} must be an https URL in production (got "${value}").`);

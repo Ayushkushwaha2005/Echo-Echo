@@ -445,7 +445,7 @@ async function scrCafeterias() {
             </div>
             <div class="row" style="gap:8px">
               <span class="badge ${raw.active ? (v.open ? 'badge-open' : 'badge-closed') : 'badge-warn'}">
-                ${raw.active ? (v.open ? 'Open' : 'Closed') : 'Archived'}</span>
+                ${!raw.active ? 'Archived' : v.open ? 'Open' : raw.is_open ? 'Orders paused' : 'Closed'}</span>
             </div>
           </div>
           <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
@@ -455,6 +455,8 @@ async function scrCafeterias() {
             <button class="btn btn-secondary btn-sm" data-act="assignStaff" data-id="${v.id}">Add staff</button>
             <button class="btn btn-ghost btn-sm" data-act="toggleOpen" data-id="${v.id}" data-v="${v.open ? '0' : '1'}">
               ${v.open ? 'Close' : 'Open'}</button>
+            ${raw.is_open ? `<button class="btn btn-ghost btn-sm" data-act="toggleAccepting" data-id="${v.id}"
+              data-v="${raw.accepting ? '0' : '1'}">${raw.accepting ? 'Pause new orders' : 'Resume new orders'}</button>` : ''}
             <button class="btn btn-ghost btn-sm" data-act="archiveVendor" data-id="${v.id}" data-v="${raw.active ? '0' : '1'}">
               ${raw.active ? 'Archive' : 'Restore'}</button>
           </div>
@@ -475,6 +477,7 @@ async function scrMenu() {
     <select class="input" data-act="pickVendor" style="max-width:220px">
       ${vs.map((v) => `<option value="${v.id}" ${v.id === S.vendorId ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}
     </select>
+    <button class="btn btn-secondary btn-sm" data-act="categories">Categories</button>
     <button class="btn btn-primary btn-sm" data-act="newItem">Add food</button>`;
   await paintMenu();
 }
@@ -501,6 +504,7 @@ async function paintMenu() {
             ${i.available ? 'Mark out' : 'Mark in'}</button>
           <button class="btn btn-ghost btn-sm" data-act="itemArchive" data-id="${i.id}" data-v="${i.active ? '0' : '1'}">
             ${i.active ? 'Archive' : 'Restore'}</button>
+          <button class="btn btn-ghost btn-sm" data-act="itemDelete" data-id="${i.id}" data-name="${esc(i.name)}">Delete</button>
         </div>
       </div>`).join('')}</div>`;
   }, { label: 'Loading menu' });
@@ -893,16 +897,18 @@ async function scrLocations() {
   head().innerHTML = `<button class="btn btn-primary btn-sm" data-act="newLocation">Add location</button>
     <button class="btn btn-secondary btn-sm" data-act="importPoints">Import GPS points</button>
     <button class="btn btn-ghost btn-sm" data-act="showDistances">Distances</button>`;
-  await panel(view(), async () => {
+  const loaded = await panel(view(), async () => {
     const campuses = (await quad.adminCampuses()).campuses;
     S.locCampus = S.locCampus && campuses.some((c) => c.id === S.locCampus) ? S.locCampus
       : (campuses.find((c) => c.available) || campuses[0])?.id;
-    return {
-      campuses,
-      nodes: (await quad.campusChildren(null, { campusId: S.locCampus })).nodes,
-      zones: (await quad.campusZones(S.locCampus)).zones,
-      boundaries: S.locCampus ? (await quad.boundaries(S.locCampus)).boundaries : [],
-    };
+    /* Independent reads, so they go out together rather than one after another. */
+    const [nodes, zones, boundaries, tree] = await Promise.all([
+      quad.campusChildren(null, { campusId: S.locCampus }).then((r) => r.nodes),
+      quad.campusZones(S.locCampus).then((r) => r.zones),
+      S.locCampus ? quad.boundaries(S.locCampus).then((r) => r.boundaries) : [],
+      S.locCampus ? quad.campusTree(S.locCampus).then((r) => r.nodes) : [],
+    ]);
+    return { campuses, nodes, zones, boundaries, tree };
   }, (d) => {
     const current = d.campuses.find((c) => c.id === S.locCampus);
     const active = d.boundaries.find((b) => b.status === 'active');
@@ -950,6 +956,22 @@ async function scrLocations() {
     </section>
 
     <section class="card card-pad" style="margin-top:18px">
+      <h2 class="t-label">Campus map · ${esc(current?.name || '')}</h2>
+      <p class="t-xs faint" style="margin:4px 0 10px">
+        Solid green: confirmed. Hollow amber: pending candidate, not deliverable.
+        Boundary outlines: solid when active, dashed while only proposed.</p>
+      <div id="campus-map"><div class="map-empty"><p class="t-sm muted">Loading the map…</p></div></div>
+      ${(() => {
+        const unplaced = d.tree.filter((n) => n.lat === null || n.lng === null);
+        return unplaced.length ? `<details style="margin-top:10px"><summary class="t-xs">
+            ${unplaced.length} place(s) have no recorded position and are not drawn</summary>
+          <p class="t-xs faint" style="margin:6px 0">Rooms are never positioned from a door-plate photo:
+            that reading is where the photographer stood in the corridor.</p>
+          <p class="t-xs">${unplaced.map((n) => esc(n.name)).join(' · ')}</p></details>` : '';
+      })()}
+    </section>
+
+    <section class="card card-pad" style="margin-top:18px">
       <h2 class="t-label">Delivery zones</h2>
       ${d.zones.length ? table(['Zone', 'Delivery points', 'Active deliveries', 'Delivery', ''],
         d.zones.map((z) => [
@@ -969,6 +991,11 @@ async function scrLocations() {
         : `<p class="t-sm muted">No locations on ${esc(current?.name || 'this campus')} yet. Add zones and buildings from verified information only.</p>`}
     </section>`;
   }, { label: 'Loading campus' });
+  const mapEl = document.getElementById('campus-map');
+  if (loaded && mapEl) {
+    const { drawCampusMap } = await import('../../packages/ui/map.js');
+    await drawCampusMap(mapEl, { nodes: loaded.tree, boundaries: loaded.boundaries });
+  }
 }
 
 /* A to-scale outline of a boundary, so a transposed point or a stray digit
@@ -1180,6 +1207,13 @@ const field = (name, label, value = '', type = 'text') => `
 const check = (name, label, on) => `
   <label class="row" style="gap:8px"><input type="checkbox" name="${name}" ${on ? 'checked' : ''}>
   <span class="t-sm">${esc(label)}</span></label>`;
+/* A cafeteria's own sections, from the server; an item may have none. */
+const categorySelect = (cats, current) => `
+  <label class="field"><span class="t-label">Category</span>
+    <select class="input" name="categoryId">
+      <option value="">Uncategorised</option>
+      ${cats.map((c) => `<option value="${c.id}" ${c.id === current ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+    </select></label>`;
 
 /* ========================================================================
    ACTIONS
@@ -1434,6 +1468,9 @@ const ACTIONS = {
   toggleOpen: (t) => act(t, () => quad.updateVendor(t.dataset.id,
     { isOpen: t.dataset.v === '1', accepting: t.dataset.v === '1' }), { after: route }),
 
+  toggleAccepting: (t) => act(t, () => quad.updateVendor(t.dataset.id, { accepting: t.dataset.v === '1' }),
+    { after: route }),
+
   archiveVendor: (t) => act(t, () => quad.updateVendor(t.dataset.id, { active: t.dataset.v === '1' }),
     { after: route }),
 
@@ -1453,9 +1490,11 @@ const ACTIONS = {
   /* ---- menu ---- */
   pickVendor: (t) => { S.vendorId = t.value; paintMenu(); },
 
-  newItem: () => modal('Add food', `
+  newItem: async () => modal('Add food', `
     ${field('name', 'Name')}${field('description', 'Description')}
     <div class="formrow">${field('price', 'Price (₹)')}${field('prepMinutes', 'Prep minutes', '', 'number')}</div>
+    ${categorySelect((await quad.categories(S.vendorId)).categories)}
+    ${check('available', 'Available to order now', true)}
     ${field('tags', 'Tags (comma separated)')}
     ${field('aliases', 'AI aliases (comma separated)')}
     ${check('veg', 'Vegetarian', true)}
@@ -1467,16 +1506,19 @@ const ACTIONS = {
       return quad.createItem(S.vendorId, {
         name: d.name, description: d.description, price: d.price,
         prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
+        categoryId: d.categoryId || null, available: !!d.available,
         tags: splitList(d.tags), aliases: splitList(d.aliases),
       });
     }),
 
   editItem: async (t) => {
-    const i = (await quad.menu(S.vendorId)).items.find((x) => x.id === t.dataset.id);
+    const [menu, cats] = await Promise.all([quad.menu(S.vendorId), quad.categories(S.vendorId)]);
+    const i = menu.items.find((x) => x.id === t.dataset.id);
     modal(`Edit ${i.name}`, `
       ${field('name', 'Name', i.name)}${field('description', 'Description', i.description)}
       <div class="formrow">${field('price', 'Price (₹)', (i.price_paise / 100).toFixed(2))}
       ${field('prepMinutes', 'Prep minutes', i.prep_minutes, 'number')}</div>
+      ${categorySelect(cats.categories, i.category_id)}
       ${field('tags', 'Tags', (i.tags || []).join(', '))}
       ${field('aliases', 'AI aliases', (i.aliases || []).join(', '))}
       ${check('veg', 'Vegetarian', i.veg)}
@@ -1491,6 +1533,7 @@ const ACTIONS = {
         return quad.updateItem(i.id, {
           name: d.name, description: d.description, price: d.price,
           prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
+          categoryId: d.categoryId || null,
           tags: splitList(d.tags), aliases: splitList(d.aliases),
         });
       });
@@ -1500,6 +1543,32 @@ const ACTIONS = {
     { after: paintMenu }),
   itemArchive: (t) => act(t, () => quad.updateItem(t.dataset.id, { active: t.dataset.v === '1' }),
     { after: paintMenu }),
+  /* The server deletes only an item nobody has ordered and says why otherwise. */
+  itemDelete: (t) => modal(`Delete ${t.dataset.name}?`, `
+      <p class="t-sm muted">This removes the item for good. If anyone has ever ordered it,
+      the server refuses and it should be archived instead.</p>`,
+    () => quad.deleteItem(t.dataset.id)),
+
+  categories: async () => {
+    const { categories } = await quad.categories(S.vendorId);
+    modal('Categories', `
+      ${categories.length ? `<div class="stack">${categories.map((c) => `
+        <div class="between">
+          <span class="t-sm">${esc(c.name)} <span class="t-xs faint">· ${c.items} item${c.items === 1 ? '' : 's'}</span></span>
+          <span class="row" style="gap:6px">
+            <button type="button" class="btn btn-ghost btn-sm" data-act="renameCategory" data-id="${c.id}" data-name="${esc(c.name)}">Rename</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-act="removeCategory" data-id="${c.id}" data-name="${esc(c.name)}">Remove</button>
+          </span>
+        </div>`).join('')}</div>` : '<p class="t-sm muted">No categories yet.</p>'}
+      ${field('name', 'New category')}
+      <p class="t-xs faint">Removing a category keeps its food; those items become uncategorised.</p>`,
+      (d) => (String(d.name || '').trim() ? quad.createCategory(S.vendorId, { name: d.name }) : true));
+  },
+  renameCategory: (t) => modal('Rename category', field('name', 'Name', t.dataset.name),
+    (d) => quad.updateCategory(t.dataset.id, { name: d.name })),
+  removeCategory: (t) => modal(`Remove ${t.dataset.name}?`,
+    `<p class="t-sm muted">Its items stay on the menu, uncategorised.</p>`,
+    () => quad.deleteCategory(t.dataset.id)),
 
   /* ---- users ---- */
   searchUsers: () => paintUsers(document.getElementById('user-q').value.trim()),

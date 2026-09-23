@@ -296,7 +296,8 @@ async function scrMenu() {
     ? 'Add food, set prices, control availability.'
     : 'You can mark items in and out of stock. Prices are set by the owner.');
   head().innerHTML = S.canPrice
-    ? `<button class="btn btn-primary btn-sm" data-act="newItem">Add food</button>` : '';
+    ? `<button class="btn btn-secondary btn-sm" data-act="categories">Categories</button>
+       <button class="btn btn-primary btn-sm" data-act="newItem">Add food</button>` : '';
   await paintMenu();
 }
 
@@ -318,6 +319,7 @@ async function paintMenu() {
             <b>${esc(i.name)}</b>
           </div>
           <div class="t-xs faint">
+            ${esc(i.category || 'Uncategorised')} ·
             ${i.rating ? `★ ${i.rating.average} (${i.rating.count})` : 'No ratings yet'}
             ${i.prep_minutes ? ` · ${i.prep_minutes} min` : ''}
           </div>
@@ -330,7 +332,10 @@ async function paintMenu() {
             ${i.available ? 'In stock' : 'Out of stock'}</button>
           ${S.canPrice ? `
             <button class="btn btn-secondary btn-sm" data-act="editItem" data-id="${i.id}">Edit</button>
-            <button class="btn btn-ghost btn-sm" data-act="priceLog" data-id="${i.id}">Price log</button>` : ''}
+            <button class="btn btn-ghost btn-sm" data-act="priceLog" data-id="${i.id}">Price log</button>
+            <button class="btn btn-ghost btn-sm" data-act="itemArchive" data-id="${i.id}" data-v="${i.active ? '0' : '1'}">
+              ${i.active ? 'Archive' : 'Restore'}</button>
+            <button class="btn btn-ghost btn-sm" data-act="itemDelete" data-id="${i.id}" data-name="${esc(i.name)}">Delete</button>` : ''}
         </div>
       </div>`).join('')}
       ${!S.canPrice ? `<p class="t-xs faint" style="margin-top:12px">
@@ -358,10 +363,25 @@ async function scrOutlet() {
               : `★ ${v.ratingText.text} from ${v.ratingText.count} rating${v.ratingText.count === 1 ? '' : 's'}`}</p>
           </div></div>
         <div class="row" style="gap:8px;margin-top:14px">
-          <span class="badge ${v.open ? 'badge-open' : 'badge-closed'}">${v.open ? 'Open' : 'Closed'}</span>
+          <span class="badge ${v.open ? 'badge-open' : 'badge-closed'}">${v.open ? 'Taking orders' : 'Not taking orders'}</span>
           <span class="badge ${raw.delivery_enabled ? 'badge-open' : 'badge-closed'}">
             ${raw.delivery_enabled ? 'Delivers' : 'Pickup only'}</span>
         </div>
+        ${S.canPrice ? `
+          <div class="stack" style="gap:8px;margin-top:14px">
+            <div class="between">
+              <span class="t-sm">Outlet is ${raw.is_open ? '<b>open</b>' : '<b>closed</b>'} today</span>
+              <button class="btn btn-secondary btn-sm" data-act="setFlag" data-k="isOpen" data-v="${raw.is_open ? '0' : '1'}">
+                ${raw.is_open ? 'Close outlet' : 'Open outlet'}</button>
+            </div>
+            <div class="between">
+              <span class="t-sm">New orders are ${raw.accepting ? '<b>accepted</b>' : '<b>paused</b>'}</span>
+              <button class="btn btn-secondary btn-sm" data-act="setFlag" data-k="accepting" data-v="${raw.accepting ? '0' : '1'}">
+                ${raw.accepting ? 'Pause new orders' : 'Resume new orders'}</button>
+            </div>
+            <p class="t-xs faint">Students can order only while the outlet is open AND accepting.
+              Pausing keeps the outlet listed as open while the kitchen catches up.</p>
+          </div>` : ''}
         ${S.canPrice ? `
           <button class="btn btn-secondary btn-sm" style="margin-top:14px" data-act="editOutlet">
             Edit outlet details</button>` : ''}
@@ -429,6 +449,15 @@ const check = (name, label, on) => `
   <label class="row" style="gap:8px"><input type="checkbox" name="${name}" ${on ? 'checked' : ''}>
   <span class="t-sm">${esc(label)}</span></label>`;
 const splitList = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
+/* The owner's own sections, from the server. An empty choice is allowed:
+   an item does not need a category to be sold. */
+const categorySelect = (cats, current) => `
+  <label class="field"><span class="t-label">Category</span>
+    <select class="input" name="categoryId">
+      <option value="">Uncategorised</option>
+      ${cats.map((c) => `<option value="${c.id}" ${c.id === current ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+    </select></label>
+  ${cats.length ? '' : '<p class="t-xs faint">No categories yet. Add them from Categories on the Menu page.</p>'}`;
 
 const ACTIONS = {
   theme: () => toggleTheme(),
@@ -487,9 +516,11 @@ const ACTIONS = {
   avail: (t) => act(t, () => quad.updateItem(t.dataset.id, { available: t.dataset.v === '1' }),
     { after: paintMenu }),
 
-  newItem: () => modal('Add food', `
+  newItem: async () => modal('Add food', `
     ${field('name', 'Name')}${field('description', 'Description')}
     <div class="formrow">${field('price', 'Price (₹)')}${field('prepMinutes', 'Prep minutes', '', 'number')}</div>
+    ${categorySelect((await quad.categories(S.vendorId)).categories)}
+    ${check('available', 'Available to order now', true)}
     ${field('tags', 'Tags (comma separated)')}
     ${field('aliases', 'What students might call it (comma separated)')}
     ${check('veg', 'Vegetarian', true)}
@@ -504,16 +535,20 @@ const ACTIONS = {
       return quad.createItem(S.vendorId, {
         name: d.name, description: d.description, price: d.price,
         prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
+        categoryId: d.categoryId || null, available: !!d.available,
         tags: splitList(d.tags), aliases: splitList(d.aliases),
       });
     }),
 
   editItem: async (t) => {
-    const i = (await quad.menu(S.vendorId)).items.find((x) => x.id === t.dataset.id);
+    const [menu, cats] = await Promise.all([quad.menu(S.vendorId), quad.categories(S.vendorId)]);
+    const i = menu.items.find((x) => x.id === t.dataset.id);
+    const current = i.category_id;
     modal(`Edit ${i.name}`, `
       ${field('name', 'Name', i.name)}${field('description', 'Description', i.description)}
       <div class="formrow">${field('price', 'Price (₹)', (i.price_paise / 100).toFixed(2))}
       ${field('prepMinutes', 'Prep minutes', i.prep_minutes, 'number')}</div>
+      ${categorySelect(cats.categories, current)}
       ${field('tags', 'Tags', (i.tags || []).join(', '))}
       ${field('aliases', 'Aliases', (i.aliases || []).join(', '))}
       ${check('veg', 'Vegetarian', i.veg)}
@@ -529,10 +564,49 @@ const ACTIONS = {
         return quad.updateItem(i.id, {
           name: d.name, description: d.description, price: d.price,
           prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
+          categoryId: d.categoryId || null,
           tags: splitList(d.tags), aliases: splitList(d.aliases),
         });
       });
   },
+
+  itemArchive: (t) => act(t, () => quad.updateItem(t.dataset.id, { active: t.dataset.v === '1' }),
+    { after: paintMenu }),
+
+  /* Only an item nobody has ordered can be deleted; the server refuses the
+     rest with a message saying to archive instead, which act() shows. */
+  itemDelete: (t) => modal(`Delete ${t.dataset.name}?`, `
+      <p class="t-sm muted">This removes the item for good. If anyone has ever ordered it,
+      the server refuses and you can archive it instead.</p>`,
+    () => quad.deleteItem(t.dataset.id)),
+
+  setFlag: (t) => act(t, async () => {
+    await quad.updateVendor(S.vendorId, { [t.dataset.k]: t.dataset.v === '1' });
+    const vendors = (await quad.vendors()).vendors;
+    S.vendor = vendors.find((v) => v.id === S.vendorId);
+    render(vendors);
+  }),
+
+  categories: async () => {
+    const { categories } = await quad.categories(S.vendorId);
+    modal('Categories', `
+      ${categories.length ? `<div class="stack">${categories.map((c) => `
+        <div class="between">
+          <span class="t-sm">${esc(c.name)} <span class="t-xs faint">· ${c.items} item${c.items === 1 ? '' : 's'}</span></span>
+          <span class="row" style="gap:6px">
+            <button type="button" class="btn btn-ghost btn-sm" data-act="renameCategory" data-id="${c.id}" data-name="${esc(c.name)}">Rename</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-act="removeCategory" data-id="${c.id}" data-name="${esc(c.name)}">Remove</button>
+          </span>
+        </div>`).join('')}</div>` : '<p class="t-sm muted">No categories yet.</p>'}
+      ${field('name', 'New category')}
+      <p class="t-xs faint">Removing a category keeps its food; those items become uncategorised.</p>`,
+      (d) => (String(d.name || '').trim() ? quad.createCategory(S.vendorId, { name: d.name }) : true));
+  },
+  renameCategory: (t) => modal('Rename category', field('name', 'Name', t.dataset.name),
+    (d) => quad.updateCategory(t.dataset.id, { name: d.name })),
+  removeCategory: (t) => modal(`Remove ${t.dataset.name}?`,
+    `<p class="t-sm muted">Its items stay on the menu, uncategorised.</p>`,
+    () => quad.deleteCategory(t.dataset.id)),
 
   priceLog: async (t) => {
     const h = await quad.priceHistory(t.dataset.id);
