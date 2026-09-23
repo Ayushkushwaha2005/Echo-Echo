@@ -1,0 +1,27 @@
+# ===========================================================================
+# ECHO ECHO — keep the free Render instance from sleeping.
+#
+# Render's free plan stops an instance after 15 minutes with no inbound
+# traffic; the next visitor then waits for a cold start (measured at ~13 s).
+# This asks /health every 10 minutes. /health does not touch the database,
+# so it keeps the API process warm WITHOUT keeping Neon's compute awake.
+#
+# Honest limits: GitHub runs scheduled jobs late under load (sometimes by
+# more than 15 minutes), so this reduces cold starts, it does not remove
+# them. One free service running all month is ~744 h, inside Render's 750 h.
+# The dependable fix is a paid instance, which is a spending decision.
+# ===========================================================================
+name: keep-warm
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  ping:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: GET /health through the production site
+        run: curl -fsS -m 90 -o /dev/null -w 'health %{http_code} in %{time_total}s\n' https://echo-echo-nu.vercel.app/api/health/

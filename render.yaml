@@ -26,7 +26,10 @@ services:
     # /health is liveness only and does NOT touch the database, so Render's
     # probe cannot keep the free Neon compute awake and burn its CU quota.
     healthCheckPath: /health
-    autoDeployTrigger: commit
+    # Deploys come from .github/workflows/deploy.yml, which runs only after CI
+    # passes and then proves the new commit is live. Render's own trigger is
+    # off so a push is never deployed twice, once of them untested.
+    autoDeployTrigger: "off"
     envVars:
       - key: NODE_ENV
         value: production
@@ -90,6 +93,12 @@ services:
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM
+        sync: false
+      # Brevo delivers to any recipient from ONE verified sender address, with
+      # no domain to own. To switch: add BREVO_API_KEY, set EMAIL_FROM to the
+      # sender verified in Brevo, THEN set EMAIL_PROVIDER=brevo. In that order:
+      # production refuses to boot without a working student sign-in provider.
+      - key: BREVO_API_KEY
         sync: false
 
       # ---- private object storage (Backblaze B2, S3-compatible) ------------

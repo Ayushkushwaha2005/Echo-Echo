@@ -1,0 +1,113 @@
+# ===========================================================================
+# ECHO ECHO — deploy the API to Render, after CI passes on main.
+#
+#   push to main → ci (build + full test suite) → THIS → Render deploy of
+#   that exact commit → wait until Render reports it live → prove it: the
+#   /health endpoint, reached through the production Vercel rewrite, must
+#   report the same commit → the live checks run against production.
+#
+# Only a commit that passed CI can reach production, which is why this is
+# triggered by the ci workflow finishing rather than by the push itself, and
+# why render.yaml sets autoDeployTrigger: off (so a push is not deployed
+# twice, once of them untested).
+#
+# RENDER_API_KEY is a repository secret (Settings → Secrets and variables →
+# Actions). It is only ever passed as an HTTP header by curl; it is never
+# echoed, and GitHub masks it in logs. With it missing this job FAILS
+# with that message, rather than skipping and looking green.
+# ===========================================================================
+name: deploy
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  SERVICE_NAME: echo-echo-api
+  SITE: https://echo-echo-nu.vercel.app
+
+jobs:
+  render:
+    # A manual run deploys the head of main; an automatic one only follows a
+    # green CI run of a push to main (never a pull request).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Which commit
+        id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy that commit to Render and wait until it is live
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RENDER_API_KEY:-}" ]; then
+            echo "::error::The RENDER_API_KEY repository secret is not set. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          api() { curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" -H 'Accept: application/json' "$@"; }
+
+          SERVICE_ID=$(api "https://api.render.com/v1/services?name=${SERVICE_NAME}&limit=20" \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s).map(r=>r.service).find(v=>v&&v.name===process.env.SERVICE_NAME);if(!x){process.exit(2)}process.stdout.write(x.id)})') \
+            || { echo "::error::No Render service named ${SERVICE_NAME} is visible to this API key."; exit 1; }
+          echo "service ${SERVICE_ID}"
+
+          DEPLOY_ID=$(api -X POST -H 'Content-Type: application/json' \
+            -d "{\"commitId\":\"${SHA}\",\"clearCache\":\"do_not_clear\"}" \
+            "https://api.render.com/v1/services/${SERVICE_ID}/deploys" \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).id))')
+          echo "deploy ${DEPLOY_ID} of ${SHA}"
+
+          # A Docker build on the free plan takes a few minutes. Poll the
+          # deploy's own status; anything terminal other than live fails.
+          for i in $(seq 1 100); do
+            STATUS=$(api "https://api.render.com/v1/services/${SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).status))')
+            echo "  ${STATUS}"
+            case "$STATUS" in
+              live) exit 0 ;;
+              build_failed|update_failed|canceled|deactivated|pre_deploy_failed)
+                echo "::error::Render deploy ${DEPLOY_ID} ended as ${STATUS}"; exit 1 ;;
+            esac
+            sleep 15
+          done
+          echo "::error::Render deploy ${DEPLOY_ID} did not go live within 25 minutes"; exit 1
+
+      # Render saying "live" is its claim; this is the evidence. The commit is
+      # read back from the running process, through the same Vercel rewrite
+      # a student's browser uses.
+      - name: The new commit is what production is running
+        env:
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 20); do
+            LIVE=$(curl -fsS -L "${SITE}/api/health/" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).commit)))' || true)
+            echo "  production reports ${LIVE}"
+            [ "$LIVE" = "$SHA" ] && { echo "✓ ${SHA} is live"; exit 0; }
+            sleep 15
+          done
+          echo "::error::production does not report ${SHA}"; exit 1
+
+      - name: Live checks against production (through the Vercel rewrite)
+        run: node tools/live-check.mjs "${SITE}/api"

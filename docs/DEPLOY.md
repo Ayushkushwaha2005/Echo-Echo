@@ -342,7 +342,58 @@ Two consequences of the rewrite worth keeping in mind:
 delivers to the account holder's own mailbox until a domain is DNS-verified,
 so `POST /auth/email/send` for an `@stu.upes.ac.in` address returns 503 and
 the log records Resend's refusal. The server, the code path and the budget
-ledger are all correct and verified; the domain is the only missing piece.
+ledger are all correct and verified.
+
+**The domain-free alternative is Brevo** (`EMAIL_PROVIDER=brevo`, added 23
+September 2026). Brevo Free sends 300 emails/day to any recipient from one
+sender address verified by a confirmation link, so no domain is required.
+The adapter is tested end to end against a stub (`test/email-brevo.test.mjs`)
+but has not sent a real message: that needs a Brevo account, which is the
+owner's to create. To switch, in this order (production refuses to boot
+without a working sign-in provider, so the order matters):
+
+1. Create a free Brevo account; under **Senders**, add and verify the sender
+   address. Create an API key (SMTP & API → API keys).
+2. Render → `echo-echo-api` → Environment: set `BREVO_API_KEY`, and set
+   `EMAIL_FROM` to `ECHO ECHO <that verified address>`.
+3. Change `EMAIL_PROVIDER` from `resend` to `brevo`. Save; Render redeploys.
+4. Request a code for a real `@stu.upes.ac.in` mailbox on the site and check
+   the inbox **and Junk**. Mail from an unauthenticated sender domain may be
+   quarantined by the university's Microsoft 365 tenant; if it is, only a
+   domain of your own (with SPF/DKIM) fixes that.
+
+### Deploying the API
+
+`.github/workflows/deploy.yml` deploys the API. It runs when the `ci`
+workflow succeeds on a push to `main`, asks Render (with the
+`RENDER_API_KEY` repository secret) to deploy **that commit**, waits for
+Render to report it live, then reads `commit` back from `/api/health/`
+through the production Vercel rewrite and runs `tools/live-check.mjs`
+against production. Render's own trigger is off (`autoDeployTrigger: "off"`
+in `render.yaml`) so a push is never deployed before its tests pass.
+
+`.github/workflows/keep-warm.yml` asks `/health` every 10 minutes so the free
+instance sleeps less often. It does not touch the database. GitHub runs
+scheduled jobs late under load, so it reduces cold starts but cannot remove
+them.
+
+### Load time
+
+Measure with `node tools/perf-check.mjs https://echo-echo-nu.vercel.app/`
+(real headless Chrome; first visit and returning visit reported separately,
+and API time reported separately from static-site time).
+
+- Every script and stylesheet is served from `/_v/<content hash>/` with
+  `Cache-Control: public, max-age=31536000, immutable`; only the three HTML
+  pages are `no-cache`. A returning visitor re-downloads only the page.
+- Each page declares its static module graph with `modulepreload`.
+- The payment gateway SDKs are loaded at checkout, not in every page head
+  (they used to hold the app until both had downloaded).
+- The web-font stylesheet no longer blocks the first paint.
+- **Render cold start is separate and is not a frontend problem.** After 15
+  idle minutes the first API request waits for the free instance to boot
+  (~13 s measured on 23 Sep 2026). The page shell renders without waiting for
+  it; data-driven parts show their loading state until the API answers.
 
 ### The API base, and why it is `same-origin`
 
@@ -399,8 +450,14 @@ Research and sources: [CAMPUS-UPES-BIDHOLI.md](CAMPUS-UPES-BIDHOLI.md).
   (Energy Block, Infirmary) from OpenStreetMap. Nothing is deliverable until
   confirmed on the ground (Locations → Confirm location), and a delivery point
   without a recorded position is refused.
-- Production starts with **no cafeterias**. Create Chai Garam, Frisco and
-  Tulips in Campus Control and set each pickup point once measured on site.
+- Café Frisco and Tulips Cafe exist in production, with no menu: menus are
+  entered by their owners in Counter (or by an administrator in Campus
+  Control → Menu), including categories, availability, archive and photos.
+- **Chai Garam is not in production.** The only photograph of a possible
+  outlet shows a sign reading "CH…" with the rest hidden, re-checked on 23
+  Sep 2026 (the "VALLO" board beside it is an advertisement). When the
+  shopkeeper or an administrator confirms the outlet, add it from Campus
+  Control → Cafeterias → Add cafeteria. Do not invent its hours or phone.
 
 ## 9. Payment gateway — later
 
