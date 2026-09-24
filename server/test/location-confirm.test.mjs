@@ -39,7 +39,7 @@ beforeEach(async () => {
     `INSERT INTO campus_boundary (id, name, polygon, active, status, source, campus_site_id, verified_at)
      VALUES ($1, 'UPES Bidholi (proposed from OpenStreetMap)', $2, true, 'active', 'openstreetmap:way/321638232', $3, now())`,
     [PLAN.boundaryId, JSON.stringify(OSM), cid]);
-  for (const l of PLAN.locations) {
+  for (const l of PLAN.locations.filter((x) => x.id)) {
     await pool.query(
       `INSERT INTO campus_node (id, campus_site_id, kind, name, deliverable, delivery_enabled, lat, lng, source, verification)
        VALUES ($1, $2, $3, $4, false, false, $5, $6, 'survey', 'pending')`,
@@ -58,10 +58,13 @@ const openCount = async () => (await pool.query(
   `SELECT count(*)::int n FROM campus_node WHERE deliverable AND delivery_enabled AND verification = 'confirmed'`)).rows[0].n;
 
 test('the plan decides every production location, and opens only building-level evidence', () => {
-  assert.equal(PLAN.locations.length, 17);
+  assert.equal(PLAN.locations.filter((l) => l.id).length, 17, 'every production location is decided');
+  assert.equal(byName('MAC').decision, 'pending');
+  assert.equal(byName('MAC').lat, null);
   const open = PLAN.locations.filter((l) => l.decision === 'deliver').map((l) => l.name).sort();
-  assert.deepEqual(open, ['Career Services / Placement Block', 'Energy Block', 'Enrollment Office',
+  assert.deepEqual(open, ['Career Services / Placement Block', 'Enrollment Office',
                           'Management Development Centre', 'The Huddle']);
+  assert.equal(byName('Energy Block').decision, 'pending', 'removed at the owner\'s direction (migration 023)');
   for (const l of PLAN.locations) {
     if (l.decision === 'deliver') { assert.ok(l.lat != null && l.evidence && l.confirmation.length >= 10, l.name); }
     else assert.ok(l.reason, l.name);
@@ -79,26 +82,26 @@ test('the default run is read-only', async () => {
   assert.equal(await openCount(), 0);
 });
 
-test('applying it opens exactly five destinations, and delivery with them', async () => {
+test('applying it opens exactly four destinations, and delivery with them', async () => {
   const stu = client(app, await sessionFor(pool, (await makeUser(pool, { phone: '+919700000091', name: 'Test Student' })).id));
   assert.equal((await stu.get('/campus/destinations')).body.deliveryAvailable, false);
 
   const out = script('--apply');
   assert.equal(out.status, 0, out.stderr);
-  assert.match(out.stdout, /5 location\(s\) confirmed and opened/);
+  assert.match(out.stdout, /4 location\(s\) confirmed and opened/);
 
   const s = await states();
-  for (const n of ['Enrollment Office', 'The Huddle', 'Career Services / Placement Block', 'Management Development Centre', 'Energy Block']) {
+  for (const n of ['Enrollment Office', 'The Huddle', 'Career Services / Placement Block', 'Management Development Centre']) {
     assert.equal(s[n].verification, 'confirmed', n);
     assert.equal(s[n].deliverable && s[n].delivery_enabled, true, n);
     assert.equal(s[n].verified_by, owner.id, n);
     assert.equal(s[n].verification_method, byName(n).method, n);
   }
-  for (const l of PLAN.locations.filter((x) => x.decision === 'pending')) {
+  for (const l of PLAN.locations.filter((x) => x.decision === 'pending' && x.id)) {
     assert.equal(s[l.name].verification, 'pending', l.name);
     assert.equal(s[l.name].deliverable, false, l.name);
   }
-  assert.equal((await pool.query(`SELECT count(*)::int n FROM audit_log WHERE action = 'campus.location.confirm'`)).rows[0].n, 5);
+  assert.equal((await pool.query(`SELECT count(*)::int n FROM audit_log WHERE action = 'campus.location.confirm'`)).rows[0].n, 4);
 
   const d = await stu.get('/campus/destinations');
   assert.equal(d.body.deliveryAvailable, true);

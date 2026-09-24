@@ -9,6 +9,7 @@ import { authorize, BadRequest, NotFound, Forbidden, Conflict } from '../auth/rb
 import { audit } from '../audit.js';
 import { assertRecentPasskey } from '../auth/passkey-policy.js';
 import { campuses, profileOf, validateName, validateMobile, shapeCampus } from '../services/profile.js';
+import { blocksFor, addressOf, saveAddress } from '../services/address.js';
 
 export default async function profileRoutes(app) {
   /* Public: the sign-up flow shows this before the student has chosen. */
@@ -54,6 +55,33 @@ export default async function profileRoutes(app) {
     await audit(req, { action: 'profile.update', resource: 'user', resourceId: req.actor.id, outcome: 'ok',
                        detail: { fields: Object.keys(b).filter((k) => ['name', 'contactPhone', 'campusId'].includes(k)) } });
     return profileOf(req.actor.id);
+  });
+
+  /* ---------- the saved campus address --------------------------------------
+     Always on the student's own campus, read from their profile row - a
+     request cannot name another campus. Describes a place; never locates one. */
+  const myCampus = async (req) => {
+    if (!req.actor) throw Forbidden('Sign in required');
+    const u = await one(`SELECT campus_site_id FROM app_user WHERE id = $1`, [req.actor.id]);
+    if (!u?.campus_site_id) throw BadRequest('Choose your campus first', 'Set your campus in your profile.');
+    return u.campus_site_id;
+  };
+  app.get('/campus/blocks', async (req) => ({ blocks: await blocksFor(await myCampus(req)) }));
+  app.get('/me/address', async (req) => {
+    if (!req.actor) throw Forbidden('Sign in required');
+    return { address: await addressOf(req.actor.id) };
+  });
+  app.put('/me/address', async (req) => {
+    const campusId = await myCampus(req);
+    const address = await saveAddress(req.actor.id, campusId, req.body || {});
+    await audit(req, { action: 'address.save', resource: 'user', resourceId: req.actor.id, outcome: 'ok' });
+    return { address };
+  });
+  app.delete('/me/address', async (req) => {
+    if (!req.actor) throw Forbidden('Sign in required');
+    await q(`DELETE FROM student_address WHERE user_id = $1`, [req.actor.id]);
+    await audit(req, { action: 'address.delete', resource: 'user', resourceId: req.actor.id, outcome: 'ok' });
+    return { address: null };
   });
 
   /* ---------- administration --------------------------------------------- */

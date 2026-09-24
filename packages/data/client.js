@@ -185,6 +185,16 @@ export const quad = {
   activateBoundary: (id, confirmation) => post(`/admin/boundaries/${id}/activate`, { confirmation }),
   retireBoundary: (id) => post(`/admin/boundaries/${id}/retire`),
   campusSearch: (q) => get('/campus/search' + qs({ q })),
+  /* The campus map the student picks on: the active outline and the
+     destinations they may choose. A tapped point is sent to the server,
+     which alone decides whether it is on campus and what is near it. */
+  campusMap: () => get('/campus/map'),
+  campusPin: (lat, lng) => post('/campus/pin', { lat, lng }),
+  /* The saved campus address: how the student describes their door. */
+  campusBlocks: () => get('/campus/blocks'),
+  myAddress: () => get('/me/address'),
+  saveAddress: (a) => put('/me/address', a),
+  deleteAddress: () => del('/me/address'),
   campusResolve: (text) => post('/campus/resolve', { text }),
   /* Real browser geolocation. The coordinate is only ever a claim; the
      server decides whether it is inside campus and what it is near. */

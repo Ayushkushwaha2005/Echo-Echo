@@ -12,7 +12,8 @@
 import { randomInt, createHash, randomBytes } from 'node:crypto';
 import { q, one, tx } from '../db/index.js';
 import { authorize, can, assertMayOrder, BadRequest, NotFound, Forbidden, Conflict } from '../auth/rbac.js';
-import { assertDeliverable, pathOf } from '../services/campus.js';
+import { assertDeliverable, assertPin, pathOf } from '../services/campus.js';
+import { normaliseAddress } from '../services/address.js';
 import { validateMobile } from '../services/profile.js';
 import { flag } from '../services/flags.js';
 import { audit } from '../audit.js';
@@ -66,7 +67,7 @@ const sha = (s) => createHash('sha256').update(s).digest('hex');
    Shared by the checkout route and the AI's create_order_draft tool, so both
    get identical, server-computed numbers.                                  */
 export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, destinationId,
-                                      contactPhone, landmark, instructions, placedVia }) {
+                                      contactPhone, landmark, instructions, address, pin, placedVia }) {
   if (!Array.isArray(lines) || !lines.length) throw BadRequest('Your order is empty');
 
   /* ---- the delivery contact number -----------------------------------
@@ -133,6 +134,9 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
       detail: node.detail || null,
       instructions: node.instructions || null,
       lat: node.lat, lng: node.lng,
+      /* A spot tapped on the campus map, re-checked here: inside the active
+         outline and near this destination. Never trusted from the client. */
+      pin: pin ? await assertPin(pin, node) : null,
       frozenAt: new Date().toISOString(),
     };
   } else if (fulfilment !== 'pickup') {
@@ -146,8 +150,18 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
     const t = String(v2 ?? '').trim().replace(/\s+/g, ' ');
     return t ? t.slice(0, max) : null;
   };
-  const landmarkText = fulfilment === 'delivery' ? clean(landmark, 120) : null;
-  const instructionsText = fulfilment === 'delivery' ? clean(instructions, 300) : null;
+  /* The student's block / floor / room, as they describe it. Validated for
+     shape only and frozen onto the order: it tells the partner which door,
+     and proves nothing about where the order may go - that was decided by
+     destination_id above. Editing the saved address later cannot reach it. */
+  const described = fulfilment === 'delivery' && address
+    ? await normaliseAddress(address, v.campus_site_id) : null;
+  const landmarkText = fulfilment === 'delivery' ? clean(landmark ?? described?.landmark, 120) : null;
+  const instructionsText = fulfilment === 'delivery' ? clean(instructions ?? described?.instructions, 300) : null;
+  const addressSnapshot = described ? {
+    campus: campus.name, block: described.block, floor: described.floor, room: described.room,
+    landmark: landmarkText, instructions: instructionsText, frozenAt: new Date().toISOString(),
+  } : null;
 
   let subtotal = 0;
   const priced = [];
@@ -181,13 +195,14 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
     `INSERT INTO food_order (code, customer_id, vendor_id, fulfilment, destination_id,
                              state, subtotal_paise, delivery_paise, total_paise, placed_via,
                              delivery_contact_phone, delivery_landmark, delivery_instructions,
-                             destination_snapshot)
-     VALUES ($1,$2,$3,$4,$5,'draft',$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+                             destination_snapshot, delivery_address)
+     VALUES ($1,$2,$3,$4,$5,'draft',$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
     [randomBytes(4).toString('hex').toUpperCase(), customerId, vendorId, fulfilment,
      fulfilment === 'delivery' ? destinationId : null,
      subtotal, money.delivery_fee_paise, money.customer_total_paise, placedVia || 'web',
      phone, landmarkText, instructionsText,
-     snapshot ? JSON.stringify(snapshot) : null])).rows[0];
+     snapshot ? JSON.stringify(snapshot) : null,
+     addressSnapshot ? JSON.stringify(addressSnapshot) : null])).rows[0];
 
   /* Remember it for next time, so the number is typed once rather than at
      every checkout. Still not an identity: nothing signs in with it. */
@@ -221,6 +236,7 @@ export default async function orderRoutes(app) {
       customerId: req.actor.id, vendorId: b.vendorId, lines: b.lines,
       fulfilment: b.fulfilment, destinationId: b.destinationId,
       contactPhone: b.contactPhone, landmark: b.landmark, instructions: b.instructions,
+      address: b.address, pin: b.pin,
       placedVia: 'web',
     }));
     await audit(req, { action: 'order.draft', resource: 'order', resourceId: draft.id, outcome: 'ok' });

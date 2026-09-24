@@ -225,3 +225,23 @@ Hostel gate (hand-over policy at hostel gates not established); Café Frisco
 and Tulips Cafe (pickup counters, not destinations; counter not recorded);
 the 8 room plates (corridor readings, no room coordinate). Chai Garam and
 the Boys Hostel are not created.
+
+## 10. Owner corrections and the campus address (migration 023)
+
+Applied to production on 25 Sep 2026, after a read-only inspection (0 orders,
+Frisco with 0 menu items):
+
+- **Energy Block** is no longer a student destination (delivery off; position
+  and confirmation kept). **MAC** exists as a *pending* place with **no
+  position**: nothing in the evidence places it, and nothing shows it is the
+  Energy Block coordinate. Students can now choose **4** destinations.
+- **Café Frisco** is retired (`active = false`), not renamed: the "CHA…" sign
+  is a different storefront ~48 m west. **Chai Garam** is a new outlet with
+  **no position** — the sign is not legible — so it gets no map pin or walking
+  estimate until its counter is recorded.
+- **Room plates** stay as evidence and are never offered: a student's room is
+  part of their saved address (block / floor / room / landmark /
+  instructions), which describes the door and is never geographic proof.
+- Address blocks offered: 1, 2, 3, 4, 8, 9, 11 — the numbers the photographs
+  establish (plates, or caption place names). None is linked to a building
+  yet; "My block is not listed" lets a student type theirs.

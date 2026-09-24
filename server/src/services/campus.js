@@ -194,6 +194,59 @@ export async function enableDelivery(c, id) {
     `UPDATE campus_node SET deliverable = true, delivery_enabled = true WHERE id = $1 RETURNING *`, [id])).rows[0];
 }
 
+/* ---------- what a student may choose ------------------------------------
+   Exactly the places assertDeliverable would accept: active, deliverable,
+   delivery on, confirmed, positioned, inside the active outline. Pending
+   candidates, room plates and switched-off places are not offered at all -
+   a list that shows them greyed out is a list of places nobody can pick. */
+const ELIGIBLE = `active AND deliverable AND delivery_enabled AND verification <> 'pending'
+                  AND lat IS NOT NULL AND lng IS NOT NULL`;
+
+export async function eligibleDestinations(campusId, b = undefined) {
+  const outline = b === undefined ? await boundary(campusId) : b;
+  if (!outline) return [];
+  const { rows } = await q(
+    `SELECT id, parent_id, kind, name, detail, instructions, lat, lng FROM campus_node
+      WHERE campus_site_id = $1 AND ${ELIGIBLE} ORDER BY sort, name`, [campusId]);
+  return rows.filter((n) => pointInPolygon(Number(n.lat), Number(n.lng), outline.polygon));
+}
+
+/* A point the student chose by tapping the map. It is a CLAIM, checked here
+   exactly like a GPS fix except that a tap has no accuracy to weigh: it
+   must be inside the active outline, and it is only ever used to suggest
+   the confirmed destinations near it. Anything the client says about the
+   point ("inside", a distance, a building) is ignored. */
+export const PIN_RADIUS_M = 150;
+
+export async function resolvePin(lat, lng, { campusId }) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw BadRequest('Invalid coordinates');
+  const b = await boundary(campusId);
+  if (!b) return { inside: false, reason: 'no_boundary_configured', candidates: [] };
+  if (!pointInPolygon(lat, lng, b.polygon)) return { inside: false, reason: 'outside_campus', candidates: [] };
+  const candidates = (await eligibleDestinations(campusId, b))
+    .map((n) => ({ id: n.id, name: n.name, metres: Math.round(metresBetween([lat, lng], [Number(n.lat), Number(n.lng)])) }))
+    .filter((c) => c.metres <= PIN_RADIUS_M)
+    .sort((x, y) => x.metres - y.metres);
+  return { inside: true, boundaryName: b.name, candidates,
+           note: candidates.length ? null : 'No delivery point is close to that spot yet. Choose one from the list.' };
+}
+
+/* The pin on an order: inside the outline, and near the destination it came
+   with, so a pin cannot describe a different place from the one the order
+   is actually going to. */
+export async function assertPin(pin, node) {
+  const lat = typeof pin?.lat === 'number' ? pin.lat : NaN;
+  const lng = typeof pin?.lng === 'number' ? pin.lng : NaN;
+  const out = await resolvePin(lat, lng, { campusId: node.campus_site_id });
+  if (!out.inside) {
+    throw Forbidden('That spot is not on campus', 'Choose a spot inside the campus outline on the map.');
+  }
+  if (!out.candidates.some((c) => c.id === node.id)) {
+    throw BadRequest(`Your map pin is not near ${node.name}`, 'Choose the delivery point closest to your pin.');
+  }
+  return { lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)), source: 'map' };
+}
+
 /* Whether delivery can actually happen on a campus: a confirmed outline AND
    at least one point that would pass assertDeliverable. A boundary alone
    delivers nowhere, and saying otherwise sends students to a list of
@@ -384,10 +437,13 @@ export async function resolveFix(lat, lng, { accuracy, campusId = null } = {}) {
       }
     }
   }
+  /* Only what a student may actually choose. */
+  const eligible = new Set((await eligibleDestinations(b.campus_site_id, b)).map((n) => n.id));
+  const offered = candidates.filter((c) => eligible.has(c.id));
   return {
     inside: true, boundaryName: b.name, accuracy: accuracy ?? null,
-    candidates: candidates.slice(0, 6),
-    note: candidates.length ? null : 'You are inside campus but not near a configured delivery point.',
+    candidates: offered.slice(0, 6),
+    note: offered.length ? null : 'You are inside campus but not near a configured delivery point.',
   };
 }
 

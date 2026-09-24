@@ -410,7 +410,8 @@ test('distance and time are an honest range from recorded points only', async ()
   assert.ok(e.metres >= 250 && e.metres <= 300, `about 270 m straight line, got ${e.metres}`);
   assert.match(e.label, /^Approx\. \d+–\d+ min$/);
   assert.ok(e.maxMinutes > e.minMinutes);
-  assert.equal(r.body.nodes.find((n) => n.id === unsurveyed.id).estimate, null, 'no position, no estimate');
+  assert.equal(r.body.nodes.find((n) => n.id === unsurveyed.id), undefined,
+    'a place with no position cannot be delivered to, so a student is not offered it');
   assert.ok(!('lat' in r.body.nodes[0]), 'coordinates are not sent to students');
 });
 

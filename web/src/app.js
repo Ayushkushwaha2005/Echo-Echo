@@ -56,7 +56,10 @@ const S = {
   auth: { local: '', email: '', college: '', campusId: '', resendAfter: 0, error: '' },
   /* Checkout inputs that are not part of the cart: the delivery contact
      number and the two free-text refinements to the campus address. */
-  checkout: { phone: '', landmark: '', instructions: '' },
+  checkout: { phone: '', blockId: '', blockText: '', floor: '', room: '', landmark: '', instructions: '', addrLoaded: false },
+  addr: null,             // the Saved address screen's form, loaded from /me/address
+  campusMap: null,        // /campus/map - the outline and the destinations a student may choose
+  pick: null,             // the last map tap the server answered: { pin, candidates }
   pricing: null,          // /pricing/current - what the fees are right now
   verify: {},             // mailbox-link flow on the verify screen
   campuses: null,         // /campuses
@@ -913,8 +916,118 @@ const Bill = () => {
   </div>`;
 };
 
+/* ===================== the campus address ==============================
+   How the student describes their door. It is text they typed and proves
+   nothing about where they are: the delivery spot (a confirmed campus place)
+   and the on-campus check decide that, on the server. The block list is the
+   campus's known blocks; a block that is not listed can be typed. */
+const OTHER_BLOCK = '__other';
+const addrFromSaved = (a) => ({
+  blockId: a?.blockListed ? a.blockId : a?.block ? OTHER_BLOCK : '',
+  blockText: a?.blockListed ? '' : (a?.block || ''),
+  floor: a?.floor || '', room: a?.room || '', landmark: a?.landmark || '', instructions: a?.instructions || '',
+});
+const addrPayload = (st) => ({
+  blockId: st.blockId && st.blockId !== OTHER_BLOCK ? st.blockId : undefined,
+  blockText: st.blockId === OTHER_BLOCK ? (st.blockText || undefined) : undefined,
+  floor: st.floor || undefined, room: st.room || undefined,
+  landmark: st.landmark || undefined, instructions: st.instructions || undefined,
+});
+const hasAddr = (st) => Object.values(addrPayload(st)).some(Boolean);
+const addrLine = (a) => [a?.block, a?.floor && `Floor ${a.floor}`, a?.room && `Room ${a.room}`].filter(Boolean).join(' · ');
+const savedAddrLine = () => {
+  const r = need('addr', () => quad.myAddress());
+  return r?.ok && r.v.address ? addrLine(r.v.address) : '';
+};
+/* The form's values as a readable address, block id resolved to its label. */
+const addrView = (st) => ({
+  block: st.blockId === OTHER_BLOCK ? st.blockText
+    : (need('blocks', () => quad.campusBlocks())?.v?.blocks || []).find((x) => x.id === st.blockId)?.label,
+  floor: st.floor, room: st.room,
+});
+
+function AddressFields(st, key) {
+  const b = need('blocks', () => quad.campusBlocks());
+  const blocks = b?.ok ? b.v.blocks : [];
+  const attr = (name) => `data-${key}="${name}"`;
+  const id = (name) => `${key}-${name}`;
+  return `
+    <div class="field">
+      <label class="t-label" for="${id('block')}">Block</label>
+      <select class="input" id="${id('block')}" ${attr('blockId')}>
+        <option value="" ${!st.blockId ? 'selected' : ''}>Choose your block</option>
+        ${blocks.map((x) => `<option value="${x.id}" ${st.blockId === x.id ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}
+        <option value="${OTHER_BLOCK}" ${st.blockId === OTHER_BLOCK ? 'selected' : ''}>My block is not listed</option>
+      </select>
+    </div>
+    ${st.blockId === OTHER_BLOCK ? `<div class="field">
+      <label class="t-label" for="${id('blockText')}">Your block or building</label>
+      <input class="input" id="${id('blockText')}" ${attr('blockText')} maxlength="40" placeholder="As it is written on the building" value="${esc(st.blockText || '')}">
+    </div>` : ''}
+    <div class="segrow">
+      <div class="field">
+        <label class="t-label" for="${id('floor')}">Floor</label>
+        <input class="input" id="${id('floor')}" ${attr('floor')} maxlength="20" placeholder="2" value="${esc(st.floor || '')}">
+      </div>
+      <div class="field">
+        <label class="t-label" for="${id('room')}">Room</label>
+        <input class="input" id="${id('room')}" ${attr('room')} maxlength="20" placeholder="17" value="${esc(st.room || '')}">
+      </div>
+    </div>
+    <div class="field">
+      <label class="t-label" for="${id('landmark')}">Landmark <span class="faint">(optional)</span></label>
+      <input class="input" id="${id('landmark')}" ${attr('landmark')} maxlength="120" placeholder="Next to the stationery shop" value="${esc(st.landmark || '')}">
+    </div>
+    <div class="field">
+      <label class="t-label" for="${id('instructions')}">Notes for the delivery partner <span class="faint">(optional)</span></label>
+      <input class="input" id="${id('instructions')}" ${attr('instructions')} maxlength="300" placeholder="Call when you reach the building" value="${esc(st.instructions || '')}">
+    </div>
+    <p class="t-xs faint">Your room number helps your partner find the door. It is not used to check where you are.</p>`;
+}
+
+/* Account → Saved address. */
+function ScrAddress() {
+  const top = TopBar('Saved address', { back: 'profile' });
+  const r = need('addr', () => quad.myAddress());
+  if (!r) return `<div class="screen">${top}${Loading('Loading your address')}</div>`;
+  if (!r.ok) return `<div class="screen">${top}${Problem(r.e)}</div>`;
+  if (!S.addr) S.addr = addrFromSaved(r.v.address);
+  const saved = r.v.address;
+  const campusName = S.me?.profile?.campus?.name || saved?.campus || 'Your campus';
+  return `<div class="screen">
+    ${top}
+    <div class="pad site-split enter">
+    <div class="stack g4">
+      <div class="card card-pad stack g3">
+        ${Label('Campus')}
+        <div class="t-h3">${esc(campusName)}</div>
+        <p class="t-xs muted">Your address is always on your own campus. Change campus from your profile.</p>
+      </div>
+      <div class="card card-pad stack g3">
+        ${Label('How to find you')}
+        ${AddressFields(S.addr, 'addr')}
+      </div>
+      <div class="stack g2">
+        <button class="btn btn-primary btn-lg btn-block" data-act="saveAddress" ${hasAddr(S.addr) ? '' : 'disabled'}>Save address</button>
+        ${saved ? '<button class="btn btn-ghost btn-block" data-act="deleteAddress">Remove saved address</button>' : ''}
+      </div>
+    </div>
+    <aside class="stack g4">
+      <div class="campusnote">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">
+        Where your food goes is always a delivery point you choose on the campus map or list. This address only tells your partner which door.</p></div>
+    </aside>
+    </div>
+  </div>`;
+}
+
 function ScrCheckout() {
   if (!S.cart.length) return ScrCart();
+  /* Prefill the address once from the saved one; after that it is the
+     student's to edit for this order without touching what is saved. */
+  if (!S.checkout.addrLoaded && signedIn()) {
+    const a = need('addr', () => quad.myAddress());
+    if (a?.ok) S.checkout = { ...S.checkout, ...addrFromSaved(a.v.address), addrLoaded: true };
+  }
   const vendorName = S.cart[0].vendorName;
   const payReady = S.providers?.payments?.configured;
   const needsDest = S.fulfilment === 'delivery' && !S.destination;
@@ -937,18 +1050,11 @@ function ScrCheckout() {
           ${S.destination ? `
             <div class="stack g1">
               <div class="t-h3">${esc(S.destination.name)}</div>
-              ${S.destination.path ? `<div class="t-xs muted">${esc(S.destination.path)}</div>` : ''}
+              <div class="t-xs muted">${esc([S.me?.profile?.campus?.name, S.destination.path, S.destination.pin ? 'pinned on the map' : ''].filter(Boolean).join(' · '))}</div>
             </div>` : `<p class="t-sm muted">Choose a campus spot above.</p>`}
-          <div class="field">
-            <label class="t-label" for="co-landmark">Landmark <span class="faint">(optional)</span></label>
-            <input class="input" id="co-landmark" data-co="landmark" maxlength="120"
-                   placeholder="Next to the stationery shop" value="${esc(S.checkout.landmark || '')}">
-          </div>
-          <div class="field">
-            <label class="t-label" for="co-notes">Notes for the delivery partner <span class="faint">(optional)</span></label>
-            <input class="input" id="co-notes" data-co="instructions" maxlength="300"
-                   placeholder="Call when you reach the gate" value="${esc(S.checkout.instructions || '')}">
-          </div>
+          ${AddressFields(S.checkout, 'co')}
+          <button class="btn btn-ghost btn-sm" data-act="saveAddrFromCheckout" style="align-self:flex-start"
+                  ${hasAddr(S.checkout) ? '' : 'disabled'}>Save as my address</button>
         </div>` : ''}
 
       <div class="card card-pad stack g3">
@@ -1022,6 +1128,7 @@ function DeliveryBrief(o) {
         <div class="t-label">Take it to</div>
         <div class="t-h3">${esc(addr?.name || t?.v?.destination?.name || 'Loading…')}</div>
         ${addr?.label ? `<div class="t-xs muted">${esc(addr.label)}</div>` : ''}
+        ${addrLine(o.delivery_address) ? `<div class="t-sm" style="font-weight:700">${esc(addrLine(o.delivery_address))}</div>` : ''}
         ${o.delivery_landmark ? `<div class="t-xs">Landmark: ${esc(o.delivery_landmark)}</div>` : ''}
         ${o.delivery_instructions ? `<div class="t-xs">Note: ${esc(o.delivery_instructions)}</div>` : ''}
       </div>
@@ -1065,7 +1172,40 @@ function shareWhileCarrying(orderId) {
    a slot that has already been drawn for the same order is left alone, so
    re-rendering for an unrelated reason does not restart the map. */
 const drawnMaps = new WeakSet();
+
+/* The delivery picker. Each tap goes to the server; what comes back (a
+   refusal, or the confirmed destinations near the pin) is shown in place
+   without redrawing the map. */
+async function paintPicker() {
+  const slot = document.querySelector('.echo-picker-slot');
+  if (!slot || drawnMaps.has(slot)) return;
+  drawnMaps.add(slot);
+  try {
+    if (!S.campusMap) S.campusMap = await quad.campusMap();
+    const { drawPickerMap } = await import('../../packages/ui/map.js');
+    await drawPickerMap(slot, S.campusMap, {
+      chosenPin: S.pick?.pin || S.destination?.pin || null,
+      selectedId: S.destination?.id || null,
+      onTap: async (lat, lng) => {
+        const box = document.getElementById('pin-results');
+        const pin = { lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)) };
+        try {
+          const out = await quad.campusPin(pin.lat, pin.lng);
+          S.pick = { pin, candidates: out.candidates, note: out.note };
+        } catch (e) {
+          S.pick = { pin, candidates: [], error: explain(e) };
+        }
+        if (box) box.innerHTML = PinResults();
+      },
+    });
+  } catch (e) {
+    drawnMaps.delete(slot);
+    slot.innerHTML = `<div class="map-empty"><p class="t-sm muted">${esc(explain(e))}</p></div>`;
+  }
+}
+
 async function paintMaps() {
+  paintPicker();
   for (const slot of document.querySelectorAll('.echo-map-slot')) {
     if (drawnMaps.has(slot)) continue;
     drawnMaps.add(slot);
@@ -1295,6 +1435,7 @@ function ScrProfile() {
     [I.shield, 'Student verification', vTitle, ['approved', 'suspended'].includes(u.studentStatus) ? '' : 'data-act="go" data-route="verify"'],
     [I.pin, 'Campus', me.profile?.campus ? `${me.profile.campus.name}${me.profile.campus.available ? '' : ' · service coming soon'}` : 'Not selected', 'data-act="go" data-route="setup"'],
     [I.user, 'Name and contact number', [me.profile?.name, prettyPhone(me.profile?.contactPhone)].filter(Boolean).join(' · ') || 'Not added yet', 'data-act="go" data-route="setup"'],
+    [I.pin, 'Saved address', savedAddrLine() || 'Block, floor and room for deliveries', 'data-act="go" data-route="address"'],
     [I.receipt, 'Order history', 'Everything you have ordered', 'data-act="go" data-route="orders"'],
     [I.bike, `Deliver with ${BRAND}`, partnerSub,
       p?.status === 'approved' ? 'data-act="go" data-route="partner"' : 'data-act="go" data-route="join"'],
@@ -1793,6 +1934,20 @@ const INCIDENT_BY_ROLE = {
              ['damaged', 'The order was damaged'], ['spilled', 'Food spilled during delivery']],
 };
 
+/* What the server said about the last spot tapped on the map. */
+function PinResults() {
+  const p = S.pick;
+  if (!p) return '';
+  if (p.error) return `<div class="campusnote" role="alert">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)">${esc(p.error)}</p></div>`;
+  if (!p.candidates?.length) return `<p class="t-xs muted">${esc(p.note || 'No delivery point is close to that spot yet. Choose one from the list.')}</p>`;
+  return `<p class="t-xs faint">Delivery points near your pin:</p>` + p.candidates.map((c) => `
+    <button class="tile row g3" data-act="setDest" data-id="${c.id}" data-name="${esc(c.name)}"
+            data-pin-lat="${p.pin.lat}" data-pin-lng="${p.pin.lng}" style="width:100%;text-align:left"
+            ${S.destination?.id === c.id ? 'aria-pressed="true"' : ''}>
+      ${placeGlyph()}<div class="grow"><div class="t-sm" style="font-weight:700">${esc(c.name)}</div>
+      <div class="t-xs muted">~${c.metres} m from your pin</div></div></button>`).join('');
+}
+
 function Sheet() {
   if (!S.sheet) return '';
   const n = S.sheet.name;
@@ -1808,8 +1963,24 @@ function Sheet() {
       <div class="sheet-body stack g4">
         <div class="stack g1">
           <h2 class="t-display" style="font-size:1.7rem">Where should<br>we bring it?</h2>
-          <p class="t-sm muted">${parent ? esc(S.sheet.parentName || '') : 'Somewhere on campus. Pick the building, then the floor or room.'}</p>
+          <p class="t-sm muted">${parent ? esc(S.sheet.parentName || '') : 'Pick a delivery point on the map or from the list. Your block and room go in your address.'}</p>
         </div>
+        ${!deliveryOff ? `<div class="segrow">
+          <button class="btn btn-secondary btn-sm" data-act="useGps">${I.pin} Use my live location</button>
+          <button class="btn ${S.sheet.mode === 'map' ? 'btn-primary' : 'btn-secondary'} btn-sm" data-act="pickOnMap">Select on map</button>
+        </div>
+        <div id="gps-results" class="stack g2"></div>
+        ${S.sheet.mode === 'map' ? `<div class="stack g2">
+          <div class="echo-map picker echo-picker-slot" role="application" aria-label="Campus map. Tap where you are."></div>
+          <p class="t-xs faint">Tap where you are on campus. We check the spot and show the delivery points near it.</p>
+          <div id="pin-results" class="stack g2">${PinResults()}</div>
+        </div>` : ''}
+        ${S.destination ? `<div class="card card-pad stack g1">
+          ${Label('Selected location')}
+          <div class="t-h3">${esc(S.destination.name)}</div>
+          <div class="t-xs muted">${esc([S.me?.profile?.campus?.name, S.destination.pin ? 'Pinned on the map' : ''].filter(Boolean).join(' · '))}</div>
+          ${addrLine(addrView(S.checkout)) ? `<div class="t-xs">${esc(addrLine(addrView(S.checkout)))}</div>` : ''}
+        </div>` : ''}` : ''}
         ${parent ? `<button class="btn btn-ghost btn-sm" data-act="sheetUp" style="align-self:flex-start;padding-inline:0">${I.back} All areas</button>` : ''}
         ${deliveryOff ? `<div class="campusnote">${Ico(I.clock, 18)}<div class="stack g1">
             <div class="t-h3">Campus delivery is not available yet</div>
@@ -1827,8 +1998,6 @@ function Sheet() {
               ${l.estimate && !off ? `<span class="t-xs" style="font-weight:700;color:var(--accent-text)" title="Estimated from the distance between the counter and this spot. Not live tracking.">${esc(l.estimate.label)} walk</span>` : ''}</button>`;
           }).join('')}
         </div>` : '<p class="t-sm muted">No delivery spots here yet.</p>'}
-        <button class="btn btn-secondary btn-sm" data-act="useGps" style="align-self:flex-start">${I.pin} Use my live location</button>
-        <div id="gps-results" class="stack g2"></div>
         <div class="campusnote">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">
           ${BRAND} delivers on campus only, so there is nowhere to type a street address. Off campus is not hidden away in a menu somewhere; the system has no way to store one.</p></div>
       </div>
@@ -1910,7 +2079,7 @@ const ROUTES = {
   'ob-email': ScrObEmail, 'ob-email-code': ScrObEmailCode, 'ob-location': ScrObLocation,
   home: ScrHome, cafes: ScrCafes, menu: ScrMenu, cart: ScrCart, checkout: ScrCheckout,
   tracking: ScrTracking, orders: ScrOrders, profile: ScrProfile, ai: ScrAI,
-  verify: ScrVerify, partner: ScrPartner, join: ScrJoin, setup: ScrSetup,
+  verify: ScrVerify, partner: ScrPartner, join: ScrJoin, setup: ScrSetup, address: ScrAddress,
 };
 const NAVLESS = ['welcome', 'ob-college', 'ob-campus', 'ob-email', 'ob-email-code',
                  'ob-location', 'checkout', 'setup'];
@@ -2113,8 +2282,35 @@ document.addEventListener('click', async (e) => {
     case 'sheetDrill': setSheet('location', { parent: a.id, parentName: a.name }); break;
     case 'sheetUp': setSheet('location'); break;
     case 'setDest':
-      S.destination = { id: a.id, name: a.name, path: S.sheet?.parentName || '' };
+      /* A pin comes only from the server's own answer to a map tap; the
+         order re-checks it anyway. */
+      S.destination = { id: a.id, name: a.name, path: S.sheet?.parentName || '',
+                        pin: a.pinLat ? { lat: Number(a.pinLat), lng: Number(a.pinLng) } : null };
       render(); break;
+    case 'pickOnMap':
+      S.sheet = { ...S.sheet, mode: S.sheet?.mode === 'map' ? null : 'map' };
+      render(); break;
+    case 'saveAddress':
+      await withBusy(t, async () => {
+        await quad.saveAddress(addrPayload(S.addr));
+        drop('addr'); S.addr = null; S.checkout.addrLoaded = false;
+        toast('Address saved'); render();
+      });
+      break;
+    case 'deleteAddress':
+      await withBusy(t, async () => {
+        await quad.deleteAddress();
+        drop('addr'); S.addr = null; S.checkout = { ...S.checkout, ...addrFromSaved(null), addrLoaded: false };
+        toast('Saved address removed'); render();
+      });
+      break;
+    case 'saveAddrFromCheckout':
+      await withBusy(t, async () => {
+        await quad.saveAddress(addrPayload(S.checkout));
+        drop('addr'); S.addr = null;
+        toast('Saved as your address'); render();
+      });
+      break;
     case 'useGps':
       await withBusy(t, async () => {
         const out = await quad.locate();
@@ -2174,8 +2370,10 @@ document.addEventListener('click', async (e) => {
           /* The delivery contact number, and the two things that turn a
              confirmed campus spot into a door somebody can find. */
           contactPhone: '+91' + digits,
-          landmark: S.fulfilment === 'delivery' ? (S.checkout.landmark || undefined) : undefined,
-          instructions: S.fulfilment === 'delivery' ? (S.checkout.instructions || undefined) : undefined,
+          /* How to find the door (frozen onto the order by the server), and
+             the map pin if the spot was chosen on the map. */
+          address: S.fulfilment === 'delivery' && hasAddr(S.checkout) ? addrPayload(S.checkout) : undefined,
+          pin: S.fulfilment === 'delivery' ? (S.destination?.pin || undefined) : undefined,
         });
         const intent = await quad.paymentIntent(draft.id);
         await openGateway(intent, draft);
@@ -2415,6 +2613,10 @@ document.addEventListener('input', (e) => {
      re-render (a toast, a cart change) does not wipe what was typed. */
   const co = e.target.closest?.('[data-co]');
   if (co) S.checkout = { ...S.checkout, [co.dataset.co]: co.value };
+  const ad = e.target.closest?.('[data-addr]');
+  if (ad) S.addr = { ...(S.addr || {}), [ad.dataset.addr]: ad.value };
+  /* Choosing "not listed" reveals a text field; the save buttons enable. */
+  if (co?.dataset.co === 'blockId' || ad?.dataset.addr === 'blockId') render();
 
   const rb = e.target.closest?.('[data-review-body]');
   if (rb) {

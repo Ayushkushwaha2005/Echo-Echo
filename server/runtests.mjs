@@ -25,6 +25,7 @@ const FILES = [
   ['e2e', 'test/ordering-rules.test.mjs'],
   ['e2e', 'test/boundary-confirm.test.mjs'],
   ['e2e', 'test/location-confirm.test.mjs'],
+  ['e2e', 'test/campus-address.test.mjs'],
   ['security', 'test/security.test.mjs'],
   ['enrolment', 'test/enrolment.test.mjs'],
   ['auth', 'test/admin-login.test.mjs'],

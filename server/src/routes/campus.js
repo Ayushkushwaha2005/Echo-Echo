@@ -68,12 +68,22 @@ export default async function campusRoutes(app) {
           WHERE v.id = $1 AND v.campus_site_id = $2`, [req.query.vendorId, campusId]);
     }
     const available = await campus.deliveryAvailable(campusId, b);
+    /* A student is offered only what they can pick: eligible destinations
+       and the areas that lead to one. Campus Control (location.read) still
+       sees every row, pending and switched-off included. */
+    let shown = rows;
+    if (!can(req.actor, 'location.read')) {
+      const eligible = await campus.eligibleDestinations(campusId, b);
+      const keep = new Set(eligible.map((n) => n.id));
+      for (const n of eligible) for (const p of await campus.pathOf(n.id)) keep.add(p.id);
+      shown = rows.filter((n) => keep.has(n.id));
+    }
     return {
       deliveryAvailable: available,
       note: available ? null
         : b ? 'Campus delivery is not available yet: no delivery point has been confirmed. Self pickup still works.'
         : 'Campus delivery is not available yet: the delivery area has not been confirmed. Self pickup still works.',
-      nodes: rows.map(({ lat, lng, ...n }) => ({
+      nodes: shown.map(({ lat, lng, ...n }) => ({
         ...n,
         estimate: n.deliverable && b && lat != null && campus.pointInPolygon(Number(lat), Number(lng), b.polygon)
           ? campus.walkEstimate(from, { lat, lng }) : null,
@@ -92,8 +102,15 @@ export default async function campusRoutes(app) {
         WHERE active AND campus_site_id = $2 AND (name ILIKE $1 OR EXISTS (
           SELECT 1 FROM unnest(aliases) a WHERE a ILIKE $1))
         ORDER BY deliverable DESC, name LIMIT 20`, [`%${term}%`, campusId]);
+    /* A room plate's number is an alias of an evidence record, not a place a
+       student can send food to: students only find eligible destinations. */
+    const eligible = can(req.actor, 'location.read') ? null
+      : new Set((await campus.eligibleDestinations(campusId)).map((n) => n.id));
     const results = [];
-    for (const r of rows) results.push({ ...r, path: await campus.pathLabel(r.id) });
+    for (const r of rows) {
+      if (eligible && !eligible.has(r.id)) continue;
+      results.push({ ...r, path: await campus.pathLabel(r.id) });
+    }
     return { results };
   });
 
@@ -115,6 +132,39 @@ export default async function campusRoutes(app) {
     const out = await campus.resolveFix(coord(lat), coord(lng), { accuracy, campusId: await campusFor(req) });
     await audit(req, { action: 'campus.locate', outcome: 'ok',
                        detail: { inside: out.inside, reason: out.reason } });
+    return out;
+  });
+
+  /* What the student's campus map may draw: the active outline and the
+     destinations they can actually choose, with positions. Nothing pending,
+     no room, no candidate. Signed-in only. */
+  app.get('/campus/map', async (req) => {
+    if (!req.actor) throw Unauthenticated('Sign in required');
+    const campusId = await campusFor(req);
+    const b = campusId ? await campus.boundary(campusId) : null;
+    const destinations = b ? await campus.eligibleDestinations(campusId, b) : [];
+    return {
+      boundary: b ? { name: b.name, polygon: b.polygon } : null,
+      destinations: destinations.map((n) => ({ id: n.id, name: n.name, lat: Number(n.lat), lng: Number(n.lng) })),
+      pinRadiusM: campus.PIN_RADIUS_M,
+    };
+  });
+
+  /* A spot the student tapped on the campus map. Signed-in only; the point is
+     checked against the active outline here and answers with the confirmed
+     destinations near it. Any "inside"/distance/building the client sends
+     is not read. */
+  app.post('/campus/pin', async (req) => {
+    if (!req.actor) throw Unauthenticated('Sign in required');
+    const { lat, lng } = req.body || {};
+    const num = (v) => (typeof v === 'number' ? v : NaN);
+    const out = await campus.resolvePin(num(lat), num(lng), { campusId: await campusFor(req) });
+    await audit(req, { action: 'campus.pin', outcome: out.inside ? 'ok' : 'denied', detail: { reason: out.reason || null } });
+    if (!out.inside) {
+      const copy = PRESENCE_COPY[out.reason];
+      throw Forbidden(out.reason === 'outside_campus' ? 'That spot is not on campus' : copy.title,
+        out.reason === 'outside_campus' ? 'Choose a spot inside the campus outline.' : copy.detail);
+    }
     return out;
   });
 

@@ -226,6 +226,67 @@ export async function drawCampusMap(el, { nodes = [], boundaries = [] } = {}) {
   return map;
 }
 
+/**
+ * The student's delivery picker: the active campus outline, the confirmed
+ * destinations they may choose, and a pin where they tap.
+ *
+ * A tap is only reported to `onTap(lat, lng)`; this function decides nothing.
+ * The caller sends the point to the server (POST /campus/pin), which alone
+ * says whether it is on campus and which destinations are near it. Tapping
+ * outside the outline is still reported - the server's refusal is what the
+ * student sees, not a check made here that a modified page could skip.
+ *
+ * @param el      the container element
+ * @param data    GET /campus/map: { boundary, destinations }
+ * @param opts.chosenPin optional { lat, lng } already chosen
+ * @param opts.selectedId optional destination id already chosen
+ * @param opts.onTap     (lat, lng) => void
+ */
+export async function drawPickerMap(el, data, { chosenPin = null, selectedId = null, onTap } = {}) {
+  if (!data?.boundary?.polygon?.length) {
+    el.innerHTML = `<div class="map-empty"><p class="t-sm muted">The campus map is not available yet.</p></div>`;
+    return null;
+  }
+  let L;
+  try {
+    L = await loadLeaflet();
+  } catch {
+    el.innerHTML = `<div class="map-empty"><p class="t-sm muted">The map could not load. Choose a spot from the list instead.</p></div>`;
+    return null;
+  }
+  el.innerHTML = '';
+  el.classList.add('echo-map');
+  const map = L.map(el, { zoomControl: true, attributionControl: true, scrollWheelZoom: false });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map);
+
+  const outline = L.polygon(data.boundary.polygon, {
+    color: '#E0567A', weight: 2, opacity: 0.85, fillColor: '#E0567A', fillOpacity: 0.06, dashArray: '6,5',
+  }).addTo(map).bindTooltip(data.boundary.name || 'Campus');
+
+  for (const d of data.destinations || []) {
+    const chosen = d.id === selectedId;
+    L.marker([d.lat, d.lng], {
+      icon: pin(L, chosen ? '#E0567A' : '#1C1917', chosen ? '📍' : '●', d.name), keyboard: true, title: d.name,
+    }).addTo(map)
+      .bindTooltip(escapeText(d.name), { direction: 'top', offset: [0, -14], className: 'echo-map-label' })
+      .on('click', () => place(d.lat, d.lng));
+  }
+  /* The student's pin: where they last tapped. It moves; nothing else does. */
+  const style = { radius: 9, color: '#E0567A', weight: 3, fillColor: '#FFFFFF', fillOpacity: 1 };
+  let tapped = chosenPin ? L.circleMarker([chosenPin.lat, chosenPin.lng], style).addTo(map) : null;
+  function place(lat, lng) {
+    if (tapped) tapped.setLatLng([lat, lng]); else tapped = L.circleMarker([lat, lng], style).addTo(map);
+    onTap?.(lat, lng);
+  }
+  map.on('click', (e) => place(e.latlng.lat, e.latlng.lng));
+  map.fitBounds(outline.getBounds(), { padding: [12, 12], maxZoom: 18 });
+  requestAnimationFrame(() => map.invalidateSize());
+  return map;
+}
+
 /** What to tell someone when there is no partner marker. */
 export const partnerVisibilityNote = (v) => ({
   no_partner_yet: 'No delivery partner has picked this up yet.',

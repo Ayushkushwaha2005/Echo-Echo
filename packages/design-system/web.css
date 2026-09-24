@@ -558,6 +558,13 @@ textarea.input { resize: vertical; min-height: 72px; }
 .echo-pin{display:flex;align-items:center;justify-content:center;width:30px;height:30px;
   border-radius:50%;background:var(--pin,#1C1917);color:#fff;font-size:14px;line-height:1;
   box-shadow:0 2px 8px rgba(28,25,23,.35);border:2px solid #fff}
+/* The delivery picker: taller, because choosing a spot is the whole job. */
+.echo-map.picker{height:320px;cursor:crosshair}
+@media (min-width:900px){ .echo-map.picker{height:380px} }
+.echo-map-label{background:#fff;border:0;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:700;
+  color:#1C1917;box-shadow:0 1px 4px rgba(28,25,23,.25)}
+.echo-map-label::before{display:none}
+.segrow{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 /* Leaflet's own controls, toned to the product rather than its defaults. */
 .leaflet-container{font:inherit}
 .leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.82)}

@@ -52,13 +52,11 @@
     {
       "id": "e36c666a-5b89-411c-8ce9-59c1cd0f240e",
       "name": "Energy Block",
-      "decision": "deliver",
+      "decision": "pending",
       "lat": 30.415934,
       "lng": 77.966974,
-      "placeType": "academic_block",
-      "method": "public_map",
       "evidence": "OSM building way 536452676 \"Energy block, UPES\" (position 3 m from its centroid), corroborated on the ground by photos #26 (14 m away) and #25 (30 m) captioned \"Energy Block\"; the official UPES map pin is inside it. 45 m inside the boundary.",
-      "confirmation": "Owner-directed confirmation 25 Sep 2026 from audited evidence (docs/campus/BIDHOLI-BOUNDARY-ASSESSMENT.md): OSM building way 536452676 \"Energy block, UPES\" (position 3 m from its centroid), corroborated on the ground by photos #26 (14 m away) and #25 (30 m) captioned \"Energy Block\"; the official UPES map pin is inside it. 45 m inside the boundary. Building-level destination; the position is not a doorway."
+      "reason": "Opened on 25 Sep 2026 from the evidence below, then removed from student destinations the same day at the platform owner's direction (migration 023): students do not use this name. Its position and confirmation are kept. MAC, named in its place, has no established position and stays pending."
     },
     {
       "id": "a3d67152-a8c2-4a86-b648-b59bc853ae94",
@@ -155,6 +153,14 @@
       "lat": null,
       "lng": null,
       "reason": "Door plate photographed, but the reading is the corridor, not the room: no room coordinate exists. Which named building the block number refers to is not established."
+    },
+    {
+      "id": null,
+      "name": "MAC",
+      "decision": "pending",
+      "lat": null,
+      "lng": null,
+      "reason": "Created by migration 023 at the owner's direction. A Multi-Activity Centre is described for Bidholi by secondary sources, but no evidence places it and nothing shows it is the Energy Block. Pending until its position is recorded on site."
     }
   ],
   "notInProduction": [
@@ -166,5 +172,6 @@
       "name": "Boys Hostel",
       "reason": "Sign seen 40-60 m beyond photo #89; no position."
     }
-  ]
+  ],
+  "amended": "2026-09-25: Energy Block removed from delivery, MAC added pending (migration 023)."
 }

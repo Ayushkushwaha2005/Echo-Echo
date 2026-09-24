@@ -358,7 +358,7 @@ async function truncateOnce(pool) {
              review, order_event, order_item, payment_webhook, payment,
              delivery_offer, food_order, partner_profile, verification_case,
              asset, menu_price_history, menu_item, category, vendor,
-             campus_boundary, campus_node, session, otp_challenge, email_challenge,
+             campus_boundary, campus_block, student_address, campus_node, session, otp_challenge, email_challenge,
              review_report, deposit_deduction, deposit_refund_request, deposit_movement,
              partner_policy_consent, partner_deposit_policy, delivery_incident,
              user_role, app_user, feature_flag, platform_config, email_send_log
@@ -377,6 +377,14 @@ async function truncateOnce(pool) {
     VALUES (0, 72, 'Test fixture mirroring migration 011: no deposit is required until an administrator publishes one.')`);
   await pool.query(
     `UPDATE campus_site SET service_status = CASE slug WHEN 'upes-bidholi' THEN 'active' ELSE 'coming_soon' END`);
+  /* campus_block references campus_node, so the CASCADE above empties it.
+     Restore the blocks migration 023 seeds, numbers only. */
+  await pool.query(`
+    INSERT INTO campus_block (campus_site_id, number, label, evidence)
+    SELECT c.id, n, 'Block ' || n, 'Test fixture mirroring migration 023.'
+      FROM campus_site c, unnest(ARRAY[1,2,3,4,8,9,11]) AS n
+     WHERE c.slug = 'upes-bidholi'
+    ON CONFLICT DO NOTHING`);
   await pool.query(`
     INSERT INTO pricing_policy (vendor_id, note)
     VALUES (NULL, 'zero-rated default (test fixture, mirrors migration 004)')`);

@@ -52,6 +52,13 @@ try {
   const problems = [];
   const rows = [];
   for (const e of plan.locations) {
+    /* A pending place created later (by a migration) has no id in the plan:
+       it is listed for the record and never touched. */
+    if (!e.id) {
+      if (e.decision === 'deliver') problems.push(`${e.name}: a destination to open needs its id`);
+      rows.push({ e, n: null });
+      continue;
+    }
     const n = (await c.query(`SELECT * FROM campus_node WHERE id = $1`, [e.id]).catch(() => ({ rows: [] }))).rows[0];
     if (!n) { problems.push(`${e.name}: no location with id ${e.id}`); continue; }
     if (n.campus_site_id !== site.id) problems.push(`${e.name}: belongs to another campus`);
@@ -69,7 +76,7 @@ try {
     rows.push({ e, n });
   }
   for (const { e, n } of rows) {
-    const now = n.deliverable && n.delivery_enabled && n.verification === 'confirmed' ? 'deliverable' : n.verification;
+    const now = !n ? 'no id yet' : n.deliverable && n.delivery_enabled && n.verification === 'confirmed' ? 'deliverable' : n.verification;
     const action = e.decision === 'deliver' ? (now === 'deliverable' ? 'already deliverable' : 'CONFIRM + OPEN TO DELIVERY')
                                             : 'stays as it is';
     console.log(`  ${e.decision === 'deliver' ? '→' : '·'} ${e.name.padEnd(36)} ${now.padEnd(12)} ${action}`);
