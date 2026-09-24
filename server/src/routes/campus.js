@@ -270,16 +270,8 @@ export default async function campusRoutes(app) {
     authorize(req.actor, 'campus.update');
     assertRecentPasskey(req.actor, 'confirming a delivery location');
     const note = String(req.body?.confirmation || '').trim();
-    if (note.length < 10) throw BadRequest('Record how you confirmed this location', 'For example: visited 20 Sep, hand-over at the main entrance.');
-    const method = req.body?.verificationMethod || null;
-    if (method && !VERIFICATION_METHODS.includes(method)) throw BadRequest('Unknown verification method');
-    const row = await one(
-      `UPDATE campus_node SET verification = 'confirmed', verified_by = $2, verified_at = now(),
-              source_note = coalesce(source_note, '') || E'\nConfirmed: ' || $3,
-              verification_method = coalesce($4, verification_method,
-                                             CASE WHEN lat IS NOT NULL THEN 'admin_entry' END)
-        WHERE id = $1 AND verification = 'pending' RETURNING *`, [req.params.id, req.actor.id, note.slice(0, 500), method]);
-    if (!row) throw Conflict('No pending location with that id');
+    const row = await tx((c) => campus.confirmLocation(c,
+      { id: req.params.id, verifiedBy: req.actor.id, confirmation: note, method: req.body?.verificationMethod || null }));
     await audit(req, { action: 'campus.location.confirm', resource: 'campus_node', resourceId: row.id, outcome: 'ok',
                        detail: { name: row.name, confirmation: note } });
     return row;

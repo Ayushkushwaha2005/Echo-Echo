@@ -204,3 +204,24 @@ puts it back to *proposed* (it can be confirmed again later):
 npm --prefix server run boundary:confirm:local -- --deactivate 5414c945-9a18-4f0f-9961-fa7425c5cec8 \
   --confirmation "why it is being switched off"
 ```
+
+## 9. Destinations opened (after the boundary was activated)
+
+The owner activated `5414c945…` on 25 Sep 2026. The decision for every
+location is recorded in `bidholi-destinations-2026-09-25.json` and applied by
+`npm --prefix server run locations:confirm:local -- --apply`, which refuses
+the whole plan if any id, name or stored position differs from production or
+a destination is outside the active boundary. It can only confirm positions
+already stored; it cannot move one.
+
+**Opened to delivery (5), each at building level — the position is where the
+signboard was photographed, not a doorway:** Enrollment Office (#22), The
+Huddle (#23), Career Services / Placement Block (#61), Management Development
+Centre (#72), Energy Block (OSM building way 536452676, corroborated by
+captioned photos #25/#26).
+
+**Pending (12):** Infirmary (public map only, no photo shows it); Girls
+Hostel gate (hand-over policy at hostel gates not established); Café Frisco
+and Tulips Cafe (pickup counters, not destinations; counter not recorded);
+the 8 room plates (corridor readings, no room coordinate). Chai Garam and
+the Boys Hostel are not created.

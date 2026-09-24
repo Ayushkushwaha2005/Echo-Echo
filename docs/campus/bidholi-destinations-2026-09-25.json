@@ -1,0 +1,170 @@
+{
+  "campus": "upes-bidholi",
+  "boundaryId": "5414c945-9a18-4f0f-9961-fa7425c5cec8",
+  "reviewed": "2026-09-25",
+  "basis": "docs/campus/BIDHOLI-BOUNDARY-ASSESSMENT.md §6; readings in docs/campus/bidholi-boundary-audit.csv",
+  "rule": "A destination is opened only where a photograph (or an OSM building corroborated by captioned photographs) fixes the BUILDING. Photographer positions are not promoted to doorways or counters. Rooms, hostel gates and café counters stay pending.",
+  "locations": [
+    {
+      "id": "a5a5d56f-f0d7-4709-a8b2-105a031cf0b1",
+      "name": "Enrollment Office",
+      "decision": "deliver",
+      "lat": 30.416529,
+      "lng": 77.966459,
+      "placeType": "administrative",
+      "method": "gps_on_site",
+      "evidence": "Photo #22 (20260916_41027PMByGPSMapCamera.jpg) taken at the building's own \"ENROLLMENT OFFICE\" signboard, 30.416529, 77.966459; 23 m inside the boundary.",
+      "confirmation": "Owner-directed confirmation 25 Sep 2026 from audited evidence (docs/campus/BIDHOLI-BOUNDARY-ASSESSMENT.md): Photo #22 (20260916_41027PMByGPSMapCamera.jpg) taken at the building's own \"ENROLLMENT OFFICE\" signboard, 30.416529, 77.966459; 23 m inside the boundary. Building-level destination; the position is not a doorway."
+    },
+    {
+      "id": "73f3a03f-456b-4b73-8274-7b9f90cfbc24",
+      "name": "The Huddle",
+      "decision": "deliver",
+      "lat": 30.416423,
+      "lng": 77.966492,
+      "placeType": "student_facility",
+      "method": "gps_on_site",
+      "evidence": "Photo #23 (20260916_41105PMByGPSMapCamera.jpg) of the \"THE HUDDLE\" signboard, 30.416423, 77.966492, taken from the approach path ~30 m from the entrance; #24 also shows the sign. 31 m inside the boundary.",
+      "confirmation": "Owner-directed confirmation 25 Sep 2026 from audited evidence (docs/campus/BIDHOLI-BOUNDARY-ASSESSMENT.md): Photo #23 (20260916_41105PMByGPSMapCamera.jpg) of the \"THE HUDDLE\" signboard, 30.416423, 77.966492, taken from the approach path ~30 m from the entrance; #24 also shows the sign. 31 m inside the boundary. Building-level destination; the position is not a doorway."
+    },
+    {
+      "id": "af96848b-1a66-41e5-8488-4950f1999fc6",
+      "name": "Career Services / Placement Block",
+      "decision": "deliver",
+      "lat": 30.418386,
+      "lng": 77.967602,
+      "placeType": "administrative",
+      "method": "gps_on_site",
+      "evidence": "Photo #61 (20260916_43138PMByGPSMapCamera.jpg) of the \"CAREER SERVICES\" and \"UPES 100% PLACEMENT\" signboards, 30.418386, 77.967602; #59 also shows the sign. 33 m inside the boundary.",
+      "confirmation": "Owner-directed confirmation 25 Sep 2026 from audited evidence (docs/campus/BIDHOLI-BOUNDARY-ASSESSMENT.md): Photo #61 (20260916_43138PMByGPSMapCamera.jpg) of the \"CAREER SERVICES\" and \"UPES 100% PLACEMENT\" signboards, 30.418386, 77.967602; #59 also shows the sign. 33 m inside the boundary. Building-level destination; the position is not a doorway."
+    },
+    {
+      "id": "dbf79ed1-892b-4772-94db-550a201a6fae",
+      "name": "Management Development Centre",
+      "decision": "deliver",
+      "lat": 30.418251,
+      "lng": 77.969181,
+      "placeType": "academic_block",
+      "method": "gps_on_site",
+      "evidence": "Photo #72 (20260916_44011PMByGPSMapCamera.jpg) of the \"MANAGEMENT DEVELOPMENT CENTRE\" signboard, 30.418251, 77.969181, from the forecourt ~20 m from the steps; #70, #71, #73 show the same sign. 46 m inside the boundary.",
+      "confirmation": "Owner-directed confirmation 25 Sep 2026 from audited evidence (docs/campus/BIDHOLI-BOUNDARY-ASSESSMENT.md): Photo #72 (20260916_44011PMByGPSMapCamera.jpg) of the \"MANAGEMENT DEVELOPMENT CENTRE\" signboard, 30.418251, 77.969181, from the forecourt ~20 m from the steps; #70, #71, #73 show the same sign. 46 m inside the boundary. Building-level destination; the position is not a doorway."
+    },
+    {
+      "id": "e36c666a-5b89-411c-8ce9-59c1cd0f240e",
+      "name": "Energy Block",
+      "decision": "deliver",
+      "lat": 30.415934,
+      "lng": 77.966974,
+      "placeType": "academic_block",
+      "method": "public_map",
+      "evidence": "OSM building way 536452676 \"Energy block, UPES\" (position 3 m from its centroid), corroborated on the ground by photos #26 (14 m away) and #25 (30 m) captioned \"Energy Block\"; the official UPES map pin is inside it. 45 m inside the boundary.",
+      "confirmation": "Owner-directed confirmation 25 Sep 2026 from audited evidence (docs/campus/BIDHOLI-BOUNDARY-ASSESSMENT.md): OSM building way 536452676 \"Energy block, UPES\" (position 3 m from its centroid), corroborated on the ground by photos #26 (14 m away) and #25 (30 m) captioned \"Energy Block\"; the official UPES map pin is inside it. 45 m inside the boundary. Building-level destination; the position is not a doorway."
+    },
+    {
+      "id": "a3d67152-a8c2-4a86-b648-b59bc853ae94",
+      "name": "Infirmary",
+      "decision": "pending",
+      "lat": 30.416965,
+      "lng": 77.967669,
+      "reason": "Public-map position only (OSM node 4165237313). No field photograph shows it: the nearest readings are 29-37 m away and show other places."
+    },
+    {
+      "id": "09773179-1cc1-4ee0-95e0-4eb2be91c6d5",
+      "name": "Girls Hostel gate",
+      "decision": "pending",
+      "lat": 30.418098,
+      "lng": 77.969246,
+      "reason": "Photo-backed gate position (#79), but whether UPES allows hand-over at a hostel gate is not established."
+    },
+    {
+      "id": "454d5e9e-48d1-4ef0-a8f9-6991a33ceff1",
+      "name": "Café Frisco",
+      "decision": "pending",
+      "lat": 30.416223,
+      "lng": 77.968012,
+      "reason": "A cafeteria pickup counter, not a delivery destination. Reading #8 is the photographer ~10 m in front of the counter; the counter itself is not recorded. The position is still used for walking estimates."
+    },
+    {
+      "id": "6f9397c0-c03f-4aa1-9f69-e52512a85c72",
+      "name": "Tulips Cafe",
+      "decision": "pending",
+      "lat": 30.416383,
+      "lng": 77.969702,
+      "reason": "A cafeteria pickup counter, not a delivery destination. Reading #91 is the photographer ~10 m in front of the counter; the counter itself is not recorded. The position is still used for walking estimates."
+    },
+    {
+      "id": "22655064-7c1e-4f95-bef8-0610fc61ce4a",
+      "name": "Block 1, Room 01",
+      "decision": "pending",
+      "lat": null,
+      "lng": null,
+      "reason": "Door plate photographed, but the reading is the corridor, not the room: no room coordinate exists. Which named building the block number refers to is not established."
+    },
+    {
+      "id": "4677f905-8103-460b-b68b-6b878c6c6c84",
+      "name": "Block 1, Room 06",
+      "decision": "pending",
+      "lat": null,
+      "lng": null,
+      "reason": "Door plate photographed, but the reading is the corridor, not the room: no room coordinate exists. Which named building the block number refers to is not established."
+    },
+    {
+      "id": "6904f85b-bc3c-4005-b359-193424a43993",
+      "name": "Block 1, Floor 1, Room 04",
+      "decision": "pending",
+      "lat": null,
+      "lng": null,
+      "reason": "Door plate photographed, but the reading is the corridor, not the room: no room coordinate exists. Which named building the block number refers to is not established."
+    },
+    {
+      "id": "f0208969-b0e6-4acc-a4fc-d542cba02c01",
+      "name": "Block 2, Room 02",
+      "decision": "pending",
+      "lat": null,
+      "lng": null,
+      "reason": "Door plate photographed, but the reading is the corridor, not the room: no room coordinate exists. Which named building the block number refers to is not established."
+    },
+    {
+      "id": "d03e31b9-3b94-489a-97fa-04628ddb9d78",
+      "name": "Block 9, Floor 2, Room 04",
+      "decision": "pending",
+      "lat": null,
+      "lng": null,
+      "reason": "Door plate photographed, but the reading is the corridor, not the room: no room coordinate exists. Which named building the block number refers to is not established."
+    },
+    {
+      "id": "fc14c8ab-689d-4845-8e13-ff3e04763584",
+      "name": "Block 11, Room 11",
+      "decision": "pending",
+      "lat": null,
+      "lng": null,
+      "reason": "Door plate photographed, but the reading is the corridor, not the room: no room coordinate exists. Which named building the block number refers to is not established."
+    },
+    {
+      "id": "23c220ec-4e5e-4f32-8b24-caf8c2d75c70",
+      "name": "Block 11, Room 12",
+      "decision": "pending",
+      "lat": null,
+      "lng": null,
+      "reason": "Door plate photographed, but the reading is the corridor, not the room: no room coordinate exists. Which named building the block number refers to is not established."
+    },
+    {
+      "id": "77dbd80f-6905-44bc-9c6e-228135e85af4",
+      "name": "Block 11, Floor 2, Room 17",
+      "decision": "pending",
+      "lat": null,
+      "lng": null,
+      "reason": "Door plate photographed, but the reading is the corridor, not the room: no room coordinate exists. Which named building the block number refers to is not established."
+    }
+  ],
+  "notInProduction": [
+    {
+      "name": "Chai Garam",
+      "reason": "Named by the owner as a cafeteria. The only candidate is photo #9, a sign beginning \"CHA…\" beside Café Frisco (30.416359, 77.967536), and its name is not legible. Nothing is created until the outlet is confirmed by name."
+    },
+    {
+      "name": "Boys Hostel",
+      "reason": "Sign seen 40-60 m beyond photo #89; no position."
+    }
+  ]
+}

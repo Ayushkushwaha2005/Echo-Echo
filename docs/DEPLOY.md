@@ -464,7 +464,11 @@ Research and sources: [CAMPUS-UPES-BIDHOLI.md](CAMPUS-UPES-BIDHOLI.md).
   It activates only an outline already in the database, records the owner
   as the verifier and writes `audit_log`. Activating it opens the location
   check only: `deliveryAvailable` stays `false` until a confirmed,
-  positioned delivery point lies inside it. The evidence behind the Bidholi
+  positioned delivery point lies inside it. Delivery points are opened the
+  same way, from a reviewed plan that can only confirm positions already
+  stored (`npm run locations:confirm:local`, read-only; add `-- --apply`).
+  The Bidholi plan is `docs/campus/bidholi-destinations-2026-09-25.json`.
+  The evidence behind the Bidholi
   outline: [campus/BIDHOLI-BOUNDARY-ASSESSMENT.md](campus/BIDHOLI-BOUNDARY-ASSESSMENT.md).
 - Field data is entered through the workflow in [CAMPUS-FIELD-COLLECTION.md](CAMPUS-FIELD-COLLECTION.md). Migration 016 adds two **pending, non-deliverable** location candidates
   (Energy Block, Infirmary) from OpenStreetMap. Nothing is deliverable until

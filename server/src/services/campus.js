@@ -16,6 +16,7 @@
    ========================================================================== */
 import { q, one } from '../db/index.js';
 import { BadRequest, Conflict, Forbidden, NotFound } from '../auth/rbac.js';
+import { VERIFICATION_METHODS } from './geo-import.js';
 
 /* Worst GPS uncertainty (metres) a live-location fix may have and still be
    used to suggest delivery spots. Phones outdoors report ~5-20 m. */
@@ -154,6 +155,43 @@ export async function activateBoundary(c, { boundaryId, verifiedBy, confirmation
     `UPDATE campus_boundary SET status = 'active', active = true, verified_by = $2, verified_at = now(),
             source_note = coalesce(source_note, '') || E'\nConfirmed: ' || $3, updated_at = now()
       WHERE id = $1 RETURNING *`, [b.id, verifiedBy, note])).rows[0];
+}
+
+/* Confirm a PENDING location, inside the caller's transaction. Campus
+   Control calls it after a fresh passkey; the owner's ops script
+   (scripts/location-confirm.mjs) calls it with the production database
+   credentials. It records who confirmed it and how; it never moves it. */
+export async function confirmLocation(c, { id, verifiedBy, confirmation, method = null }) {
+  const note = String(confirmation || '').trim();
+  if (note.length < 10) throw BadRequest('Record how you confirmed this location', 'For example: visited 20 Sep, hand-over at the main entrance.');
+  if (method && !VERIFICATION_METHODS.includes(method)) throw BadRequest('Unknown verification method');
+  const row = (await c.query(
+    `UPDATE campus_node SET verification = 'confirmed', verified_by = $2, verified_at = now(),
+            source_note = coalesce(source_note, '') || E'\nConfirmed: ' || $3,
+            verification_method = coalesce($4, verification_method,
+                                           CASE WHEN lat IS NOT NULL THEN 'admin_entry' END)
+      WHERE id = $1 AND verification = 'pending' RETURNING *`, [id, verifiedBy, note.slice(0, 500), method])).rows[0];
+  if (!row) throw Conflict('No pending location with that id');
+  return row;
+}
+
+/* Open a CONFIRMED location to delivery, inside the caller's transaction,
+   only if it would then pass assertDeliverable: active, positioned, and
+   inside the campus's active boundary. */
+export async function enableDelivery(c, id) {
+  const n = (await c.query(`SELECT * FROM campus_node WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+  if (!n) throw NotFound('No such location');
+  if (n.verification !== 'confirmed') throw Conflict(`Confirm ${n.name} before enabling delivery to it`);
+  if (!n.active) throw Conflict(`${n.name} is archived`);
+  if (n.lat == null || n.lng == null) throw Conflict(`${n.name} has no recorded position`);
+  const b = (await c.query(
+    `SELECT polygon FROM campus_boundary WHERE campus_site_id = $1 AND status = 'active'`, [n.campus_site_id])).rows[0];
+  if (!b) throw Conflict('This campus has no confirmed boundary');
+  if (!pointInPolygon(Number(n.lat), Number(n.lng), b.polygon)) {
+    throw Conflict(`${n.name} is outside the campus boundary`);
+  }
+  return (await c.query(
+    `UPDATE campus_node SET deliverable = true, delivery_enabled = true WHERE id = $1 RETURNING *`, [id])).rows[0];
 }
 
 /* Whether delivery can actually happen on a campus: a confirmed outline AND
