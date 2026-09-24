@@ -23,6 +23,7 @@ const FILES = [
   ['api', 'test/menu.test.mjs'],
   ['e2e', 'test/e2e.test.mjs'],
   ['e2e', 'test/ordering-rules.test.mjs'],
+  ['e2e', 'test/boundary-confirm.test.mjs'],
   ['security', 'test/security.test.mjs'],
   ['enrolment', 'test/enrolment.test.mjs'],
   ['auth', 'test/admin-login.test.mjs'],

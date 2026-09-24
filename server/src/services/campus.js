@@ -15,7 +15,7 @@
       locations that the student must then confirm.
    ========================================================================== */
 import { q, one } from '../db/index.js';
-import { BadRequest, Forbidden, NotFound } from '../auth/rbac.js';
+import { BadRequest, Conflict, Forbidden, NotFound } from '../auth/rbac.js';
 
 /* Worst GPS uncertainty (metres) a live-location fix may have and still be
    used to suggest delivery spots. Phones outdoors report ~5-20 m. */
@@ -130,6 +130,44 @@ export async function boundary(campusId = null) {
   return one(
     `SELECT * FROM campus_boundary WHERE status = 'active' AND ($1::uuid IS NULL OR campus_site_id = $1)
       ORDER BY updated_at DESC LIMIT 1`, [campusId]);
+}
+
+/* Confirm a PROPOSED outline, inside the caller's transaction. The one way a
+   boundary becomes the geofence: Campus Control calls it after a fresh
+   passkey, and the owner's ops script (scripts/boundary-confirm.mjs) calls
+   it with the production database credentials. Neither path can supply
+   geometry here - only an id of an outline that already exists. */
+export async function activateBoundary(c, { boundaryId, verifiedBy, confirmation }) {
+  const note = String(confirmation || '').trim();
+  if (note.length < 10) {
+    throw BadRequest('Record how you confirmed this outline',
+      'For example: walked the perimeter on 20 Sep and checked both gates are inside.');
+  }
+  const b = (await c.query(`SELECT * FROM campus_boundary WHERE id = $1 FOR UPDATE`, [boundaryId])).rows[0];
+  if (!b) throw NotFound('No such boundary');
+  if (b.status !== 'proposed') throw Conflict(`This boundary is already ${b.status}`);
+  const check = validatePolygon(b.polygon);
+  if (!check.ok) throw BadRequest('That boundary is not usable', check.problems.join(' '));
+  await c.query(`UPDATE campus_boundary SET status = 'retired', active = false, updated_at = now()
+                  WHERE campus_site_id = $1 AND status = 'active'`, [b.campus_site_id]);
+  return (await c.query(
+    `UPDATE campus_boundary SET status = 'active', active = true, verified_by = $2, verified_at = now(),
+            source_note = coalesce(source_note, '') || E'\nConfirmed: ' || $3, updated_at = now()
+      WHERE id = $1 RETURNING *`, [b.id, verifiedBy, note])).rows[0];
+}
+
+/* Whether delivery can actually happen on a campus: a confirmed outline AND
+   at least one point that would pass assertDeliverable. A boundary alone
+   delivers nowhere, and saying otherwise sends students to a list of
+   places that are all refused. */
+export async function deliveryAvailable(campusId, b = undefined) {
+  const outline = b === undefined ? await boundary(campusId) : b;
+  if (!outline) return false;
+  const { rows } = await q(
+    `SELECT lat, lng FROM campus_node
+      WHERE campus_site_id = $1 AND active AND deliverable AND delivery_enabled
+        AND verification <> 'pending' AND lat IS NOT NULL AND lng IS NOT NULL`, [campusId]);
+  return rows.some((n) => pointInPolygon(Number(n.lat), Number(n.lng), outline.polygon));
 }
 
 /* Shortest distance in metres from a point to a polygon's edge, on a local

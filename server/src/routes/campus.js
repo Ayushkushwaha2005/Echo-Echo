@@ -67,9 +67,12 @@ export default async function campusRoutes(app) {
         `SELECT n.lat, n.lng FROM vendor v JOIN campus_node n ON n.id = v.campus_node_id
           WHERE v.id = $1 AND v.campus_site_id = $2`, [req.query.vendorId, campusId]);
     }
+    const available = await campus.deliveryAvailable(campusId, b);
     return {
-      deliveryAvailable: !!b,
-      note: b ? null : 'Campus delivery is not available yet: the delivery area has not been confirmed. Self pickup still works.',
+      deliveryAvailable: available,
+      note: available ? null
+        : b ? 'Campus delivery is not available yet: no delivery point has been confirmed. Self pickup still works.'
+        : 'Campus delivery is not available yet: the delivery area has not been confirmed. Self pickup still works.',
       nodes: rows.map(({ lat, lng, ...n }) => ({
         ...n,
         estimate: n.deliverable && b && lat != null && campus.pointInPolygon(Number(lat), Number(lng), b.polygon)
@@ -141,9 +144,14 @@ export default async function campusRoutes(app) {
     if (!out.inside) {
       await audit(req, { action: 'campus.presence', outcome: 'denied',
                          detail: { reason: out.reason, accuracy: out.accuracy ?? null } });
-      throw Forbidden(PRESENCE_COPY[out.reason]?.title || 'We could not confirm you are on campus',
-        out.note || PRESENCE_COPY[out.reason]?.detail ||
-        'Ordering on ECHO ECHO is only open to students who are physically on campus.');
+      /* resolveFix's `note` is written for the delivery-spot picker ("choose
+         your spot from the list"); this screen has no list, so it says what
+         this gate means instead. */
+      const copy = PRESENCE_COPY[out.reason];
+      const detail = out.reason === 'low_accuracy'
+        ? `Your location is only accurate to about ${Math.round(out.accuracy)} m. ${copy.detail}`
+        : copy?.detail || 'Ordering on ECHO ECHO is only open to students who are physically on campus.';
+      throw Forbidden(copy?.title || 'We could not confirm you are on campus', detail);
     }
 
     await q(`UPDATE session SET campus_presence_at = now(), campus_presence_lat = $2,
@@ -351,21 +359,8 @@ export default async function campusRoutes(app) {
     authorize(req.actor, 'boundary.confirm');
     assertRecentPasskey(req.actor, 'confirming a campus delivery boundary');
     const note = String(req.body?.confirmation || '').trim();
-    if (note.length < 10) {
-      throw BadRequest('Record how you confirmed this outline',
-        'For example: walked the perimeter on 20 Sep and checked both gates are inside.');
-    }
-    const out = await tx(async (c) => {
-      const b = (await c.query(`SELECT * FROM campus_boundary WHERE id = $1 FOR UPDATE`, [req.params.id])).rows[0];
-      if (!b) throw NotFound('No such boundary');
-      if (b.status !== 'proposed') throw Conflict(`This boundary is already ${b.status}`);
-      await c.query(`UPDATE campus_boundary SET status = 'retired', active = false, updated_at = now()
-                      WHERE campus_site_id = $1 AND status = 'active'`, [b.campus_site_id]);
-      return (await c.query(
-        `UPDATE campus_boundary SET status = 'active', active = true, verified_by = $2, verified_at = now(),
-                source_note = coalesce(source_note, '') || E'\nConfirmed: ' || $3, updated_at = now()
-          WHERE id = $1 RETURNING *`, [b.id, req.actor.id, note])).rows[0];
-    });
+    const out = await tx((c) => campus.activateBoundary(c,
+      { boundaryId: req.params.id, verifiedBy: req.actor.id, confirmation: note }));
     await audit(req, { action: 'campus.boundary.activate', resourceId: out.id, outcome: 'ok',
                        detail: { campus: out.campus_site_id, confirmation: note } });
     return out;

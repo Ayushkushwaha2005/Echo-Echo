@@ -446,6 +446,24 @@ Research and sources: [CAMPUS-UPES-BIDHOLI.md](CAMPUS-UPES-BIDHOLI.md).
 - The OpenStreetMap outline is a **proposed** boundary. Until an administrator
   holding `boundary.confirm` confirms it with a fresh passkey and a written
   note, **every delivery order is refused** (self pickup works).
+- **Students cannot pass the live-location check until a boundary is
+  active.** With none, `POST /campus/presence` refuses everyone with "Campus
+  delivery is not switched on yet". The committed field survey does not
+  confirm the OSM outline (114 interior readings, nobody walked the
+  perimeter, reading #098 is 58 m outside it), so it is not activated in code.
+  The owner confirms it, after checking it on the ground, either in Campus
+  Control or, while Campus Control sign-in is not set up, with:
+
+  ```bash
+  cd server
+  npm run boundary:confirm:local                 # read-only: outlines + evidence
+  npm run boundary:confirm:local -- --activate <id> --confirmation "how you checked it"
+  ```
+
+  It activates only an outline already in the database, records the owner
+  as the verifier and writes `audit_log`. Activating it opens the location
+  check only: `deliveryAvailable` stays `false` until a confirmed,
+  positioned delivery point lies inside it.
 - Field data is entered through the workflow in [CAMPUS-FIELD-COLLECTION.md](CAMPUS-FIELD-COLLECTION.md). Migration 016 adds two **pending, non-deliverable** location candidates
   (Energy Block, Infirmary) from OpenStreetMap. Nothing is deliverable until
   confirmed on the ground (Locations → Confirm location), and a delivery point

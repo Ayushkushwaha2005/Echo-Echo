@@ -87,18 +87,21 @@ services:
       - key: ADMIN_PASSKEY_REQUIRED
         value: true
 
-      # ---- email (Resend) --------------------------------------------------
+      # ---- email (Brevo) ---------------------------------------------------
+      # Brevo delivers to any recipient from ONE verified sender address, with
+      # no domain to own. Live since 24 Sep 2026: a real code reached a
+      # @stu.upes.ac.in mailbox and verified. EMAIL_FROM is that verified
+      # sender - NOT a @stu.upes.ac.in address, whose DMARC p=quarantine
+      # would junk mail Brevo sends in its name.
       - key: EMAIL_PROVIDER
-        value: resend
-      - key: RESEND_API_KEY
+        value: brevo
+      - key: BREVO_API_KEY
         sync: false
       - key: EMAIL_FROM
         sync: false
-      # Brevo delivers to any recipient from ONE verified sender address, with
-      # no domain to own. To switch: add BREVO_API_KEY, set EMAIL_FROM to the
-      # sender verified in Brevo, THEN set EMAIL_PROVIDER=brevo. In that order:
-      # production refuses to boot without a working student sign-in provider.
-      - key: BREVO_API_KEY
+      # Resend needs a verified domain to mail anyone but its account holder;
+      # kept only so switching back is one variable.
+      - key: RESEND_API_KEY
         sync: false
 
       # ---- private object storage (Backblaze B2, S3-compatible) ------------

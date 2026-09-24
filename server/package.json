@@ -23,7 +23,9 @@
     "admin:setup": "node src/db/admin-setup.js",
     "admin:setup:local": "node --env-file=.env src/db/admin-setup.js",
     "admin:status": "node scripts/admin-status.mjs",
-    "admin:status:local": "node --env-file=.env scripts/admin-status.mjs"
+    "admin:status:local": "node --env-file=.env scripts/admin-status.mjs",
+    "boundary:confirm": "node scripts/boundary-confirm.mjs",
+    "boundary:confirm:local": "node --env-file=.env scripts/boundary-confirm.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
