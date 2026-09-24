@@ -4,6 +4,7 @@
      npm run boundary:confirm:local                          # read-only report
      npm run boundary:confirm:local -- --activate <id> \
        --confirmation "how you checked it, in your own words"
+     npm run boundary:confirm:local -- --deactivate <id>        --confirmation "why it is being switched off"      # the undo
 
    The live-location gate refuses every student until a campus has an ACTIVE
    boundary, and only a proposed outline that already exists can become one.
@@ -30,7 +31,8 @@ import { activateBoundary, validatePolygon, pointInPolygon, metresToEdge } from 
 
 const arg = (name) => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : undefined; };
 const slug = arg('--campus') || 'upes-bidholi';
-const activateId = arg('--activate');
+const deactivate = process.argv.includes('--deactivate');
+const activateId = arg('--activate') || arg('--deactivate');
 const confirmation = arg('--confirmation');
 const line = (k, v) => console.log(`  ${k.padEnd(22)} ${v}`);
 
@@ -97,15 +99,33 @@ try {
     const own = (await c.query(`SELECT campus_site_id FROM campus_boundary WHERE id = $1`, [activateId]).catch(() => ({ rows: [] }))).rows[0];
     if (!own) throw new Error(`No boundary with id ${activateId}.`);
     if (own.campus_site_id !== site.id) throw new Error(`That boundary does not belong to ${slug}.`);
-    const b = await activateBoundary(c, { boundaryId: activateId, verifiedBy: owner.id, confirmation });
-    await c.query(
-      `INSERT INTO audit_log (actor_id, actor_role, action, resource, resource_id, outcome, detail)
-       VALUES ($1, 'platform_owner', 'campus.boundary.activate', 'campus_boundary', $2, 'ok', $3)`,
-      [owner.id, b.id, JSON.stringify({ campus: site.id, confirmation: String(confirmation).trim(), via: 'ops:boundary-confirm' })]);
-    await c.query('COMMIT');
-    console.log(`\n✓ ${b.name} is now the ACTIVE boundary for ${site.name}.`);
-    console.log('  The live-location check now tests students against it.');
-    console.log('  Delivery stays off until a delivery point inside it is confirmed.');
+    if (deactivate) {
+      /* The undo. Back to 'proposed' rather than 'retired', so the same
+         outline can be confirmed again later without anyone redrawing it. */
+      const note = String(confirmation || '').trim();
+      if (note.length < 10) throw new Error('Record why it is being switched off (--confirmation "...").');
+      const b = (await c.query(
+        `UPDATE campus_boundary SET status = 'proposed', active = false, verified_by = NULL, verified_at = NULL,
+                source_note = coalesce(source_note, '') || E'\nDeactivated: ' || $2, updated_at = now()
+          WHERE id = $1 AND status = 'active' RETURNING *`, [activateId, note])).rows[0];
+      if (!b) throw new Error('That boundary is not active.');
+      await c.query(
+        `INSERT INTO audit_log (actor_id, actor_role, action, resource, resource_id, outcome, detail)
+         VALUES ($1, 'platform_owner', 'campus.boundary.deactivate', 'campus_boundary', $2, 'ok', $3)`,
+        [owner.id, b.id, JSON.stringify({ campus: site.id, reason: note, via: 'ops:boundary-confirm' })]);
+      await c.query('COMMIT');
+      console.log(`\n✓ ${b.name} is proposed again. Every student's location check is refused until an outline is confirmed.`);
+    } else {
+      const b = await activateBoundary(c, { boundaryId: activateId, verifiedBy: owner.id, confirmation });
+      await c.query(
+        `INSERT INTO audit_log (actor_id, actor_role, action, resource, resource_id, outcome, detail)
+         VALUES ($1, 'platform_owner', 'campus.boundary.activate', 'campus_boundary', $2, 'ok', $3)`,
+        [owner.id, b.id, JSON.stringify({ campus: site.id, confirmation: String(confirmation).trim(), via: 'ops:boundary-confirm' })]);
+      await c.query('COMMIT');
+      console.log(`\n✓ ${b.name} is now the ACTIVE boundary for ${site.name}.`);
+      console.log('  The live-location check now tests students against it.');
+      console.log('  Delivery stays off until a delivery point inside it is confirmed.');
+    }
   }
 } catch (e) {
   await c.query('ROLLBACK').catch(() => {});

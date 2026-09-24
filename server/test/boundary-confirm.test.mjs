@@ -153,6 +153,28 @@ test('the owner confirms it; the gate then decides by position, and delivery sta
   assert.match(d.body.note, /no delivery point has been confirmed/);
 });
 
+test('the owner can switch it off again, back to a proposal that can be re-confirmed', async () => {
+  const o = await owner();
+  assert.equal(script('--activate', proposalId, '--confirmation', 'Checked on foot for this test').status, 0);
+  assert.equal(script('--deactivate', proposalId, '--confirmation', 'x').status, 1, 'a reason is required');
+  const out = script('--deactivate', proposalId, '--confirmation', 'Boys Hostel residents refused; re-check');
+  assert.equal(out.status, 0, out.stderr);
+  const row = await status();
+  assert.equal(row.status, 'proposed');
+  assert.equal(row.verified_by, null);
+  assert.match(row.source_note, /Deactivated: Boys Hostel residents refused/);
+  assert.equal((await pool.query(
+    `SELECT count(*)::int n FROM audit_log WHERE action = 'campus.boundary.deactivate' AND actor_id = $1`, [o.id])).rows[0].n, 1);
+
+  /* Fail-closed again. */
+  const c = await student();
+  const p = deepest();
+  assert.equal((await c.post('/campus/presence', { lat: p.lat, lng: p.lng, accuracy: 10 })).status, 403);
+  /* Not active any more, so a second undo is refused; the proposal can be confirmed again. */
+  assert.equal(script('--deactivate', proposalId, '--confirmation', 'again, just in case').status, 1);
+  assert.equal(script('--activate', proposalId, '--confirmation', 'Re-checked on foot for this test').status, 0);
+});
+
 test('delivery is reported available only once a confirmed point lies inside', async () => {
   await owner();
   assert.equal(script('--activate', proposalId, '--confirmation', 'Checked on foot for this test').status, 0);

@@ -3,7 +3,8 @@
 
    The readings in docs/campus/bidholi-field-2026-09-readings.csv were
    transcribed by eye from the caption bar GPS Map Camera burns into each
-   photo — there is no EXIF GPS in that archive to read instead. This script
+   photo. Every photo has an EXIF GPS block, but its values are empty (0/0
+   rationals), so there is no machine-readable position to read instead. This script
    cannot re-read the captions, so it does NOT re-derive the coordinates.
 
    What it does check, which is what can actually be checked mechanically:

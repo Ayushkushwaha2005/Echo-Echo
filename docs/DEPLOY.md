@@ -458,12 +458,14 @@ Research and sources: [CAMPUS-UPES-BIDHOLI.md](CAMPUS-UPES-BIDHOLI.md).
   cd server
   npm run boundary:confirm:local                 # read-only: outlines + evidence
   npm run boundary:confirm:local -- --activate <id> --confirmation "how you checked it"
+  npm run boundary:confirm:local -- --deactivate <id> --confirmation "why"   # undo
   ```
 
   It activates only an outline already in the database, records the owner
   as the verifier and writes `audit_log`. Activating it opens the location
   check only: `deliveryAvailable` stays `false` until a confirmed,
-  positioned delivery point lies inside it.
+  positioned delivery point lies inside it. The evidence behind the Bidholi
+  outline: [campus/BIDHOLI-BOUNDARY-ASSESSMENT.md](campus/BIDHOLI-BOUNDARY-ASSESSMENT.md).
 - Field data is entered through the workflow in [CAMPUS-FIELD-COLLECTION.md](CAMPUS-FIELD-COLLECTION.md). Migration 016 adds two **pending, non-deliverable** location candidates
   (Energy Block, Infirmary) from OpenStreetMap. Nothing is deliverable until
   confirmed on the ground (Locations → Confirm location), and a delivery point
