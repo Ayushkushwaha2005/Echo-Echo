@@ -310,7 +310,7 @@ test('a map pin on campus but away from every delivery point says so, and offers
   assert.equal(r.status, 200);
   assert.equal(r.body.inside, true);
   assert.deepEqual(r.body.candidates, []);
-  assert.equal(r.body.note, 'Choose a supported delivery point or select a different spot.');
+  assert.equal(r.body.note, 'Choose a supported delivery point inside the campus delivery area.');
   /* And an order cannot carry that pin to a delivery point it is not near. */
   const { v, item } = await openOutlet();
   const d = await (await student()).post('/orders/draft', { vendorId: v.id, lines: [{ itemId: item.id, qty: 1 }],
@@ -409,8 +409,13 @@ test('map tiles follow the OpenStreetMap tile policy', async () => {
     /&copy; <a href="https:\/\/www\.openstreetmap\.org\/copyright">OpenStreetMap<\/a> contributors/);
   assert.equal(OSM_TILES.options.maxZoom, 19);
   const code = fs.readFileSync(root('../packages/ui/map.js'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-  /* One tile layer definition, used by every map; nothing cache-busting, nothing prefetching. */
-  assert.equal(code.match(/L\.tileLayer\(/g).length, 1);
+  /* Two tile layer definitions: OSM (used by every map) and the picker's
+     Satellite layer, whose URL comes only from the server's config. Nothing
+     cache-busting, nothing prefetching. */
+  assert.equal(code.match(/L\.tileLayer\(/g).length, 2);
+  assert.equal(code.match(/L\.tileLayer\(OSM_TILES\.url/g).length, 1);
+  assert.equal(code.match(/L\.tileLayer\(sat\.url/g).length, 1);
+  assert.ok(!/arcgis|esri|token/i.test(code), 'no imagery provider or key in the browser code');
   assert.equal(code.match(/tile\.openstreetmap\.org/g).length, 1);
   assert.ok(!/no-cache|nocache|\{s\}\.tile|prefetch/i.test(code));
   /* No surface draws tiles of its own. */
@@ -419,4 +424,99 @@ test('map tiles follow the OpenStreetMap tile policy', async () => {
       assert.ok(!/tileLayer|tile\.openstreetmap/.test(fs.readFileSync(f, 'utf8')), f);
     }
   }
+});
+
+/* ================= the picker: the student's point vs destinations ======== */
+
+const PICK = import(new URL('../../packages/ui/picker-state.js', import.meta.url).href);
+
+test('a tap on the map is the student\'s own point and selects no destination - not The HUBBLE, not anything', async () => {
+  const { mapPointChosen, mapPointAnswered } = await PICK;
+  const hubble = place('The HUBBLE');
+  /* The student had The HUBBLE selected (from the list), then taps somewhere else. */
+  let S = { destination: { id: hubble.id, name: 'The HUBBLE', path: '', pin: null }, pick: null };
+  Object.assign(S, mapPointChosen(30.4151234567, 77.9701234567));
+  assert.equal(S.destination, null, 'the earlier choice does not survive a new tap');
+  assert.deepEqual(S.pick.pin, { lat: 30.415123, lng: 77.970123 }, 'the point is exactly where they tapped');
+  assert.equal(S.pick.pending, true);
+
+  /* Whatever the server answers - nothing near, The HUBBLE near, or a refusal -
+     the point stays the point and no destination is chosen for them. */
+  for (const answer of [{ candidates: [], note: 'x' },
+                        { candidates: [{ id: hubble.id, name: 'The HUBBLE', metres: 40 }] },
+                        { error: 'That spot is outside the campus delivery area.' }]) {
+    const T = { ...S, pick: { ...S.pick } };
+    Object.assign(T, mapPointAnswered(T, T.pick.pin, answer));
+    assert.equal(T.destination, null, JSON.stringify(answer));
+    assert.deepEqual(T.pick.pin, S.pick.pin);
+    assert.ok(!('id' in T.pick) && !('name' in T.pick), 'a map point is not a destination record');
+  }
+  /* An answer for an older tap is dropped rather than applied to the new one. */
+  assert.equal(mapPointAnswered(S, { lat: 1, lng: 2 }, { candidates: [] }), null);
+});
+
+test('tapping a delivery point\'s marker selects exactly that point', async () => {
+  const { destinationChosen, mapPointChosen } = await PICK;
+  const { destinationMarkers } = await MAP_JS;
+  const m = (await (await student()).get('/campus/map')).body;
+  for (const d of m.destinations) {
+    const S = { destination: null, ...mapPointChosen(30.416, 77.968) };
+    Object.assign(S, destinationChosen(d));
+    assert.deepEqual([S.destination.id, S.destination.name], [d.id, d.name]);
+    assert.equal(S.destination.pin, null, 'a marker choice carries no invented pin');
+    assert.equal(S.pick, null, 'the earlier map point is replaced by the chosen marker');
+  }
+  /* The one marker that stands for two points (Enrollment Office and The
+     HUBBLE, 12 m apart) names both, so the student can choose either. */
+  const both = destinationMarkers(m.destinations).find((g) => g.ids.length > 1);
+  assert.deepEqual(both.names.slice().sort(), ['Enrollment Office', 'The HUBBLE']);
+  /* Choosing from the points near their own map point keeps that point beside it. */
+  const S = { ...mapPointChosen(30.4164, 77.9665) };
+  const hub = m.destinations.find((d) => d.name === 'The HUBBLE');
+  Object.assign(S, destinationChosen(hub, { pin: S.pick.pin }));
+  assert.equal(S.destination.id, hub.id);
+  assert.deepEqual(S.destination.pin, S.pick.pin);
+});
+
+test('a map point is never stored as a destination, and live location chooses nothing', async () => {
+  const s = await student();
+  const before = (await pool.query(`SELECT count(*)::int n FROM campus_node`)).rows[0].n;
+  const hub = place('The HUBBLE');
+  /* A point on campus 60 m from The HUBBLE, and a live reading right on it. */
+  await s.post('/campus/pin', { lat: hub.lat + 0.00054, lng: hub.lng });
+  const live = await s.post('/campus/locate', { lat: hub.lat, lng: hub.lng, accuracy: 12 });
+  assert.equal(live.status, 200);
+  assert.equal(live.body.inside, true);
+  assert.ok(!('destination' in live.body) && !('destinationId' in live.body), 'live location suggests, never selects');
+  assert.ok(live.body.candidates.some((c) => c.name === 'The HUBBLE'));
+  assert.equal((await pool.query(`SELECT count(*)::int n FROM campus_node`)).rows[0].n, before, 'no place was created');
+  /* ...and no order can name a point: it must name a confirmed destination. */
+  const { v, item } = await openOutlet();
+  const r = await s.post('/orders', { vendorId: v.id, items: [{ itemId: item.id, qty: 1 }], fulfilment: 'delivery',
+                                      pin: { lat: hub.lat + 0.00054, lng: hub.lng } });
+  assert.ok(r.status >= 400, `an order with only a map point is refused (${r.status})`);
+});
+
+test('the Satellite base map: only from server config, credited, and never in the browser code', async () => {
+  const { mapTiles } = await import('../src/services/campus.js');
+  assert.deepEqual(mapTiles({}), { satellite: null });
+  assert.deepEqual(mapTiles({ ARCGIS_BASEMAP_TOKEN: '  ' }), { satellite: null });
+  const t = mapTiles({ ARCGIS_BASEMAP_TOKEN: 'abc/+=' }).satellite;
+  assert.equal(t.url, 'https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token=abc%2F%2B%3D');
+  assert.match(t.attribution, /Powered by <a href="https:\/\/www\.esri\.com">Esri<\/a>/);
+  assert.match(t.attribution, /Maxar/);
+  /* Not configured in tests, so the map says there is no Satellite layer. */
+  assert.deepEqual((await (await student()).get('/campus/map')).body.tiles, { satellite: null });
+
+  /* Switching base maps swaps only the base layer: OSM is the default, the
+     Satellite layer is built from exactly what the server sent. */
+  const { baseLayers, OSM_TILES } = await MAP_JS;
+  const made = [];
+  const L = { tileLayer: (url, options) => { const l = { url, options }; made.push(l); return l; } };
+  assert.equal(baseLayers(L, { satellite: null }).satellite, null);
+  const b = baseLayers(L, { satellite: t });
+  assert.equal(b.default.url, OSM_TILES.url);
+  assert.equal(b.satellite.url, t.url);
+  assert.equal(b.satellite.options.attribution, t.attribution);
+  assert.equal(b.satellite.options.referrerPolicy, 'strict-origin-when-cross-origin');
 });

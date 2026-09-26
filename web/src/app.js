@@ -19,6 +19,7 @@
 import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/data/client.js';
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
 import { campusOption } from '../../packages/ui/campus-option.js';
+import { mapPointChosen, mapPointAnswered, destinationChosen } from '../../packages/ui/picker-state.js';
 
 restoreTheme();
 
@@ -1190,25 +1191,33 @@ const pickerState = () => ({
   live: S.liveFix || null,
 });
 
-/* A tap goes to the server; what comes back (a refusal, or the confirmed
-   delivery points near the pin) is what the student sees. */
+/* A tap on the map is the student's own point, exactly where they tapped.
+   It clears any destination chosen before (from the list, live location or
+   an earlier point) and selects nothing in its place: the server says what
+   is near it, and the student chooses. See picker-state.js. */
 async function onPickerTap(lat, lng) {
-  const pin = { lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)) };
-  S.pick = { pin, pending: true };
-  /* A destination chosen for an earlier pin no longer matches this one. */
-  if (S.destination?.pin) S.destination = null;
+  Object.assign(S, mapPointChosen(lat, lng));
+  const { pin } = S.pick;
   render();
+  let answer;
   try {
     const out = await quad.campusPin(pin.lat, pin.lng);
-    if (S.pick?.pin !== pin) return;               // a newer tap superseded this one
-    S.pick = { pin, candidates: out.candidates, note: out.note };
+    answer = { candidates: out.candidates, note: out.note };
   } catch (e) {
-    if (S.pick?.pin !== pin) return;
-    S.pick = { pin, candidates: [], error: explain(e) };
+    answer = { error: explain(e) };
   }
+  const next = mapPointAnswered(S, pin, answer);
+  if (!next) return;                               // a newer tap superseded this one
+  Object.assign(S, next);
   render();
   /* On a phone the answer is below the map: bring it into view. */
   document.getElementById('pin-results')?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+}
+
+/* A tap on a delivery point's own marker selects exactly that point. */
+function onPickerSelect(dest) {
+  Object.assign(S, destinationChosen(dest));
+  render();
 }
 
 async function paintPicker() {
@@ -1221,6 +1230,8 @@ async function paintPicker() {
     if (picker.host.parentElement !== slot) slot.replaceChildren(picker.host);
     picker.ctl?.sync(pickerState());
     picker.ctl?.refresh();
+    /* A live reading the server just accepted: show the student where they are. */
+    if (S.liveFocus) { S.liveFocus = false; picker.ctl?.focusLive(); }
     return;
   }
   const host = document.createElement('div');
@@ -1233,7 +1244,7 @@ async function paintPicker() {
   try {
     if (!S.campusMap) S.campusMap = await quad.campusMap();
     const { drawPickerMap } = await import('../../packages/ui/map.js');
-    const ctl = await drawPickerMap(host, S.campusMap, { ...pickerState(), onTap: onPickerTap });
+    const ctl = await drawPickerMap(host, S.campusMap, { ...pickerState(), onTap: onPickerTap, onSelect: onPickerSelect });
     if (picker !== mine) { ctl?.destroy(); return; }   // closed while loading
     mine.ctl = ctl;
     /* A render may have replaced the slot while the map was loading. */
@@ -1982,17 +1993,25 @@ const DestChoice = (c, sub, pin = null) => `
     <div class="t-xs muted">${esc(sub)}</div></div>
     ${S.destination?.id === c.id ? Ico(I.check, 18) : ''}</button>`;
 
-/* What the server said about the last spot tapped on the map. */
+/* Said, word for word, whenever the student's map point is not one we deliver to. */
+const PICK_UNSUPPORTED = 'Choose a supported delivery point inside the campus delivery area.';
+
+/* What the server said about the student's own map point. It stays a point:
+   nothing here selects a destination for them. */
 function PinResults() {
   const p = S.pick;
   if (!p) return '';
-  if (p.pending) return `<p class="t-xs muted" role="status">Checking that spot…</p>`;
-  if (p.error) return `<div class="campusnote" role="alert">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)">${esc(p.error)}</p></div>`;
+  const at = `Your point: ${p.pin.lat.toFixed(5)}, ${p.pin.lng.toFixed(5)}`;
+  if (p.pending) return `<p class="t-xs muted" role="status">${esc(at)} · checking…</p>`;
+  if (p.error) {
+    return `<div class="campusnote" role="alert">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)">${
+      esc(at)}. ${esc(p.error)} ${esc(PICK_UNSUPPORTED)}</p></div>`;
+  }
   if (!p.candidates?.length) {
     return `<div class="campusnote" role="status">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">${
-      esc(p.note || 'Choose a supported delivery point or select a different spot.')}</p></div>`;
+      esc(at)}. It is not a delivery point. ${esc(PICK_UNSUPPORTED)}</p></div>`;
   }
-  return `<p class="t-xs faint">That spot is on campus. Choose the delivery point to bring it to:</p>`
+  return `<p class="t-xs faint">${esc(at)}. It is not itself a delivery point; choose the delivery point to bring it to:</p>`
     + p.candidates.map((c) => DestChoice(c, `~${c.metres} m from your pin`, p.pin)).join('');
 }
 
@@ -2012,7 +2031,7 @@ function GpsResults() {
 /* What each thing on the picker map means. */
 const MapLegend = () => `<div class="maplegend t-xs muted" aria-hidden="true">
   <span><i class="lg lg-dest"></i>Delivery point</span>
-  <span><i class="lg lg-pin"></i>Your spot</span>
+  <span><i class="lg lg-pin"></i>Your point (not a delivery point)</span>
   ${S.liveFix ? '<span><i class="lg lg-live"></i>You (live location)</span>' : ''}
   <span><i class="lg lg-area"></i>Campus delivery area</span></div>`;
 
@@ -2372,8 +2391,8 @@ document.addEventListener('click', async (e) => {
     case 'setDest':
       /* A pin comes only from the server's own answer to a map tap; the
          order re-checks it anyway. */
-      S.destination = { id: a.id, name: a.name, path: S.sheet?.parentName || '',
-                        pin: a.pinLat ? { lat: Number(a.pinLat), lng: Number(a.pinLng) } : null };
+      Object.assign(S, destinationChosen({ id: a.id, name: a.name }, { path: S.sheet?.parentName || '',
+        pin: a.pinLat ? { lat: Number(a.pinLat), lng: Number(a.pinLng) } : null }));
       render(); break;
     case 'pickOnMap':
       S.sheet = { ...S.sheet, mode: S.sheet?.mode === 'map' ? null : 'map' };
@@ -2416,6 +2435,9 @@ document.addEventListener('click', async (e) => {
         } else {
           /* Accepted by the server: only now is the student's position drawn. */
           S.liveFix = out.fix;
+          /* ...and open the map on it, so they can see where that is. */
+          S.sheet = { ...S.sheet, mode: 'map' };
+          S.liveFocus = true;
           /* A map tap that led nowhere is not left beside the live answer. */
           if (S.pick && !S.pick.candidates?.length) S.pick = null;
           S.gps = { candidates: out.candidates || [], note: out.note, fix: out.fix };

@@ -161,6 +161,7 @@ export default async function campusRoutes(app) {
       destinations: destinations.map((n) => ({ id: n.id, name: n.name, lat: Number(n.lat), lng: Number(n.lng) })),
       pinRadiusM: campus.PIN_RADIUS_M,
       maxAccuracyM: campus.GPS_MAX_ACCURACY_M,
+      tiles: campus.mapTiles(),
     };
   });
 

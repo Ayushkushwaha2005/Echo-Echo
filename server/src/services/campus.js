@@ -115,6 +115,28 @@ export function metresBetween(a, b) {
   return 2 * R * Math.asin(Math.sqrt(s));
 }
 
+/* The picker's optional Satellite base map: Esri World Imagery through the
+   ArcGIS Location Platform, which needs an access token. The token is made
+   for browser use (restrict it to this site's referrer and the basemap
+   privilege only, in the ArcGIS dashboard); it lives in ARCGIS_BASEMAP_TOKEN,
+   never in the source, and is sent only to signed-in students with the map.
+   Unset, there is no Satellite layer and the button says so. Esri requires
+   "Powered by Esri" and the imagery sources to be credited on the map. */
+export function mapTiles(env = process.env) {
+  const token = String(env.ARCGIS_BASEMAP_TOKEN || '').trim();
+  if (!token) return { satellite: null };
+  return {
+    satellite: {
+      provider: 'esri-world-imagery',
+      url: 'https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token='
+        + encodeURIComponent(token),
+      attribution: 'Powered by <a href="https://www.esri.com">Esri</a> | Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+      maxZoom: 19,
+      maxNativeZoom: 19,
+    },
+  };
+}
+
 /* The middle of an outline's bounding box: where a campus map opens. */
 export function polygonCentre(polygon) {
   const lats = polygon.map((p) => Number(p[0])), lngs = polygon.map((p) => Number(p[1]));
@@ -234,7 +256,7 @@ export async function resolvePin(lat, lng, { campusId }) {
     .filter((c) => c.metres <= PIN_RADIUS_M)
     .sort((x, y) => x.metres - y.metres);
   return { inside: true, boundaryName: b.name, candidates,
-           note: candidates.length ? null : 'Choose a supported delivery point or select a different spot.' };
+           note: candidates.length ? null : 'Choose a supported delivery point inside the campus delivery area.' };
 }
 
 /* The pin on an order: inside the outline, and near the destination it came

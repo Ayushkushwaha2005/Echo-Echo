@@ -101,9 +101,9 @@ const osmTiles = (L) => L.tileLayer(OSM_TILES.url, OSM_TILES.options);
 
 /* A round pin, drawn in CSS rather than fetched as an image, so the map has
    no second network dependency and matches the product's palette. */
-const pin = (L, colour, glyph, title) => L.divIcon({
+const pin = (L, colour, glyph, title, extra = '') => L.divIcon({
   className: 'echo-pin-wrap',
-  html: `<span class="echo-pin" style="--pin:${colour}" title="${escapeText(title)}">${escapeText(glyph)}</span>`,
+  html: `<span class="echo-pin${extra ? ` ${extra}` : ''}" style="--pin:${colour}" title="${escapeText(title)}">${escapeText(glyph)}</span>`,
   iconSize: [30, 30],
   iconAnchor: [15, 15],
 });
@@ -301,32 +301,56 @@ export function destinationMarkers(destinations = []) {
   return out;
 }
 
+/* The picker's base maps. "Default" is OpenStreetMap (OSM_TILES above).
+   "Satellite" exists only when the server sends a configured imagery layer in
+   GET /campus/map (`tiles.satellite`: { url, attribution, maxZoom,
+   maxNativeZoom }); nothing about any imagery provider, and no key, is in
+   this file. Without it the Satellite button is shown switched off. */
+export function baseLayers(L, tiles = {}) {
+  const sat = tiles?.satellite;
+  return {
+    default: osmTiles(L),
+    satellite: sat?.url ? L.tileLayer(sat.url, {
+      maxZoom: sat.maxZoom || 19, maxNativeZoom: sat.maxNativeZoom || sat.maxZoom || 19,
+      referrerPolicy: 'strict-origin-when-cross-origin', attribution: sat.attribution,
+    }) : null,
+  };
+}
+
 /**
- * The student's delivery picker: the active campus outline, the confirmed
- * delivery points, the spot they tapped, and - only once the server has
- * accepted a live reading - where they are.
+ * The student's delivery picker. Three different things, drawn differently:
  *
- * A tap is only reported to `onTap(lat, lng)`; this function decides nothing.
- * The caller sends the point to the server (POST /campus/pin), which alone
- * says whether it is on campus and which delivery points are near it, and
- * then tells the map how the pin fared with sync(). Tapping outside the
- * outline is still reported: the server's refusal is what the student sees,
- * not a check made here that a modified page could skip.
+ *   GREEN  markers   confirmed delivery points (the only things that can be
+ *                    delivered to). Tapping one reports exactly that point
+ *                    to `onSelect(destination)`; a marker standing for two
+ *                    points 12 m apart asks which one.
+ *   PINK   pin       the student's own map point, wherever they tapped the
+ *                    map. Reported to `onTap(lat, lng)`. It is only a point:
+ *                    the map never turns it into a destination.
+ *   BLUE   dot+ring  where the student is, from a live reading the SERVER
+ *                    accepted, with its reported accuracy as the ring.
  *
- * Returns a controller, so the page can update the map in place instead of
+ * This function decides nothing. The caller sends a tapped point to the
+ * server (POST /campus/pin), which alone says whether it is on campus and
+ * which delivery points are near it; the order re-checks everything.
+ *
+ * Returns a controller, so the page updates the map in place rather than
  * rebuilding it (and losing the student's zoom) on every change:
  *   sync({ pin, pinStatus, selectedId, live })
- *     pin        { lat, lng } or null - the student's tapped spot
+ *     pin        { lat, lng } or null - the student's map point
  *     pinStatus  'checking' | 'ok' | 'refused'
- *     selectedId the chosen destination's id, highlighted
+ *     selectedId the chosen destination's id, highlighted (still green)
  *     live       { lat, lng, accuracy } of an ACCEPTED live reading, or null
+ *   setBase('default' | 'satellite') / base()   the base map; every marker,
+ *                the outline and the live dot stay as they are
+ *   focusLive()  centre on the live reading
  *   refresh()    re-measure after the container moved or resized
  *   destroy()
  *
  * @param el   the container element
- * @param data GET /campus/map: { boundary: { name, polygon, center }, destinations }
+ * @param data GET /campus/map: { boundary: { name, polygon, center }, destinations, tiles }
  */
-export async function drawPickerMap(el, data, { onTap, ...state } = {}) {
+export async function drawPickerMap(el, data, { onTap, onSelect, ...state } = {}) {
   if (!data?.boundary?.polygon?.length) {
     el.innerHTML = `<div class="map-empty"><p class="t-sm muted">The campus map is not available yet.</p></div>`;
     return null;
@@ -341,35 +365,54 @@ export async function drawPickerMap(el, data, { onTap, ...state } = {}) {
   el.innerHTML = '';
   el.classList.add('echo-map');
   const map = L.map(el, {
-    zoomControl: true, attributionControl: true, scrollWheelZoom: false,
+    zoomControl: true, attributionControl: true, scrollWheelZoom: false, tap: true,
     /* The map opens on the campus, never on the browser's idea of where the
        student is: the middle of the active outline first, then fitted to it. */
     center: data.boundary.center || data.boundary.polygon[0], zoom: 16,
   });
-  osmTiles(L).addTo(map);
 
+  const bases = baseLayers(L, data.tiles);
+  let current = 'default';
+  bases.default.addTo(map);
+
+  /* The outline was proposed from OpenStreetMap, so its credit stays on the
+     map whichever base map is showing. */
   const outline = L.polygon(data.boundary.polygon, {
     color: '#E0567A', weight: 2, opacity: 0.9, fillColor: '#E0567A', fillOpacity: 0.07, dashArray: '6,5',
-    interactive: false,
+    interactive: false, attribution: OSM_TILES.options.attribution,
   }).addTo(map);
 
+  const byId = new Map((data.destinations || []).map((d) => [d.id, d]));
   const groups = destinationMarkers(data.destinations);
+  const choose = (id) => { const d = byId.get(id); if (d) onSelect?.(d); };
   const markers = groups.map((g) => {
     const m = L.marker([g.lat, g.lng], {
       icon: pin(L, '#2F7D5F', g.ids.length > 1 ? String(g.ids.length) : '🍴', g.label),
-      keyboard: true, title: g.label, riseOnHover: true,
+      keyboard: true, title: g.label, riseOnHover: true, zIndexOffset: 500,
     }).addTo(map)
       .bindTooltip(escapeText(g.label), { permanent: true, direction: g.labelSide,
-        offset: g.labelSide === 'top' ? [0, -16] : [0, 16], className: 'echo-map-label' })
-      .on('click', () => onTap?.(g.lat, g.lng));
+        offset: g.labelSide === 'top' ? [0, -16] : [0, 16], className: 'echo-map-label' });
+    if (g.ids.length === 1) {
+      m.on('click', () => choose(g.ids[0]));
+    } else {
+      /* Two points too close to tap apart: ask which, by name. */
+      m.bindPopup(`<div class="stack g1" role="group" aria-label="Choose a delivery point">${g.ids.map((id, i) =>
+        `<button type="button" class="btn btn-secondary btn-sm" data-dest-id="${escapeText(id)}">${escapeText(g.names[i])}</button>`).join('')}</div>`,
+      { closeButton: true, className: 'echo-map-choose' });
+      m.on('popupopen', (e) => {
+        for (const b of e.popup.getElement().querySelectorAll('[data-dest-id]')) {
+          b.addEventListener('click', (ev) => { ev.stopPropagation(); map.closePopup(); choose(b.dataset.destId); });
+        }
+      });
+    }
     return { g, m };
   });
 
-  let tapped = null, liveDot = null, liveRing = null;
+  let tapped = null, liveDot = null, liveRing = null, lastLive = null;
   const PIN_LOOK = {
-    checking: { colour: '#8A817C', glyph: '…', label: 'Checking this spot' },
-    ok: { colour: '#E0567A', glyph: '📍', label: 'Your spot' },
-    refused: { colour: '#8A817C', glyph: '✕', label: 'Outside the campus delivery area' },
+    checking: { colour: '#E0567A', glyph: '…', label: 'Your point (checking)' },
+    ok: { colour: '#E0567A', glyph: '📍', label: 'Your point' },
+    refused: { colour: '#8A817C', glyph: '✕', label: 'Your point: outside the campus delivery area' },
   };
   const pinIcon = (status) => {
     const look = PIN_LOOK[status] || PIN_LOOK.ok;
@@ -379,32 +422,76 @@ export async function drawPickerMap(el, data, { onTap, ...state } = {}) {
   function sync({ pin: at = null, pinStatus = 'ok', selectedId = null, live = null } = {}) {
     if (at) {
       if (tapped) tapped.setLatLng([at.lat, at.lng]).setIcon(pinIcon(pinStatus));
-      else tapped = L.marker([at.lat, at.lng], { icon: pinIcon(pinStatus), zIndexOffset: 1000, keyboard: false }).addTo(map);
+      else tapped = L.marker([at.lat, at.lng], { icon: pinIcon(pinStatus), zIndexOffset: 1000, keyboard: false, interactive: false }).addTo(map);
     } else if (tapped) {
       tapped.remove(); tapped = null;
     }
     for (const { g, m } of markers) {
-      const chosen = selectedId && g.ids.includes(selectedId);
-      m.setIcon(pin(L, chosen ? '#E0567A' : '#2F7D5F',
-        chosen ? '✓' : g.ids.length > 1 ? String(g.ids.length) : '🍴', g.label));
+      const chosen = Boolean(selectedId && g.ids.includes(selectedId));
+      m.setIcon(pin(L, chosen ? '#1F5E46' : '#2F7D5F',
+        chosen ? '✓' : g.ids.length > 1 ? String(g.ids.length) : '🍴', g.label, chosen ? 'sel' : ''));
     }
     /* Where the student is: drawn only from a reading the server accepted,
        with its accuracy as a circle, so a ±20 m fix is not shown as a point. */
     if (live && Number.isFinite(live.lat) && Number.isFinite(live.lng)) {
+      lastLive = live;
       if (liveDot) {
         liveDot.setLatLng([live.lat, live.lng]);
         liveRing.setLatLng([live.lat, live.lng]).setRadius(live.accuracy || 0);
       } else {
         liveRing = L.circle([live.lat, live.lng], { radius: live.accuracy || 0, color: '#2563EB', weight: 1,
           opacity: 0.5, fillColor: '#2563EB', fillOpacity: 0.12, interactive: false }).addTo(map);
-        liveDot = L.circleMarker([live.lat, live.lng], { radius: 7, color: '#FFFFFF', weight: 3,
-          fillColor: '#2563EB', fillOpacity: 1, interactive: false }).addTo(map);
+        liveDot = L.circleMarker([live.lat, live.lng], { radius: 8, color: '#FFFFFF', weight: 3,
+          fillColor: '#2563EB', fillOpacity: 1, interactive: false }).addTo(map)
+          .bindTooltip('You are here', { direction: 'bottom', offset: [0, 10], className: 'echo-map-label' });
       }
-    } else if (liveDot) {
-      liveDot.remove(); liveRing.remove(); liveDot = liveRing = null;
+      liveDot.setTooltipContent(`You are here (±${Math.round(live.accuracy || 0)} m)`);
+      recentre.style.display = '';
+    } else {
+      lastLive = null;
+      if (liveDot) { liveDot.remove(); liveRing.remove(); liveDot = liveRing = null; }
+      recentre.style.display = 'none';
     }
   }
 
+  function setBase(name) {
+    if (!bases[name] || name === current) return current;
+    map.removeLayer(bases[current]);
+    bases[name].addTo(map);
+    bases[name].bringToBack();
+    current = name;
+    for (const b of switcher.querySelectorAll('[data-base]')) b.setAttribute('aria-pressed', String(b.dataset.base === current));
+    return current;
+  }
+
+  function focusLive() {
+    if (lastLive) map.setView([lastLive.lat, lastLive.lng], Math.max(map.getZoom(), 17));
+  }
+
+  /* Default / Satellite, and "centre on me". Plain buttons in a Leaflet
+     control, so a tap on them is not also a tap on the map. */
+  const switcher = L.DomUtil.create('div', 'leaflet-bar echo-map-bases');
+  switcher.setAttribute('role', 'group');
+  switcher.setAttribute('aria-label', 'Map type');
+  switcher.innerHTML = `
+    <button type="button" data-base="default" aria-pressed="true">Default</button>
+    <button type="button" data-base="satellite" aria-pressed="false" ${bases.satellite ? ''
+      : 'disabled title="Satellite imagery is not set up for this site yet"'}>Satellite</button>`;
+  const recentre = L.DomUtil.create('button', 'echo-map-recentre');
+  recentre.type = 'button';
+  recentre.textContent = '◎ My location';
+  recentre.setAttribute('aria-label', 'Centre the map on my location');
+  recentre.style.display = 'none';
+  const box = L.DomUtil.create('div', 'echo-map-tools');
+  box.append(switcher, recentre);
+  L.DomEvent.disableClickPropagation(box);
+  switcher.addEventListener('click', (e) => { const b = e.target.closest('[data-base]'); if (b && !b.disabled) setBase(b.dataset.base); });
+  recentre.addEventListener('click', focusLive);
+  const Tools = L.Control.extend({ onAdd: () => box });
+  new Tools({ position: 'topright' }).addTo(map);
+
+  /* A tap on the map itself (not on a marker or a control) is the student's
+     own point, exactly where they tapped. */
   map.on('click', (e) => onTap?.(e.latlng.lat, e.latlng.lng));
 
   const bounds = outline.getBounds();
@@ -419,7 +506,7 @@ export async function drawPickerMap(el, data, { onTap, ...state } = {}) {
   /* Leaflet measures the container on creation; inside a sheet that is
      still sliding in, that measurement is wrong until the next frame. */
   requestAnimationFrame(refresh);
-  return { map, sync, refresh, destroy: () => map.remove(), markers: groups };
+  return { map, sync, refresh, setBase, base: () => current, focusLive, destroy: () => map.remove(), markers: groups };
 }
 
 /** What to tell someone when there is no partner marker. */

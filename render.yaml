@@ -103,6 +103,11 @@ services:
       # kept only so switching back is one variable.
       - key: RESEND_API_KEY
         sync: false
+      # Optional. The campus picker's Satellite map (Esri World Imagery via the
+      # ArcGIS Location Platform). An ArcGIS access token with the basemap
+      # privilege only, restricted to the site's referrer. Unset = no Satellite.
+      - key: ARCGIS_BASEMAP_TOKEN
+        sync: false
 
       # ---- private object storage (Backblaze B2, S3-compatible) ------------
       - key: STORAGE_PROVIDER
