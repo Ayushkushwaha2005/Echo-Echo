@@ -20,7 +20,9 @@ const PRESENCE_COPY = {
     detail: 'Turn on precise location for your browser and try again, ideally outdoors.' },
   low_accuracy: {
     title: 'Your location is not precise enough',
-    detail: 'Move outdoors or somewhere with a clearer view of the sky and try again.' },
+    detail: `Ordering needs a location accurate to ${campus.GPS_MAX_ACCURACY_M} m or better. Laptops and desktops `
+      + 'usually locate by Wi-Fi, which is rarely that precise: open ECHO ECHO on your phone with location (GPS) '
+      + 'switched on, ideally outdoors, and try again.' },
   outside_campus: {
     title: 'You are not on campus',
     detail: 'ECHO ECHO only takes orders from students who are physically on campus.' },
@@ -32,6 +34,11 @@ import { assertRecentPasskey } from '../auth/passkey-policy.js';
 import { PLACE_TYPES, VERIFICATION_METHODS } from '../services/geo-import.js';
 
 const KINDS = ['campus', 'zone', 'building', 'floor', 'room', 'spot'];
+
+/* How old the browser says its fix was when it was sent, for the audit log
+   only. It proves nothing (the client wrote it) and gates nothing. */
+const fixAgeS = (t) => (Number.isFinite(Number(t)) && Number(t) > 1e12
+  ? Math.round((Date.now() - Number(t)) / 1000) : null);
 
 /* Which campus a read is about. A signed-in student cannot browse another
    campus's delivery points by passing an id. */
@@ -120,7 +127,7 @@ export default async function campusRoutes(app) {
   /* Live location. The coordinate is validated against the boundary here;
      the response is candidates to confirm, never a chosen destination. */
   app.post('/campus/locate', async (req) => {
-    const { lat, lng, accuracy } = req.body || {};
+    const { lat, lng, accuracy, timestamp } = req.body || {};
     /* Coerce only from an actual number or a numeric string. `Number(null)`
        is 0, and 0,0 is a real place in the Gulf of Guinea — a missing
        coordinate must be an error, never a silent position. */
@@ -131,7 +138,8 @@ export default async function campusRoutes(app) {
     };
     const out = await campus.resolveFix(coord(lat), coord(lng), { accuracy, campusId: await campusFor(req) });
     await audit(req, { action: 'campus.locate', outcome: 'ok',
-                       detail: { inside: out.inside, reason: out.reason } });
+                       detail: { inside: out.inside, reason: out.reason, accuracy: out.accuracy ?? null,
+                                 fixAgeS: fixAgeS(timestamp) } });
     return out;
   });
 
@@ -143,10 +151,16 @@ export default async function campusRoutes(app) {
     const campusId = await campusFor(req);
     const b = campusId ? await campus.boundary(campusId) : null;
     const destinations = b ? await campus.eligibleDestinations(campusId, b) : [];
+    /* The outline's own name is an internal record ("proposed from
+       OpenStreetMap"); a student is shown the campus's name. The centre is
+       the middle of the active outline, so the map opens on the campus
+       itself and never on wherever the browser thinks the student is. */
+    const site = campusId ? await one(`SELECT name FROM campus_site WHERE id = $1`, [campusId]) : null;
     return {
-      boundary: b ? { name: b.name, polygon: b.polygon } : null,
+      boundary: b ? { name: site?.name || 'Campus', polygon: b.polygon, center: campus.polygonCentre(b.polygon) } : null,
       destinations: destinations.map((n) => ({ id: n.id, name: n.name, lat: Number(n.lat), lng: Number(n.lng) })),
       pinRadiusM: campus.PIN_RADIUS_M,
+      maxAccuracyM: campus.GPS_MAX_ACCURACY_M,
     };
   });
 
@@ -162,8 +176,8 @@ export default async function campusRoutes(app) {
     await audit(req, { action: 'campus.pin', outcome: out.inside ? 'ok' : 'denied', detail: { reason: out.reason || null } });
     if (!out.inside) {
       const copy = PRESENCE_COPY[out.reason];
-      throw Forbidden(out.reason === 'outside_campus' ? 'That spot is not on campus' : copy.title,
-        out.reason === 'outside_campus' ? 'Choose a spot inside the campus outline.' : copy.detail);
+      throw Forbidden(out.reason === 'outside_campus' ? 'That spot is outside the campus delivery area.' : copy.title,
+        out.reason === 'outside_campus' ? 'Tap a spot inside the campus outline.' : copy.detail);
     }
     return out;
   });
@@ -182,7 +196,7 @@ export default async function campusRoutes(app) {
      never calls this is refused by the ordering gate rather than trusted. */
   app.post('/campus/presence', async (req) => {
     if (!req.actor) throw Unauthenticated('Sign in required');
-    const { lat, lng, accuracy } = req.body || {};
+    const { lat, lng, accuracy, timestamp } = req.body || {};
     const coord = (v) => {
       if (typeof v === 'number') return v;
       if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
@@ -193,7 +207,7 @@ export default async function campusRoutes(app) {
 
     if (!out.inside) {
       await audit(req, { action: 'campus.presence', outcome: 'denied',
-                         detail: { reason: out.reason, accuracy: out.accuracy ?? null } });
+                         detail: { reason: out.reason, accuracy: out.accuracy ?? null, fixAgeS: fixAgeS(timestamp) } });
       /* resolveFix's `note` is written for the delivery-spot picker ("choose
          your spot from the list"); this screen has no list, so it says what
          this gate means instead. */
@@ -211,7 +225,7 @@ export default async function campusRoutes(app) {
       [req.actor.tokenHash, coord(lat), coord(lng),
        Number.isFinite(Number(accuracy)) ? Number(accuracy) : null, campusId]);
     await audit(req, { action: 'campus.presence', outcome: 'ok',
-                       detail: { accuracy: out.accuracy ?? null, boundary: out.boundaryName } });
+                       detail: { accuracy: out.accuracy ?? null, boundary: out.boundaryName, fixAgeS: fixAgeS(timestamp) } });
 
     return { confirmed: true, boundaryName: out.boundaryName, accuracy: out.accuracy ?? null,
              candidates: out.candidates, confirmedAt: new Date().toISOString() };

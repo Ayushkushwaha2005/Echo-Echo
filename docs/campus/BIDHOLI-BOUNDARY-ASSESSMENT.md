@@ -57,7 +57,7 @@ photo's own signage, plate or caption place name):
 | 3rd/4th Block (Block 2), plate 2002 | 4 | 95 m |
 | Glass pyramid building | 4 | 56 m |
 | New Porta (Block 9), plate 9204 | 4 | 47 m |
-| Enrollment Office / The Huddle | 3 | **23 m** (#22) |
+| Enrollment Office / The HUBBLE | 3 | **23 m** (#22) |
 | R&D Block, **BOYS HOSTEL sign**, Tulips Cafe | 5 | 24 m (#90) |
 | Food court, Café Frisco, "CHA…" café | 5 | 68 m |
 | Energy Block | 2 | 46 m |
@@ -150,7 +150,7 @@ Confirm location). Positions below are the photographer's, not a counter or door
 | Café Frisco | #8 signboard "Café Frisco" | 30.416223, 77.968012 | inside, 74 m | pickup point, not a delivery destination; reading is ~10 m in front of the counter — pending |
 | Tulips Cafe | #91 signboard "Tulips CAFE" | 30.416383, 77.969702 | inside, 34 m | pickup point; ~10 m in front of the counter — pending |
 | Enrollment Office | #22 signboard | 30.416529, 77.966459 | inside, **23 m** | pending |
-| The Huddle | #23 signboard | 30.416423, 77.966492 | inside, 31 m | pending |
+| The HUBBLE | #23 signboard | 30.416423, 77.966492 | inside, 31 m | pending |
 | Career Services / Placement Block | #61 signboards | 30.418386, 77.967602 | inside, 33 m | pending |
 | Management Development Centre | #72 signboard | 30.418251, 77.969181 | inside, 46 m | pending |
 | Girls Hostel gate | #79 gate signboard | 30.418098, 77.969246 | inside, 42 m | pending; whether UPES allows hand-over at this gate is not established |
@@ -216,7 +216,7 @@ already stored; it cannot move one.
 
 **Opened to delivery (5), each at building level — the position is where the
 signboard was photographed, not a doorway:** Enrollment Office (#22), The
-Huddle (#23), Career Services / Placement Block (#61), Management Development
+HUBBLE (#23), Career Services / Placement Block (#61), Management Development
 Centre (#72), Energy Block (OSM building way 536452676, corroborated by
 captioned photos #25/#26).
 

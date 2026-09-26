@@ -11,6 +11,7 @@
    tree only as the prototype's fixtures. They are no longer the source of
    truth and must not be imported by a production surface.
    ========================================================================== */
+import { freshFix } from './geofix.js';
 
 /* The API base is injected by the page (see each surface's index.html, which
    the build rewrites for the target environment). It is deliberately NOT
@@ -196,35 +197,30 @@ export const quad = {
   saveAddress: (a) => put('/me/address', a),
   deleteAddress: () => del('/me/address'),
   campusResolve: (text) => post('/campus/resolve', { text }),
-  /* Real browser geolocation. The coordinate is only ever a claim; the
-     server decides whether it is inside campus and what it is near. */
-  locate: () => new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error('This browser cannot share location'));
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve(post('/campus/locate', {
-        lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy })),
-      (err) => reject(new Error(
-        err.code === err.PERMISSION_DENIED ? 'Location permission was denied'
-        : err.code === err.POSITION_UNAVAILABLE ? 'Your location is unavailable'
-        : 'Timed out finding your location')),
-      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 30_000 });
-  }),
+  /* Real browser geolocation: one fresh, high-accuracy reading (see
+     geofix.js). The coordinate is only ever a claim; the server decides
+     whether it is precise enough, inside campus, and what it is near. The
+     reading itself comes back as `fix` so the map can show it - only after
+     the server has accepted it. */
+  locate: async ({ onReading } = {}) => {
+    const fix = await freshFix({ onReading });
+    return { ...(await post('/campus/locate', fix)), fix };
+  },
   /* The live-location gate. Unlike locate(), a refusal here is a refusal:
      the server records the pass on the session, and ordering needs it. */
-  confirmPresence: () => new Promise((resolve, reject) => {
-    if (!navigator.geolocation) {
-      return reject(new Error('This browser cannot share your location, so ordering cannot be opened.'));
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => resolve(post('/campus/presence', {
-        lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy })),
-      (err) => reject(new Error(
-        err.code === err.PERMISSION_DENIED
+  confirmPresence: async ({ onReading } = {}) => {
+    let fix;
+    try {
+      fix = await freshFix({ onReading });
+    } catch (e) {
+      throw new Error(e.code === 'unsupported'
+        ? 'This browser cannot share your location, so ordering cannot be opened.'
+        : e.code === 'denied'
           ? 'Location permission was denied. ECHO ECHO can only take orders from students on campus, so it needs to check where you are.'
-        : err.code === err.POSITION_UNAVAILABLE ? 'Your location is unavailable right now. Try again outdoors.'
-        : 'Finding your location took too long. Try again outdoors.')),
-      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 });
-  }),
+        : e.message);
+    }
+    return { ...(await post('/campus/presence', fix)), fix };
+  },
   campusZones: (campusId) => get('/campus/zones' + qs({ campusId })),
   createLocation: (data) => post('/campus/nodes', data),
   updateLocation: (id, patchBody) => patch(`/campus/nodes/${id}`, patchBody),

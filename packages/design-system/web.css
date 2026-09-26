@@ -565,6 +565,24 @@ textarea.input { resize: vertical; min-height: 72px; }
   color:#1C1917;box-shadow:0 1px 4px rgba(28,25,23,.25)}
 .echo-map-label::before{display:none}
 .segrow{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+/* What each thing on the picker map means, in words next to its swatch. */
+.maplegend{display:flex;flex-wrap:wrap;gap:4px 14px}
+.maplegend span{display:inline-flex;align-items:center;gap:6px}
+.maplegend .lg{display:inline-block;width:12px;height:12px;border-radius:50%;flex:none}
+.maplegend .lg-dest{background:#2F7D5F;border:2px solid #fff;box-shadow:0 0 0 1px rgba(28,25,23,.25)}
+.maplegend .lg-pin{background:#E0567A;border:2px solid #fff;box-shadow:0 0 0 1px rgba(28,25,23,.25)}
+.maplegend .lg-live{background:#2563EB;border:2px solid #fff;box-shadow:0 0 0 3px rgba(37,99,235,.25)}
+.maplegend .lg-area{border-radius:3px;border:2px dashed #E0567A;background:rgba(224,86,122,.08)}
+
+/* The picker sheet on a phone. It is re-rendered while it is open (a tap's
+   answer, a chosen point), so a re-render of the same sheet must not slide
+   it in again; its scroll stays inside it rather than dragging the page
+   behind; and the confirm button clears the home indicator. */
+.sheet.still,.scrim.still{animation:none}
+.site .sheet-body{overscroll-behavior:contain;-webkit-overflow-scrolling:touch;min-height:0}
+.site .sheet{max-height:88dvh}
+.site .sheet-foot{padding-bottom:calc(var(--s-4) + env(safe-area-inset-bottom))}
+@media (min-width:1024px){ .site .sheet{max-height:82vh} }
 /* Leaflet's own controls, toned to the product rather than its defaults. */
 .leaflet-container{font:inherit}
 .leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.82)}

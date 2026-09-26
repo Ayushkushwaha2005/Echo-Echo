@@ -63,7 +63,7 @@ test('the plan decides every production location, and opens only building-level 
   assert.equal(byName('MAC').lat, null);
   const open = PLAN.locations.filter((l) => l.decision === 'deliver').map((l) => l.name).sort();
   assert.deepEqual(open, ['Career Services / Placement Block', 'Enrollment Office',
-                          'Management Development Centre', 'The Huddle']);
+                          'Management Development Centre', 'The HUBBLE']);
   assert.equal(byName('Energy Block').decision, 'pending', 'removed at the owner\'s direction (migration 023)');
   for (const l of PLAN.locations) {
     if (l.decision === 'deliver') { assert.ok(l.lat != null && l.evidence && l.confirmation.length >= 10, l.name); }
@@ -91,7 +91,7 @@ test('applying it opens exactly four destinations, and delivery with them', asyn
   assert.match(out.stdout, /4 location\(s\) confirmed and opened/);
 
   const s = await states();
-  for (const n of ['Enrollment Office', 'The Huddle', 'Career Services / Placement Block', 'Management Development Centre']) {
+  for (const n of ['Enrollment Office', 'The HUBBLE', 'Career Services / Placement Block', 'Management Development Centre']) {
     assert.equal(s[n].verification, 'confirmed', n);
     assert.equal(s[n].deliverable && s[n].delivery_enabled, true, n);
     assert.equal(s[n].verified_by, owner.id, n);
@@ -127,10 +127,10 @@ test('applying it opens exactly four destinations, and delivery with them', asyn
 });
 
 test('a plan that disagrees with the database is refused whole', async () => {
-  await pool.query(`UPDATE campus_node SET lat = lat + 0.0001 WHERE id = $1`, [byName('The Huddle').id]);
+  await pool.query(`UPDATE campus_node SET lat = lat + 0.0001 WHERE id = $1`, [byName('The HUBBLE').id]);
   const out = script('--apply');
   assert.equal(out.status, 1);
-  assert.match(out.stderr, /The Huddle: stored position .* differs/);
+  assert.match(out.stderr, /The HUBBLE: stored position .* differs/);
   assert.equal(await openCount(), 0, 'nothing was written, not even the entries that matched');
 });
 

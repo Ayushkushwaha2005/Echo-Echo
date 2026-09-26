@@ -18,6 +18,7 @@ const FILES = [
   ['unit', 'test/money-and-config.test.mjs'],
   ['unit', 'test/pipeline.test.mjs'],
   ['unit', 'test/ai-contract.test.mjs'],
+  ['unit', 'test/geofix.test.mjs'],
   ['integration', 'test/integration.test.mjs'],
   ['api', 'test/api.test.mjs'],
   ['api', 'test/menu.test.mjs'],

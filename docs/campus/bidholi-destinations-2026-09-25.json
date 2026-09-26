@@ -4,6 +4,9 @@
   "reviewed": "2026-09-25",
   "basis": "docs/campus/BIDHOLI-BOUNDARY-ASSESSMENT.md §6; readings in docs/campus/bidholi-boundary-audit.csv",
   "rule": "A destination is opened only where a photograph (or an OSM building corroborated by captioned photographs) fixes the BUILDING. Photographer positions are not promoted to doorways or counters. Rooms, hostel gates and café counters stay pending.",
+  "corrections": [
+    "25 Sep 2026 (migration 024): \"The Huddle\" renamed \"The HUBBLE\". The signboard in photo #23 reads THE HUBBLE; the earlier transcription was wrong. Same row, id, position and confirmation."
+  ],
   "locations": [
     {
       "id": "a5a5d56f-f0d7-4709-a8b2-105a031cf0b1",
@@ -18,14 +21,14 @@
     },
     {
       "id": "73f3a03f-456b-4b73-8274-7b9f90cfbc24",
-      "name": "The Huddle",
+      "name": "The HUBBLE",
       "decision": "deliver",
       "lat": 30.416423,
       "lng": 77.966492,
       "placeType": "student_facility",
       "method": "gps_on_site",
-      "evidence": "Photo #23 (20260916_41105PMByGPSMapCamera.jpg) of the \"THE HUDDLE\" signboard, 30.416423, 77.966492, taken from the approach path ~30 m from the entrance; #24 also shows the sign. 31 m inside the boundary.",
-      "confirmation": "Owner-directed confirmation 25 Sep 2026 from audited evidence (docs/campus/BIDHOLI-BOUNDARY-ASSESSMENT.md): Photo #23 (20260916_41105PMByGPSMapCamera.jpg) of the \"THE HUDDLE\" signboard, 30.416423, 77.966492, taken from the approach path ~30 m from the entrance; #24 also shows the sign. 31 m inside the boundary. Building-level destination; the position is not a doorway."
+      "evidence": "Photo #23 (20260916_41105PMByGPSMapCamera.jpg) of the \"THE HUBBLE\" signboard, 30.416423, 77.966492, taken from the approach path ~30 m from the entrance; #24 also shows the sign. 31 m inside the boundary.",
+      "confirmation": "Owner-directed confirmation 25 Sep 2026 from audited evidence (docs/campus/BIDHOLI-BOUNDARY-ASSESSMENT.md): Photo #23 (20260916_41105PMByGPSMapCamera.jpg) of the \"THE HUBBLE\" signboard, 30.416423, 77.966492, taken from the approach path ~30 m from the entrance; #24 also shows the sign. 31 m inside the boundary. Building-level destination; the position is not a doorway."
     },
     {
       "id": "af96848b-1a66-41e5-8488-4950f1999fc6",

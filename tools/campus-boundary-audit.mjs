@@ -85,7 +85,7 @@ const AREA_RULES = [
   [/GIRLS HOSTEL/i, 'Girls Hostel gate'], [/BOYS HOSTEL/i, 'R&D Block / Boys Hostel approach'],
   [/Tulips/i, 'R&D Block / Tulips Cafe'], [/Frisco/i, 'Food court / Café Frisco'],
   [/CHA\.\.\./i, 'Food court / "CHA…" café'], [/Food Court/i, 'Food court'],
-  [/ENROLLMENT|HUDDLE/i, 'Enrollment Office / The Huddle'], [/CAREER|Placement/i, 'Placement Block / Career Services'],
+  [/ENROLLMENT|HUBBLE|HUDDLE/i, 'Enrollment Office / The HUBBLE'], [/CAREER|Placement/i, 'Placement Block / Career Services'],
   [/MANAGEMENT/i, 'Management Development Centre'], [/Management Block/i, 'Management Block'],
   [/^1\d{3}$|Main Block|IT\. DEP/i, 'Main Block (Block 1)'], [/^2\d{3}$|3rd And 4th Block/i, '3rd/4th Block (Block 2)'],
   [/^9\d{3}$|New Porta/i, 'New Porta (Block 9)'], [/^11\d{3}$|FOOD TECHNOLOGY|Chitrakoot/i, 'Block 11 (Chitrakoot)'],

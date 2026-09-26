@@ -67,11 +67,43 @@ function loadLeaflet() {
   return leafletPromise;
 }
 
+/* ---------- the tiles ------------------------------------------------------
+   OpenStreetMap's own tile server, under its tile usage policy
+   (https://operations.osmfoundation.org/policies/tiles/):
+
+   - the documented HTTPS URL, tile.openstreetmap.org/{z}/{x}/{y}.png;
+   - "© OpenStreetMap contributors" visible on the map, linked to the
+     copyright page (Leaflet's attribution control, never hidden);
+   - a Referer on every tile request. This is what broke the maps: the site
+     sends `Referrer-Policy: no-referrer` on every page (so an order or
+     session URL never leaks to a third party), which stripped the Referer
+     from the tile images too, and OSM answers a browser tile request without
+     one with its "Access blocked" image. The tile images alone opt back in
+     with `strict-origin-when-cross-origin`, the browser's normal default:
+     OSM receives only the site's origin (https://<host>/), never a path;
+   - the browser's normal HTTP cache, honouring OSM's Cache-Control. No
+     cache-busting parameters, no no-cache headers, no prefetching or bulk
+     download, no retry loop: a tile that fails stays failed until the
+     student pans back to it;
+   - maxZoom 19, the deepest zoom OSM serves.
+
+   The picker also limits panning to around the campus (maxBounds), so a
+   session loads the few dozen tiles of one campus rather than wandering. */
+export const OSM_TILES = {
+  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  options: {
+    maxZoom: 19,
+    referrerPolicy: 'strict-origin-when-cross-origin',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  },
+};
+const osmTiles = (L) => L.tileLayer(OSM_TILES.url, OSM_TILES.options);
+
 /* A round pin, drawn in CSS rather than fetched as an image, so the map has
    no second network dependency and matches the product's palette. */
 const pin = (L, colour, glyph, title) => L.divIcon({
   className: 'echo-pin-wrap',
-  html: `<span class="echo-pin" style="--pin:${colour}" title="${title}">${glyph}</span>`,
+  html: `<span class="echo-pin" style="--pin:${colour}" title="${escapeText(title)}">${escapeText(glyph)}</span>`,
   iconSize: [30, 30],
   iconAnchor: [15, 15],
 });
@@ -122,11 +154,7 @@ export async function drawTrackingMap(el, tracking, { self = null } = {}) {
   el.classList.add('echo-map');
   const map = L.map(el, { zoomControl: true, attributionControl: true, scrollWheelZoom: false });
 
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    /* Required by the OSM tile usage policy. */
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  }).addTo(map);
+  osmTiles(L).addTo(map);
 
   /* The confirmed campus outline, so it is obvious this is a campus-only
      service and where its edge is. */
@@ -197,10 +225,7 @@ export async function drawCampusMap(el, { nodes = [], boundaries = [] } = {}) {
   el.innerHTML = '';
   el.classList.add('echo-map');
   const map = L.map(el, { zoomControl: true, attributionControl: true, scrollWheelZoom: false });
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  }).addTo(map);
+  osmTiles(L).addTo(map);
 
   const bounds = [];
   for (const b of outlines) {
@@ -226,23 +251,82 @@ export async function drawCampusMap(el, { nodes = [], boundaries = [] } = {}) {
   return map;
 }
 
+/* Delivery points closer together than this are drawn as ONE marker naming
+   all of them. The Enrollment Office and The HUBBLE were recorded 12 m
+   apart: as two pins they sit on top of each other at campus zoom and read
+   as one unexplained dot. One marker, both names, is the honest picture. */
+export const GROUP_WITHIN_M = 30;
+
+const metres = (a, b) => {
+  const R = 6371000, rad = (d) => (d * Math.PI) / 180;
+  const s = Math.sin(rad(b.lat - a.lat) / 2) ** 2
+    + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lng - a.lng) / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+};
+
+/**
+ * Exactly the markers the student's picker draws for the destinations the
+ * server sent: one per group of points within GROUP_WITHIN_M, placed at the
+ * group's mean position and named after every member. Nothing else - no
+ * room, no pending place, no field-photo reading - can appear, because
+ * nothing else is in `destinations` (GET /campus/map sends only eligible
+ * ones). Pure, so it is tested without a browser.
+ */
+export function destinationMarkers(destinations = []) {
+  const groups = [];
+  for (const d of destinations) {
+    if (!Number.isFinite(d.lat) || !Number.isFinite(d.lng)) continue;
+    const g = groups.find((x) => x.members.some((m) => metres(m, d) <= GROUP_WITHIN_M));
+    if (g) g.members.push(d); else groups.push({ members: [d] });
+  }
+  const out = groups.map(({ members }) => ({
+    ids: members.map((m) => m.id),
+    names: members.map((m) => m.name),
+    label: members.map((m) => m.name).join(' · '),
+    lat: members.reduce((t, m) => t + m.lat, 0) / members.length,
+    lng: members.reduce((t, m) => t + m.lng, 0) / members.length,
+    labelSide: 'top',
+  }));
+  /* Labels are always shown (a phone has no hover), so two markers side by
+     side must not stack their labels on one line: going west to east, a
+     marker whose western neighbour is close and level with it puts its label
+     underneath instead. */
+  const ordered = [...out].sort((a, b) => a.lng - b.lng);
+  for (const [i, g] of ordered.entries()) {
+    const clash = ordered.slice(0, i).some((w) => w.labelSide === 'top'
+      && Math.abs(g.lat - w.lat) * 111_320 < 80
+      && Math.abs(g.lng - w.lng) * 111_320 * Math.cos((g.lat * Math.PI) / 180) < 250);
+    if (clash) g.labelSide = 'bottom';
+  }
+  return out;
+}
+
 /**
  * The student's delivery picker: the active campus outline, the confirmed
- * destinations they may choose, and a pin where they tap.
+ * delivery points, the spot they tapped, and - only once the server has
+ * accepted a live reading - where they are.
  *
  * A tap is only reported to `onTap(lat, lng)`; this function decides nothing.
  * The caller sends the point to the server (POST /campus/pin), which alone
- * says whether it is on campus and which destinations are near it. Tapping
- * outside the outline is still reported - the server's refusal is what the
- * student sees, not a check made here that a modified page could skip.
+ * says whether it is on campus and which delivery points are near it, and
+ * then tells the map how the pin fared with sync(). Tapping outside the
+ * outline is still reported: the server's refusal is what the student sees,
+ * not a check made here that a modified page could skip.
  *
- * @param el      the container element
- * @param data    GET /campus/map: { boundary, destinations }
- * @param opts.chosenPin optional { lat, lng } already chosen
- * @param opts.selectedId optional destination id already chosen
- * @param opts.onTap     (lat, lng) => void
+ * Returns a controller, so the page can update the map in place instead of
+ * rebuilding it (and losing the student's zoom) on every change:
+ *   sync({ pin, pinStatus, selectedId, live })
+ *     pin        { lat, lng } or null - the student's tapped spot
+ *     pinStatus  'checking' | 'ok' | 'refused'
+ *     selectedId the chosen destination's id, highlighted
+ *     live       { lat, lng, accuracy } of an ACCEPTED live reading, or null
+ *   refresh()    re-measure after the container moved or resized
+ *   destroy()
+ *
+ * @param el   the container element
+ * @param data GET /campus/map: { boundary: { name, polygon, center }, destinations }
  */
-export async function drawPickerMap(el, data, { chosenPin = null, selectedId = null, onTap } = {}) {
+export async function drawPickerMap(el, data, { onTap, ...state } = {}) {
   if (!data?.boundary?.polygon?.length) {
     el.innerHTML = `<div class="map-empty"><p class="t-sm muted">The campus map is not available yet.</p></div>`;
     return null;
@@ -251,40 +335,91 @@ export async function drawPickerMap(el, data, { chosenPin = null, selectedId = n
   try {
     L = await loadLeaflet();
   } catch {
-    el.innerHTML = `<div class="map-empty"><p class="t-sm muted">The map could not load. Choose a spot from the list instead.</p></div>`;
+    el.innerHTML = `<div class="map-empty"><p class="t-sm muted">The map could not load. Choose a delivery point from the list below instead.</p></div>`;
     return null;
   }
   el.innerHTML = '';
   el.classList.add('echo-map');
-  const map = L.map(el, { zoomControl: true, attributionControl: true, scrollWheelZoom: false });
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  }).addTo(map);
+  const map = L.map(el, {
+    zoomControl: true, attributionControl: true, scrollWheelZoom: false,
+    /* The map opens on the campus, never on the browser's idea of where the
+       student is: the middle of the active outline first, then fitted to it. */
+    center: data.boundary.center || data.boundary.polygon[0], zoom: 16,
+  });
+  osmTiles(L).addTo(map);
 
   const outline = L.polygon(data.boundary.polygon, {
-    color: '#E0567A', weight: 2, opacity: 0.85, fillColor: '#E0567A', fillOpacity: 0.06, dashArray: '6,5',
-  }).addTo(map).bindTooltip(data.boundary.name || 'Campus');
+    color: '#E0567A', weight: 2, opacity: 0.9, fillColor: '#E0567A', fillOpacity: 0.07, dashArray: '6,5',
+    interactive: false,
+  }).addTo(map);
 
-  for (const d of data.destinations || []) {
-    const chosen = d.id === selectedId;
-    L.marker([d.lat, d.lng], {
-      icon: pin(L, chosen ? '#E0567A' : '#1C1917', chosen ? '📍' : '●', d.name), keyboard: true, title: d.name,
+  const groups = destinationMarkers(data.destinations);
+  const markers = groups.map((g) => {
+    const m = L.marker([g.lat, g.lng], {
+      icon: pin(L, '#2F7D5F', g.ids.length > 1 ? String(g.ids.length) : '🍴', g.label),
+      keyboard: true, title: g.label, riseOnHover: true,
     }).addTo(map)
-      .bindTooltip(escapeText(d.name), { direction: 'top', offset: [0, -14], className: 'echo-map-label' })
-      .on('click', () => place(d.lat, d.lng));
+      .bindTooltip(escapeText(g.label), { permanent: true, direction: g.labelSide,
+        offset: g.labelSide === 'top' ? [0, -16] : [0, 16], className: 'echo-map-label' })
+      .on('click', () => onTap?.(g.lat, g.lng));
+    return { g, m };
+  });
+
+  let tapped = null, liveDot = null, liveRing = null;
+  const PIN_LOOK = {
+    checking: { colour: '#8A817C', glyph: '…', label: 'Checking this spot' },
+    ok: { colour: '#E0567A', glyph: '📍', label: 'Your spot' },
+    refused: { colour: '#8A817C', glyph: '✕', label: 'Outside the campus delivery area' },
+  };
+  const pinIcon = (status) => {
+    const look = PIN_LOOK[status] || PIN_LOOK.ok;
+    return pin(L, look.colour, look.glyph, look.label);
+  };
+
+  function sync({ pin: at = null, pinStatus = 'ok', selectedId = null, live = null } = {}) {
+    if (at) {
+      if (tapped) tapped.setLatLng([at.lat, at.lng]).setIcon(pinIcon(pinStatus));
+      else tapped = L.marker([at.lat, at.lng], { icon: pinIcon(pinStatus), zIndexOffset: 1000, keyboard: false }).addTo(map);
+    } else if (tapped) {
+      tapped.remove(); tapped = null;
+    }
+    for (const { g, m } of markers) {
+      const chosen = selectedId && g.ids.includes(selectedId);
+      m.setIcon(pin(L, chosen ? '#E0567A' : '#2F7D5F',
+        chosen ? '✓' : g.ids.length > 1 ? String(g.ids.length) : '🍴', g.label));
+    }
+    /* Where the student is: drawn only from a reading the server accepted,
+       with its accuracy as a circle, so a ±20 m fix is not shown as a point. */
+    if (live && Number.isFinite(live.lat) && Number.isFinite(live.lng)) {
+      if (liveDot) {
+        liveDot.setLatLng([live.lat, live.lng]);
+        liveRing.setLatLng([live.lat, live.lng]).setRadius(live.accuracy || 0);
+      } else {
+        liveRing = L.circle([live.lat, live.lng], { radius: live.accuracy || 0, color: '#2563EB', weight: 1,
+          opacity: 0.5, fillColor: '#2563EB', fillOpacity: 0.12, interactive: false }).addTo(map);
+        liveDot = L.circleMarker([live.lat, live.lng], { radius: 7, color: '#FFFFFF', weight: 3,
+          fillColor: '#2563EB', fillOpacity: 1, interactive: false }).addTo(map);
+      }
+    } else if (liveDot) {
+      liveDot.remove(); liveRing.remove(); liveDot = liveRing = null;
+    }
   }
-  /* The student's pin: where they last tapped. It moves; nothing else does. */
-  const style = { radius: 9, color: '#E0567A', weight: 3, fillColor: '#FFFFFF', fillOpacity: 1 };
-  let tapped = chosenPin ? L.circleMarker([chosenPin.lat, chosenPin.lng], style).addTo(map) : null;
-  function place(lat, lng) {
-    if (tapped) tapped.setLatLng([lat, lng]); else tapped = L.circleMarker([lat, lng], style).addTo(map);
-    onTap?.(lat, lng);
-  }
-  map.on('click', (e) => place(e.latlng.lat, e.latlng.lng));
-  map.fitBounds(outline.getBounds(), { padding: [12, 12], maxZoom: 18 });
-  requestAnimationFrame(() => map.invalidateSize());
-  return map;
+
+  map.on('click', (e) => onTap?.(e.latlng.lat, e.latlng.lng));
+
+  const bounds = outline.getBounds();
+  map.fitBounds(bounds, { padding: [16, 16], maxZoom: 18 });
+  /* Keep the view on campus: a little room to pan around the edge, and no
+     zooming out to the whole district. */
+  map.setMaxBounds(bounds.pad(0.6));
+  map.setMinZoom(Math.max(14, map.getZoom() - 1));
+  sync(state);
+
+  const refresh = () => map.invalidateSize();
+  /* Leaflet measures the container on creation; inside a sheet that is
+     still sliding in, that measurement is wrong until the next frame. */
+  requestAnimationFrame(refresh);
+  return { map, sync, refresh, destroy: () => map.remove(), markers: groups };
 }
 
 /** What to tell someone when there is no partner marker. */

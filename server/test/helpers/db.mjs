@@ -378,11 +378,11 @@ async function truncateOnce(pool) {
   await pool.query(
     `UPDATE campus_site SET service_status = CASE slug WHEN 'upes-bidholi' THEN 'active' ELSE 'coming_soon' END`);
   /* campus_block references campus_node, so the CASCADE above empties it.
-     Restore the blocks migration 023 seeds, numbers only. */
+     Restore the blocks migrations 023 and 025 seed, numbers only. */
   await pool.query(`
     INSERT INTO campus_block (campus_site_id, number, label, evidence)
-    SELECT c.id, n, 'Block ' || n, 'Test fixture mirroring migration 023.'
-      FROM campus_site c, unnest(ARRAY[1,2,3,4,8,9,11]) AS n
+    SELECT c.id, n, 'Block ' || n, 'Test fixture mirroring migrations 023 and 025.'
+      FROM campus_site c, unnest(ARRAY[1,2,3,4,5,6,7,8,9,10,11]) AS n
      WHERE c.slug = 'upes-bidholi'
     ON CONFLICT DO NOTHING`);
   await pool.query(`

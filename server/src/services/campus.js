@@ -20,7 +20,7 @@ import { VERIFICATION_METHODS } from './geo-import.js';
 
 /* Worst GPS uncertainty (metres) a live-location fix may have and still be
    used to suggest delivery spots. Phones outdoors report ~5-20 m. */
-const GPS_MAX_ACCURACY_M = Number(process.env.CAMPUS_GPS_MAX_ACCURACY_M || 100);
+export const GPS_MAX_ACCURACY_M = Number(process.env.CAMPUS_GPS_MAX_ACCURACY_M || 100);
 
 export async function tree(campusId = null) {
   const { rows } = await q(
@@ -113,6 +113,12 @@ export function metresBetween(a, b) {
   const s = Math.sin(dLat / 2) ** 2 +
     Math.cos(rad(a[0])) * Math.cos(rad(b[0])) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+/* The middle of an outline's bounding box: where a campus map opens. */
+export function polygonCentre(polygon) {
+  const lats = polygon.map((p) => Number(p[0])), lngs = polygon.map((p) => Number(p[1]));
+  return [(Math.min(...lats) + Math.max(...lats)) / 2, (Math.min(...lngs) + Math.max(...lngs)) / 2];
 }
 
 export function pointInPolygon(lat, lng, polygon) {
@@ -228,7 +234,7 @@ export async function resolvePin(lat, lng, { campusId }) {
     .filter((c) => c.metres <= PIN_RADIUS_M)
     .sort((x, y) => x.metres - y.metres);
   return { inside: true, boundaryName: b.name, candidates,
-           note: candidates.length ? null : 'No delivery point is close to that spot yet. Choose one from the list.' };
+           note: candidates.length ? null : 'Choose a supported delivery point or select a different spot.' };
 }
 
 /* The pin on an order: inside the outline, and near the destination it came
@@ -239,7 +245,7 @@ export async function assertPin(pin, node) {
   const lng = typeof pin?.lng === 'number' ? pin.lng : NaN;
   const out = await resolvePin(lat, lng, { campusId: node.campus_site_id });
   if (!out.inside) {
-    throw Forbidden('That spot is not on campus', 'Choose a spot inside the campus outline on the map.');
+    throw Forbidden('That spot is outside the campus delivery area.', 'Choose a spot inside the campus outline on the map.');
   }
   if (!out.candidates.some((c) => c.id === node.id)) {
     throw BadRequest(`Your map pin is not near ${node.name}`, 'Choose the delivery point closest to your pin.');
@@ -399,9 +405,9 @@ export async function resolveFix(lat, lng, { accuracy, campusId = null } = {}) {
              note: 'Your device did not report how accurate its location is. Choose your spot from the list instead.' };
   }
   if (acc > GPS_MAX_ACCURACY_M) {
-    return { inside: false, reason: 'low_accuracy', accuracy: acc, candidates: [],
-             note: `Your location is only accurate to about ${Math.round(acc)} m. ` +
-                   'Move outdoors or choose your spot from the list instead.' };
+    return { inside: false, reason: 'low_accuracy', accuracy: acc, maxAccuracyM: GPS_MAX_ACCURACY_M, candidates: [],
+             note: `Your location is only accurate to about ${Math.round(acc)} m; it needs to be within ` +
+                   `${GPS_MAX_ACCURACY_M} m. Use your phone's GPS outdoors, or select the spot on the map instead.` };
   }
   if (!pointInPolygon(lat, lng, b.polygon)) {
     return { inside: false, reason: 'outside_campus', boundaryName: b.name, candidates: [] };
