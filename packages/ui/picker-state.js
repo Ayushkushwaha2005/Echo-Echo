@@ -48,3 +48,34 @@ export function destinationChosen(dest, { pin = null, path = '' } = {}) {
     ...(pin ? {} : { pick: null }),
   };
 }
+
+/** The student pressed "Use this spot": their exact point is kept as the spot. */
+export function mapPointConfirmed(state) {
+  const p = state.pick;
+  if (!p || p.pending || p.error || !p.candidates?.length) return null;
+  return { pick: { ...p, confirmed: true } };
+}
+
+/**
+ * The picker's bottom button, with the reason whenever it cannot be pressed.
+ * "I selected this point" and "this point can be delivered to" are separate:
+ * a point is kept and shown whatever the answer, but an order must name a
+ * confirmed delivery point (the server re-checks the spot is within reach of
+ * it), so the student - never this code - chooses one for their spot.
+ *   { label, enabled, act, reason }
+ */
+export function pickerCta({ pick = null, destination = null } = {}) {
+  if (destination) {
+    return { label: destination.pin ? `Deliver to your spot near ${destination.name}` : `Deliver to ${destination.name}`,
+             enabled: true, act: 'closeSheet', reason: null };
+  }
+  const off = (label, reason) => ({ label, enabled: false, act: null, reason });
+  if (!pick) return off('Choose a spot', 'Tap the map, or choose a delivery point from the list.');
+  if (pick.pending) return off('Checking your spot…', null);
+  if (pick.error) return off('Choose a spot', `This spot is outside the supported delivery area. ${pick.error}`);
+  if (!pick.candidates?.length) {
+    return off('Choose a spot', 'This spot is inside campus but is not currently supported for delivery: no delivery point is within reach of it.');
+  }
+  if (!pick.confirmed) return { label: 'Use this spot', enabled: true, act: 'useSpot', reason: null };
+  return off('Choose a handover point', 'Your spot is saved. Choose which delivery point near it the rider should come to.');
+}

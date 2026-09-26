@@ -520,3 +520,36 @@ test('the Satellite base map: only from server config, credited, and never in th
   assert.equal(b.satellite.options.attribution, t.attribution);
   assert.equal(b.satellite.options.referrerPolicy, 'strict-origin-when-cross-origin');
 });
+
+test('the picker button: a tapped spot can be used, every refusal says why, nothing is chosen for the student', async () => {
+  const { mapPointChosen, mapPointAnswered, mapPointConfirmed, destinationChosen, pickerCta } = await PICK;
+  const hubble = place('The HUBBLE');
+  assert.deepEqual([pickerCta({}).enabled, Boolean(pickerCta({}).reason)], [false, true]);
+
+  let S = { destination: null, ...mapPointChosen(30.41645, 77.96655) };
+  const pin = S.pick.pin;
+  assert.equal(pickerCta(S).enabled, false, 'still checking');
+  /* Eligible: inside, a delivery point within reach. The button is usable. */
+  Object.assign(S, mapPointAnswered(S, pin, { candidates: [{ id: hubble.id, name: 'The HUBBLE', metres: 20 }] }));
+  assert.deepEqual([pickerCta(S).label, pickerCta(S).enabled, pickerCta(S).act], ['Use this spot', true, 'useSpot']);
+  Object.assign(S, mapPointConfirmed(S));
+  assert.deepEqual(S.pick.pin, pin, 'the exact point is kept');
+  assert.equal(S.destination, null, 'using the spot selects no delivery point - not The HUBBLE');
+  assert.match(pickerCta(S).reason, /Choose which delivery point/);
+  /* The student chooses; the order carries their exact spot. */
+  Object.assign(S, destinationChosen(hubble, { pin: S.pick.pin }));
+  assert.deepEqual(S.destination.pin, pin);
+  assert.deepEqual([pickerCta(S).enabled, pickerCta(S).label], [true, 'Deliver to your spot near The HUBBLE']);
+
+  /* Refusals: disabled, with a reason, never a silent substitute. */
+  for (const [answer, re] of [[{ error: 'That spot is outside the campus delivery area.' }, /outside the supported delivery area/],
+                              [{ candidates: [] }, /inside campus but is not currently supported/]]) {
+    const T = { destination: null, ...mapPointChosen(30.4, 77.9) };
+    Object.assign(T, mapPointAnswered(T, T.pick.pin, answer));
+    const c = pickerCta(T);
+    assert.equal(c.enabled, false);
+    assert.match(c.reason, re);
+    assert.equal(mapPointConfirmed(T), null, 'an ineligible spot cannot be used');
+    assert.equal(T.destination, null);
+  }
+});

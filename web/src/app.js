@@ -19,7 +19,7 @@
 import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/data/client.js';
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
 import { campusOption } from '../../packages/ui/campus-option.js';
-import { mapPointChosen, mapPointAnswered, destinationChosen } from '../../packages/ui/picker-state.js';
+import { mapPointChosen, mapPointAnswered, mapPointConfirmed, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
 
 restoreTheme();
 
@@ -2011,8 +2011,16 @@ function PinResults() {
     return `<div class="campusnote" role="status">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">${
       esc(at)}. It is not a delivery point. ${esc(PICK_UNSUPPORTED)}</p></div>`;
   }
-  return `<p class="t-xs faint">${esc(at)}. It is not itself a delivery point; choose the delivery point to bring it to:</p>`
+  return `<p class="t-xs faint">${esc(at)}. ${p.confirmed ? 'Spot saved. Deliveries are handed over at a confirmed delivery point: choose the one the rider should come to for your spot:'
+    : 'It is not itself a delivery point. Press “Use this spot” to keep it, then choose the delivery point near it:'}</p>`
     + p.candidates.map((c) => DestChoice(c, `~${c.metres} m from your pin`, p.pin)).join('');
+}
+
+/* The bottom button: never disabled without saying why. See pickerCta(). */
+function PickerFoot() {
+  const c = pickerCta(S);
+  return `<div class="sheet-foot stack g1">${c.reason ? `<p class="t-xs muted" role="status" id="pick-reason">${esc(c.reason)}</p>` : ''}
+    <button class="btn btn-primary btn-block btn-lg" ${c.enabled ? `data-act="${c.act}"` : 'disabled aria-describedby="pick-reason"'}>${esc(c.label)}</button></div>`;
 }
 
 /* What the server said about the last live-location reading. */
@@ -2089,8 +2097,7 @@ function Sheet() {
         <div class="campusnote">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">
           ${BRAND} delivers on campus only, so there is nowhere to type a street address. Off campus is not hidden away in a menu somewhere; the system has no way to store one.</p></div>
       </div>
-      <div class="sheet-foot"><button class="btn btn-primary btn-block btn-lg" data-act="closeSheet" ${S.destination ? '' : 'disabled'}>
-        ${S.destination ? `Deliver to ${esc(S.destination.name)}` : 'Choose a spot'}</button></div>`;
+      ${PickerFoot()}`;
   }
 
   if (n === 'report') {
@@ -2394,6 +2401,14 @@ document.addEventListener('click', async (e) => {
       Object.assign(S, destinationChosen({ id: a.id, name: a.name }, { path: S.sheet?.parentName || '',
         pin: a.pinLat ? { lat: Number(a.pinLat), lng: Number(a.pinLng) } : null }));
       render(); break;
+    case 'useSpot': {
+      /* Keeps the student's exact point; selects no delivery point for them. */
+      const next = mapPointConfirmed(S);
+      if (next) Object.assign(S, next);
+      render();
+      document.getElementById('pin-results')?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+      break;
+    }
     case 'pickOnMap':
       S.sheet = { ...S.sheet, mode: S.sheet?.mode === 'map' ? null : 'map' };
       render(); break;
