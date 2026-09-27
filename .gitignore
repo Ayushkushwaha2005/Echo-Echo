@@ -30,3 +30,4 @@ campus-field/
 # Cashfree Payouts 2FA key material, never committed
 public-key/
 *.pem
+API.txt
