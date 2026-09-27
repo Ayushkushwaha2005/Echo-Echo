@@ -133,38 +133,58 @@ try {
   const f2 = await settleFinal(w2.body.id);
   record('UPI payout paid over UPI', f2.state === 'paid', `${f2.state}/${f2.provider_status}`);
 
-  /* 3. refused payee: invalid account */
+  const ensureVerified = async (res, note) => {
+    if (res.body?.destination?.id && res.body.destination.status !== 'verified') {
+      await admin.post(`/admin/payout-destinations/${res.body.destination.id}/verify`, { evidence: note });
+    }
+  };
+
+  /* 3. refused payee: Cashfree accepts the beneficiary but refuses the
+        transfer (published test account "Failure - Invalid Account number"),
+        then a safe retry to a valid account. */
   const P3 = await partner(3);
   const bad = await P3.c.put('/partner/payout-method', { instrument: 'bank', accountNumber: '026291800001190', ifsc: 'YESB0000262', holderName: 'Sandbox Rider' });
-  const badState = bad.body?.destination?.status;
-  record('invalid account is not usable for withdrawal', badState !== 'verified', `${bad.status} ${badState || bad.body?.error || ''}`);
+  await ensureVerified(bad, 'Cashfree sandbox test account: invalid account number (failure)');
+  await earn(P3.u.id, vendor.id, 10000);
+  const w3 = await P3.c.post('/partner/withdrawals', { idempotencyKey: 'sbx-refused-1' });
+  const f3 = w3.body?.state === 'failed' ? { state: 'failed' } : await settleFinal(w3.body.id, 240000);
+  const why = (await q1(`SELECT failure_reason, provider_status FROM payout WHERE id=$1`, [w3.body.id]));
+  record('refused payee: transfer FAILED at Cashfree, reason recorded', f3.state === 'failed' && !!why.failure_reason,
+         `${f3.state}/${why.provider_status || ''} ${String(why.failure_reason || '').slice(0, 60)}`);
+  record('earning kept after the failure', await bal('delivery_payable', `AND partner_id='${P3.u.id}'`) === 10000);
+  const good = await P3.c.put('/partner/payout-method', { instrument: 'bank', accountNumber: '00011020001772', ifsc: 'HDFC0000001', holderName: 'Sandbox Rider' });
+  await ensureVerified(good, 'Cashfree sandbox test account: success');
+  const r3 = await P3.c.post(`/partner/withdrawals/${w3.body.id}/retry`);
+  const fr3 = r3.body?.id ? await settleFinal(r3.body.id) : { state: `none (${r3.status})` };
+  record('retry pays under a new transfer id, exactly once', fr3.state === 'paid' && r3.body.id !== w3.body.id
+         && await bal('delivery_payable', `AND partner_id='${P3.u.id}'`) === 0, fr3.state);
+  const r3b = await P3.c.post(`/partner/withdrawals/${w3.body.id}/retry`);
+  record('the failed payout cannot be retried twice', r3b.status === 409);
 
-  /* 4. failure after acceptance, then safe retry to a good account */
+  /* 3b. UPI failure */
+  const P6 = await partner(6);
+  const fu = await P6.c.put('/partner/payout-method', { instrument: 'upi', vpa: 'failure@upi', holderName: 'Sandbox Rider' });
+  await ensureVerified(fu, 'Cashfree sandbox test VPA failure@upi');
+  await earn(P6.u.id, vendor.id, 10000);
+  const w6 = await P6.c.post('/partner/withdrawals', { idempotencyKey: 'sbx-upi-fail-1' });
+  const f6 = w6.body?.state === 'failed' ? { state: 'failed' } : await settleFinal(w6.body.id, 240000);
+  record('UPI failure recorded as FAILED, money kept', f6.state === 'failed' && await bal('delivery_payable', `AND partner_id='${P6.u.id}'`) === 10000, f6.state);
+
+  /* 4. pending, later failure: never paid while pending */
   const P4 = await partner(4);
   const pf = await P4.c.put('/partner/payout-method', { instrument: 'bank', accountNumber: '7766666351000', ifsc: 'YESB0000001', holderName: 'Sandbox Rider' });
-  if (pf.body?.destination?.status !== 'verified' && pf.body?.destination?.id) {
-    await admin.post(`/admin/payout-destinations/${pf.body.destination.id}/verify`, { evidence: 'Cashfree sandbox test account: pending, later failure' });
-  }
+  await ensureVerified(pf, 'Cashfree sandbox test account: pending, later failure');
   await earn(P4.u.id, vendor.id, 10000);
-  const w4 = await P4.c.post('/partner/withdrawals', { idempotencyKey: 'sbx-fail-1' });
-  record('transfer accepted but not paid while pending', w4.body?.state !== 'paid', w4.body?.state);
-  const f4 = await settleFinal(w4.body.id, 240000);
-  record('pending transfer resolves to FAILED from Cashfree', f4.state === 'failed', `${f4.state}/${f4.provider_status}`);
-  record('earning kept after the failure', await bal('delivery_payable', `AND partner_id='${P4.u.id}'`) === 10000);
-  await P4.c.put('/partner/payout-method', { instrument: 'bank', accountNumber: '00011020001772', ifsc: 'HDFC0000001', holderName: 'Sandbox Rider' });
-  const r4 = await P4.c.post(`/partner/withdrawals/${w4.body.id}/retry`);
-  const fr4 = r4.body?.id ? await settleFinal(r4.body.id) : { state: 'none' };
-  record('retry pays under a new transfer id, exactly once', fr4.state === 'paid' && r4.body.id !== w4.body.id
-         && await bal('delivery_payable', `AND partner_id='${P4.u.id}'`) === 0, fr4.state);
-  const r4b = await P4.c.post(`/partner/withdrawals/${w4.body.id}/retry`);
-  record('the failed payout cannot be retried twice', r4b.status === 409);
+  const w4 = await P4.c.post('/partner/withdrawals', { idempotencyKey: 'sbx-pending-1' });
+  const f4 = await settleFinal(w4.body.id, 300000);
+  record('pending transfer is never counted as paid', f4.state !== 'paid' && await bal('delivery_payable', `AND partner_id='${P4.u.id}'`) === 10000,
+         `${f4.state}/${f4.provider_status}${f4.state === 'processing' ? ' (Cashfree had not resolved it within 5 min)' : ''}`);
+  if (f4.state === 'failed') record('pending transfer later resolved to FAILED from Cashfree status', true);
 
   /* 5. timeout at Cashfree (25s, later success) */
   const P5 = await partner(5);
   const pt = await P5.c.put('/partner/payout-method', { instrument: 'bank', accountNumber: '34978321547298', ifsc: 'KKBK0000001', holderName: 'Sandbox Rider' });
-  if (pt.body?.destination?.status !== 'verified' && pt.body?.destination?.id) {
-    await admin.post(`/admin/payout-destinations/${pt.body.destination.id}/verify`, { evidence: 'Cashfree sandbox test account: timeout, later success' });
-  }
+  await ensureVerified(pt, 'Cashfree sandbox test account: timeout, later success');
   await earn(P5.u.id, vendor.id, 10000);
   const w5 = await P5.c.post('/partner/withdrawals', { idempotencyKey: 'sbx-timeout-1' });
   record('timeout leaves the payout processing, not paid or failed', w5.body?.state === 'processing', w5.body?.state);

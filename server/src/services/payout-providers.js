@@ -198,7 +198,14 @@ export const cashfree = {
     if (!res.ok) {
       let code = null;
       try { code = JSON.parse(text).code || null; } catch { /* not json */ }
+      /* Cashfree allows one beneficiary per bank account. A payee re-entering
+         the same account gets the EXISTING beneficiary, looked up by account
+         + IFSC — which Cashfree supports for banks only. */
+      if (res.status === 409 && code === 'conflict_with_existing_beneficiary' && instrument === 'bank') {
+        return this.fetchBeneficiary({ accountNumber, ifsc });
+      }
       const err = new Error(`cashfree beneficiary ${res.status}${code ? ` ${code}` : ''}`);
+      err.providerCode = code;
       err.providerStatus = res.status;
       err.retryable = res.status === 429 || res.status >= 500;
       throw err;
@@ -208,6 +215,29 @@ export const cashfree = {
     return {
       beneficiaryId: String(body.beneficiary_id || beneficiaryId),
       status,
+      verification: status === 'VERIFIED' ? 'verified'
+        : ['INVALID', 'FAILED', 'CANCELLED', 'DELETED'].includes(status) ? 'failed' : 'pending',
+    };
+  },
+
+  /* An existing beneficiary, by our id or by bank account + IFSC. */
+  async fetchBeneficiary({ beneficiaryId = null, accountNumber = null, ifsc = null }) {
+    const opts = { headers: cashfreePayoutHeaders(), signal: AbortSignal.timeout(PAYOUTS.cashfree.timeoutMs || 15000) };
+    const res = beneficiaryId
+      ? await fetch(`${PAYOUTS.cashfreeBase}/payout/beneficiary?beneficiary_id=${encodeURIComponent(beneficiaryId)}`, opts)
+      : await fetch(`${PAYOUTS.cashfreeBase}/payout/beneficiary?bank_account_number=${encodeURIComponent(accountNumber)}&bank_ifsc=${encodeURIComponent(ifsc)}`, opts);
+    const text = await res.text();
+    if (!res.ok) {
+      const err = new Error(`cashfree beneficiary lookup ${res.status}`);
+      err.providerStatus = res.status; err.retryable = res.status === 429 || res.status >= 500;
+      throw err;
+    }
+    const body = JSON.parse(text);
+    const status = String(body.beneficiary_status || '').toUpperCase();
+    return {
+      beneficiaryId: String(body.beneficiary_id),
+      status,
+      reused: true,
       verification: status === 'VERIFIED' ? 'verified'
         : ['INVALID', 'FAILED', 'CANCELLED', 'DELETED'].includes(status) ? 'failed' : 'pending',
     };

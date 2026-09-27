@@ -52,6 +52,12 @@ function startStub() {
         if (req.method === 'POST' && req.url === '/pg/settlement/recon') {
           return json(200, { cursor: null, data: reconLines });
         }
+        if (req.method === 'POST' && req.url === '/payout/beneficiary' && beneficiaryStatus === 'CONFLICT') {
+          return json(409, { type: 'invalid_request_error', code: 'conflict_with_existing_beneficiary' });
+        }
+        if (req.method === 'GET' && req.url.startsWith('/payout/beneficiary?')) {
+          return json(200, { beneficiary_id: 'ben_existing_1', beneficiary_status: 'VERIFIED' });
+        }
         if (req.method === 'POST' && req.url === '/payout/beneficiary') {
           return json(200, { beneficiary_id: b.beneficiary_id, beneficiary_status: beneficiaryStatus });
         }
@@ -605,4 +611,17 @@ test('a paid transfer later REVERSED by the bank raises a mismatch and is not si
   assert.equal((await pool.query(`SELECT state FROM payout WHERE id=$1`, [r.body.id])).rows[0].state, 'paid');
   const ex = await pool.query(`SELECT 1 FROM reconciliation_exception WHERE kind='payout_mismatch' AND state='open'`);
   assert.equal(ex.rowCount, 1);
+});
+
+test('re-entering a bank account Cashfree already knows reuses its beneficiary', async () => {
+  beneficiaryStatus = 'CONFLICT';
+  const ps = await as(await newPartner());
+  const r = await ps.put('/partner/payout-method', { instrument: 'bank', accountNumber: ACCOUNT, ifsc: 'HDFC0001234', holderName: 'Ravi Kumar' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.destination.status, 'verified');
+  const d = (await pool.query(`SELECT provider_fund_account_id, instrument_fingerprint FROM payout_destination`)).rows[0];
+  assert.equal(d.provider_fund_account_id, 'ben_existing_1');
+  assert.ok(d.instrument_fingerprint && !d.instrument_fingerprint.includes(ACCOUNT));
+  const lookup = calls.find((c) => c.method === 'GET' && c.url.startsWith('/payout/beneficiary?'));
+  assert.ok(lookup, 'looked up by account + IFSC');
 });

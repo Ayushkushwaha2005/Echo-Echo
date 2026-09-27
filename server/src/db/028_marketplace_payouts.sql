@@ -37,6 +37,10 @@ ALTER TABLE payout_destination
   ADD COLUMN masked text,                    -- 'XXXXXX1234' or 'as***@okhdfc'
   ADD COLUMN ifsc text,                      -- public branch code, not a secret
   ADD COLUMN holder_name text,
+  -- HMAC of the normalised account/UPI id under a server secret: lets a
+  -- re-entered instrument find its existing provider beneficiary (Cashfree
+  -- refuses duplicates) without storing the instrument itself.
+  ADD COLUMN instrument_fingerprint text,
   ADD COLUMN verification_status text NOT NULL DEFAULT 'pending'
     CHECK (verification_status IN ('pending','verified','failed')),
   ADD COLUMN verification_note text,
@@ -50,6 +54,8 @@ UPDATE payout_destination SET verification_status = 'verified', verified_at = cr
 
 ALTER TABLE payout_destination ADD CONSTRAINT verified_is_attributed CHECK (
   verification_status <> 'verified' OR verified_at IS NOT NULL);
+
+CREATE INDEX ON payout_destination (provider, instrument_fingerprint);
 
 COMMENT ON COLUMN payout_destination.masked IS
   'A masked hint for humans. The full account number / UPI id is held only by the payout provider.';

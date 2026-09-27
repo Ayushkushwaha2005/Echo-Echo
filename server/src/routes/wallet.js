@@ -12,9 +12,9 @@
    the provider's beneficiary id and a masked hint. The logger redacts both
    body fields (index.js).
    ========================================================================== */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHmac } from 'node:crypto';
 import { q, one, tx } from '../db/index.js';
-import { PAYMENTS, PAYOUTS } from '../config.js';
+import { PAYMENTS, PAYOUTS, HTTP } from '../config.js';
 import { authorize, BadRequest, NotFound, Forbidden, Conflict, ProviderUnavailable } from '../auth/rbac.js';
 import { assertRecentPasskey } from '../auth/passkey-policy.js';
 import { audit } from '../audit.js';
@@ -70,10 +70,34 @@ async function registerDestination({ vendorId = null, partnerId = null, body, ac
     throw ProviderUnavailable('Payout details cannot be verified yet',
       'The Cashfree Payouts account is not connected on this deployment. Nothing was saved.');
   }
-  const beneficiaryId = `ee_${partnerId ? 'p' : 'v'}_${randomBytes(12).toString('hex')}`;
-  const b = await cashfreePayouts.createBeneficiary({
-    beneficiaryId, name: holderName, instrument, accountNumber, ifsc, vpa,
-    phone: contact?.phone || null, email: contact?.email || null });
+  const fingerprint = createHmac('sha256', HTTP.cookieSecret || 'echo-echo-payee')
+    .update(instrument === 'bank' ? `bank:${accountNumber}:${ifsc}` : `upi:${vpa.toLowerCase()}`).digest('hex');
+
+  let b;
+  /* Cashfree keeps one beneficiary per instrument. A UPI id cannot be looked
+     up there, so a UPI id already registered through Echo Echo is found by
+     its fingerprint and its beneficiary reused. */
+  const known = await one(`SELECT provider_fund_account_id FROM payout_destination
+                            WHERE provider='cashfree' AND instrument_fingerprint=$1
+                            ORDER BY created_at DESC LIMIT 1`, [fingerprint]);
+  try {
+    b = known
+      ? await cashfreePayouts.fetchBeneficiary({ beneficiaryId: known.provider_fund_account_id })
+      : await cashfreePayouts.createBeneficiary({
+          beneficiaryId: `ee_${partnerId ? 'p' : 'v'}_${randomBytes(12).toString('hex')}`,
+          name: holderName, instrument, accountNumber, ifsc, vpa,
+          phone: contact?.phone || null, email: contact?.email || null });
+  } catch (e) {
+    /* The provider refused the details. Its own message may echo what was
+       sent, so only a plain reason goes back to the payee. */
+    if (e.providerStatus && e.providerStatus < 500) {
+      throw BadRequest('These payout details could not be registered',
+        e.providerCode === 'conflict_with_existing_beneficiary'
+          ? 'This UPI ID is already registered with our payout provider. Contact support.'
+          : 'Check the account number, IFSC or UPI ID and try again.');
+    }
+    throw e;
+  }
   accountNumber = null; vpa = vpa && maskVpa(vpa);          // drop the secret now
 
   return tx(async (c) => {
@@ -84,12 +108,13 @@ async function registerDestination({ vendorId = null, partnerId = null, body, ac
     return (await c.query(
       `INSERT INTO payout_destination (vendor_id, partner_id, provider, provider_fund_account_id,
          label, instrument, masked, ifsc, holder_name, verification_status, verification_note,
-         verified_at, created_by)
-       VALUES ($1,$2,'cashfree',$3,$4,$5,$6,$7,$8,$9,$10, CASE WHEN $9='verified' THEN now() END, $11)
+         verified_at, created_by, instrument_fingerprint)
+       VALUES ($1,$2,'cashfree',$3,$4,$5,$6,$7,$8,$9,$10, CASE WHEN $9='verified' THEN now() END, $11, $12)
        RETURNING *`,
       [vendorId, partnerId, b.beneficiaryId, `${instrument} ${instrument === 'bank' ? maskAccount(body.accountNumber) : vpa}`,
        instrument, instrument === 'bank' ? maskAccount(body.accountNumber) : vpa, ifsc, holderName,
-       b.verification, `cashfree beneficiary_status=${b.status || 'unknown'}`, actorId])).rows[0];
+       b.verification, `cashfree beneficiary_status=${b.status || 'unknown'}${b.reused ? ' (existing beneficiary)' : ''}`,
+       actorId, fingerprint])).rows[0];
   });
 }
 
