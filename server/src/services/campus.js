@@ -115,24 +115,37 @@ export function metresBetween(a, b) {
   return 2 * R * Math.asin(Math.sqrt(s));
 }
 
-/* The picker's optional Satellite base map: Esri World Imagery through the
-   ArcGIS Location Platform, which needs an access token. The token is made
-   for browser use (restrict it to this site's referrer and the basemap
-   privilege only, in the ArcGIS dashboard); it lives in ARCGIS_BASEMAP_TOKEN,
-   never in the source, and is sent only to signed-in students with the map.
-   Unset, there is no Satellite layer and the button says so. Esri requires
-   "Powered by Esri" and the imagery sources to be credited on the map. */
+/* The picker's Satellite base map. Two legitimate, documented sources:
+   - with ARCGIS_BASEMAP_TOKEN (an ArcGIS Location Platform token, basemap
+     privilege only, restricted to this site's referrer): Esri World Imagery,
+     sharp to building level. "Powered by Esri" and the sources credited.
+   - otherwise EOX Sentinel-2 cloudless 2016, which EOX publishes free under
+     CC BY 4.0 (commercial use allowed) at tiles.maps.eox.at, no key. It is
+     10 m imagery: campus is visible, single buildings are not. The EOX
+     credit and links are required on the map.
+   The token lives only in the environment, never in the source. */
 export function mapTiles(env = process.env) {
   const token = String(env.ARCGIS_BASEMAP_TOKEN || '').trim();
-  if (!token) return { satellite: null };
+  if (token) {
+    return {
+      satellite: {
+        provider: 'esri-world-imagery',
+        url: 'https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token='
+          + encodeURIComponent(token),
+        attribution: 'Powered by <a href="https://www.esri.com">Esri</a> | Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+        maxZoom: 19,
+        maxNativeZoom: 19,
+      },
+    };
+  }
   return {
     satellite: {
-      provider: 'esri-world-imagery',
-      url: 'https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token='
-        + encodeURIComponent(token),
-      attribution: 'Powered by <a href="https://www.esri.com">Esri</a> | Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+      provider: 'eox-s2cloudless-2016',
+      url: 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg',
+      attribution: '<a href="https://s2maps.eu">Sentinel-2 cloudless - https://s2maps.eu</a> by <a href="https://eox.at">EOX IT Services GmbH</a> (Contains modified Copernicus Sentinel data 2016 &amp; 2017)',
       maxZoom: 19,
-      maxNativeZoom: 19,
+      maxNativeZoom: 16,
+      note: 'Satellite: 10 m imagery. Buildings may be blurry.',
     },
   };
 }
@@ -255,8 +268,9 @@ export async function resolvePin(lat, lng, { campusId }) {
     .map((n) => ({ id: n.id, name: n.name, metres: Math.round(metresBetween([lat, lng], [Number(n.lat), Number(n.lng)])) }))
     .filter((c) => c.metres <= PIN_RADIUS_M)
     .sort((x, y) => x.metres - y.metres);
-  return { inside: true, boundaryName: b.name, candidates,
-           note: candidates.length ? null : 'Choose a supported delivery point inside the campus delivery area.' };
+  /* Inside the boundary is a valid delivery spot in itself (migration 027);
+     the named points near it are only landmarks the student may prefer. */
+  return { inside: true, deliverable: true, boundaryName: b.name, candidates, note: null };
 }
 
 /* The pin on an order: inside the outline, and near the destination it came
@@ -273,6 +287,43 @@ export async function assertPin(pin, node) {
     throw BadRequest(`Your map pin is not near ${node.name}`, 'Choose the delivery point closest to your pin.');
   }
   return { lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)), source: 'map' };
+}
+
+/* An exact delivery spot (migration 027): the student's own point on the
+   map, or a live reading, as the destination itself. Everything is decided
+   here from the database, never from the client:
+     valid coordinate -> an ACTIVE boundary for this campus (none: fail
+     closed) -> inside it; and for a live reading, accuracy reported and
+     <= 100 m, and not closer to the edge than that uncertainty.
+   Nothing is snapped or substituted: the spot comes back exactly as given
+   (6 dp) or the call throws. */
+export const SPOT_SOURCES = { map: 'manual_map_spot', gps: 'live_gps_spot' };
+export async function assertSpot(spot, { campusId }) {
+  const lat = typeof spot?.lat === 'number' ? spot.lat : NaN;
+  const lng = typeof spot?.lng === 'number' ? spot.lng : NaN;
+  const source = spot?.source === 'gps' ? 'gps' : spot?.source === 'map' ? 'map' : null;
+  if (!source) throw BadRequest('Say how the delivery spot was chosen', 'A spot comes from the campus map or your live location.');
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    throw BadRequest('Invalid delivery spot', 'Choose your spot on the campus map again.');
+  }
+  const b = await boundary(campusId);
+  if (!b) throw Forbidden('Campus delivery area is currently unavailable.', 'Campus delivery is closed until the campus boundary is confirmed.');
+  if (!pointInPolygon(lat, lng, b.polygon)) {
+    throw Forbidden('This spot is outside the campus delivery area.', 'Choose a spot inside the campus outline on the map.');
+  }
+  let accuracy = null;
+  if (source === 'gps') {
+    accuracy = spot.accuracy === null || spot.accuracy === undefined || spot.accuracy === '' ? NaN : Number(spot.accuracy);
+    if (!Number.isFinite(accuracy) || accuracy < 0) throw BadRequest('Your live location has no accuracy', 'Use your live location again, or choose the spot on the map.');
+    if (accuracy > GPS_MAX_ACCURACY_M) {
+      throw Forbidden(`Your location is only accurate to about ${Math.round(accuracy)} m`, `It needs to be within ${GPS_MAX_ACCURACY_M} m. Choose the spot on the map instead.`);
+    }
+    if (metresToEdge(lat, lng, b.polygon) < accuracy) {
+      throw Forbidden('You are too close to the edge of campus to be sure', 'Your location is not precise enough to tell which side of the boundary you are on. Choose the spot on the map instead.');
+    }
+  }
+  return { kind: SPOT_SOURCES[source], lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)), source,
+           accuracy: accuracy === null ? null : Math.round(accuracy), boundaryName: b.name };
 }
 
 /* Whether delivery can actually happen on a campus: a confirmed outline AND

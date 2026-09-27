@@ -117,7 +117,7 @@ export default async function partnerRoutes(app) {
     authorize(req.actor, 'delivery.read', { ownerId: req.actor.id });
     const { rows } = await q(
       `SELECT o.id, o.expires_at, f.code, f.total_paise, f.fulfilment,
-              v.name AS vendor_name, d.name AS destination
+              v.name AS vendor_name, COALESCE(d.name, f.destination_snapshot->>'label') AS destination
          FROM delivery_offer o
          JOIN food_order f ON f.id = o.order_id
          JOIN vendor v ON v.id = f.vendor_id

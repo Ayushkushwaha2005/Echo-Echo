@@ -95,7 +95,7 @@ export default async function supportRoutes(app) {
     let context = null;
     if (k.order_id && staff) {
       const order = await one(
-        `SELECT o.*, v.name AS vendor_name, v.contact_phone, d.name AS destination,
+        `SELECT o.*, v.name AS vendor_name, v.contact_phone, COALESCE(d.name, o.destination_snapshot->>'label') AS destination,
                 p.name AS partner_name, p.phone AS partner_phone
            FROM food_order o JOIN vendor v ON v.id = o.vendor_id
            LEFT JOIN campus_node d ON d.id = o.destination_id

@@ -12,7 +12,7 @@
 import { randomInt, createHash, randomBytes } from 'node:crypto';
 import { q, one, tx } from '../db/index.js';
 import { authorize, can, assertMayOrder, BadRequest, NotFound, Forbidden, Conflict } from '../auth/rbac.js';
-import { assertDeliverable, assertPin, pathOf } from '../services/campus.js';
+import { assertDeliverable, assertPin, assertSpot, pathOf } from '../services/campus.js';
 import { hoursOf } from '../services/hours.js';
 import { normaliseAddress } from '../services/address.js';
 import { validateMobile } from '../services/profile.js';
@@ -68,7 +68,7 @@ const sha = (s) => createHash('sha256').update(s).digest('hex');
    Shared by the checkout route and the AI's create_order_draft tool, so both
    get identical, server-computed numbers.                                  */
 export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, destinationId,
-                                      contactPhone, landmark, instructions, address, pin, placedVia }) {
+                                      contactPhone, landmark, instructions, address, pin, spot, placedVia }) {
   if (!Array.isArray(lines) || !lines.length) throw BadRequest('Your order is empty');
 
   /* ---- the delivery contact number -----------------------------------
@@ -126,6 +126,21 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
   if (fulfilment === 'delivery') {
     if (!(await flag('delivery'))) throw Conflict('Delivery is currently disabled');
     if (!v.delivery_enabled) throw Conflict(`${v.name} does not deliver`);
+    /* An exact spot as the destination (migration 027): validated here
+       against the active boundary, never trusted from the client. */
+    if (spot && !destinationId) {
+      const at = await assertSpot(spot, { campusId: v.campus_site_id });
+      snapshot = {
+        kind: at.kind, destinationId: null, campus: campus.name,
+        path: [], name: 'Delivery spot',
+        label: `Delivery spot ${at.lat.toFixed(5)}, ${at.lng.toFixed(5)}`,
+        lat: at.lat, lng: at.lng, source: at.source, accuracy: at.accuracy,
+        pin: { lat: at.lat, lng: at.lng, source: at.source },
+        frozenAt: new Date().toISOString(),
+      };
+    }
+  }
+  if (fulfilment === 'delivery' && !snapshot) {
     const node = await assertDeliverable(destinationId, { campusId: v.campus_site_id });   // the campus boundary gate
     const trail = await pathOf(node.id);
     snapshot = {
@@ -144,7 +159,7 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
       pin: pin ? await assertPin(pin, node) : null,
       frozenAt: new Date().toISOString(),
     };
-  } else if (fulfilment !== 'pickup') {
+  } else if (fulfilment !== 'pickup' && fulfilment !== 'delivery') {
     throw BadRequest('Choose pickup or delivery');
   }
 
@@ -200,14 +215,18 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
     `INSERT INTO food_order (code, customer_id, vendor_id, fulfilment, destination_id,
                              state, subtotal_paise, delivery_paise, total_paise, placed_via,
                              delivery_contact_phone, delivery_landmark, delivery_instructions,
-                             destination_snapshot, delivery_address)
-     VALUES ($1,$2,$3,$4,$5,'draft',$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+                             destination_snapshot, delivery_address,
+                             destination_kind, spot_lat, spot_lng)
+     VALUES ($1,$2,$3,$4,$5,'draft',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
     [randomBytes(4).toString('hex').toUpperCase(), customerId, vendorId, fulfilment,
-     fulfilment === 'delivery' ? destinationId : null,
+     fulfilment === 'delivery' && snapshot?.destinationId ? snapshot.destinationId : null,
      subtotal, money.delivery_fee_paise, money.customer_total_paise, placedVia || 'web',
      phone, landmarkText, instructionsText,
      snapshot ? JSON.stringify(snapshot) : null,
-     addressSnapshot ? JSON.stringify(addressSnapshot) : null])).rows[0];
+     addressSnapshot ? JSON.stringify(addressSnapshot) : null,
+     fulfilment !== 'delivery' ? null : snapshot.destinationId ? 'campus_node' : snapshot.kind,
+     fulfilment === 'delivery' && !snapshot.destinationId ? snapshot.lat : null,
+     fulfilment === 'delivery' && !snapshot.destinationId ? snapshot.lng : null])).rows[0];
 
   /* Remember it for next time, so the number is typed once rather than at
      every checkout. Still not an identity: nothing signs in with it. */
@@ -241,7 +260,7 @@ export default async function orderRoutes(app) {
       customerId: req.actor.id, vendorId: b.vendorId, lines: b.lines,
       fulfilment: b.fulfilment, destinationId: b.destinationId,
       contactPhone: b.contactPhone, landmark: b.landmark, instructions: b.instructions,
-      address: b.address, pin: b.pin,
+      address: b.address, pin: b.pin, spot: b.spot,
       placedVia: 'web',
     }));
     await audit(req, { action: 'order.draft', resource: 'order', resourceId: draft.id, outcome: 'ok' });

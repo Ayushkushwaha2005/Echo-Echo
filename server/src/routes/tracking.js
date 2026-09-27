@@ -86,7 +86,7 @@ export default async function trackingRoutes(app) {
   app.get('/orders/:id/tracking', async (req) => {
     const o = await one(
       `SELECT o.id, o.state, o.customer_id, o.partner_id, o.fulfilment, o.destination_id,
-              o.destination_snapshot, v.name AS vendor_name, v.campus_node_id
+              o.destination_snapshot, o.spot_lat, o.spot_lng, v.name AS vendor_name, v.campus_node_id
          FROM food_order o JOIN vendor v ON v.id = o.vendor_id
         WHERE o.id = $1`, [req.params.id]);
     if (!o) throw NotFound('No such order');
@@ -102,7 +102,9 @@ export default async function trackingRoutes(app) {
     const pickup = point(await one(
       `SELECT name, lat, lng FROM campus_node WHERE id = $1`, [o.campus_node_id]), 'pickup');
     const destination = o.destination_id ? point(await one(
-      `SELECT name, lat, lng FROM campus_node WHERE id = $1`, [o.destination_id]), 'destination') : null;
+      `SELECT name, lat, lng FROM campus_node WHERE id = $1`, [o.destination_id]), 'destination')
+      /* An exact spot (migration 027), validated when the order was made. */
+      : o.spot_lat !== null ? point({ name: 'Delivery spot', lat: o.spot_lat, lng: o.spot_lng }, 'destination') : null;
 
     /* The partner's position, under the disclosure rule above. */
     let partner = null;

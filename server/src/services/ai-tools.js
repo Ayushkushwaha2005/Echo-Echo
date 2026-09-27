@@ -296,6 +296,11 @@ export const TOOLS = {
         customerId: actor.id, vendorId: existing.vendor_id, lines,
         fulfilment: existing.fulfilment,
         destinationId: destination_id || existing.destination_id, placedVia: 'ai',
+        /* A spot order keeps its spot, re-validated, unless a named point is given. */
+        spot: !destination_id && existing.spot_lat !== null && existing.spot_lat !== undefined
+          ? { lat: Number(existing.spot_lat), lng: Number(existing.spot_lng),
+              source: existing.destination_snapshot?.source, accuracy: existing.destination_snapshot?.accuracy }
+          : undefined,
       });
     });
     return {
@@ -310,7 +315,7 @@ export const TOOLS = {
   async get_order_status(actor, { order_id }) {
     const o = await one(
       `SELECT o.id, o.code, o.state, o.total_paise, v.name AS vendor_name,
-              c.name AS destination, p.name AS partner_name
+              COALESCE(c.name, o.destination_snapshot->>'label') AS destination, p.name AS partner_name
          FROM food_order o JOIN vendor v ON v.id = o.vendor_id
          LEFT JOIN campus_node c ON c.id = o.destination_id
          LEFT JOIN app_user p ON p.id = o.partner_id

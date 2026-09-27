@@ -410,9 +410,9 @@ export async function drawPickerMap(el, data, { onTap, onSelect, ...state } = {}
 
   let tapped = null, liveDot = null, liveRing = null, lastLive = null;
   const PIN_LOOK = {
-    checking: { colour: '#E0567A', glyph: '…', label: 'Your point (checking)' },
-    ok: { colour: '#E0567A', glyph: '📍', label: 'Your point' },
-    refused: { colour: '#8A817C', glyph: '✕', label: 'Your point: outside the campus delivery area' },
+    checking: { colour: '#E0567A', glyph: '…', label: 'Your delivery spot (checking)' },
+    ok: { colour: '#E0567A', glyph: '📍', label: 'Your delivery spot' },
+    refused: { colour: '#8A817C', glyph: '✕', label: 'Your delivery spot: outside the campus delivery area' },
   };
   const pinIcon = (status) => {
     const look = PIN_LOOK[status] || PIN_LOOK.ok;
@@ -454,6 +454,26 @@ export async function drawPickerMap(el, data, { onTap, onSelect, ...state } = {}
     }
   }
 
+  /* Satellite that cannot load must not leave a blank map: several failed
+     tiles and none loaded since switching -> back to Default, with a note. */
+  let satLoaded = 0, satFailed = 0, satTimer = null;
+  const notice = L.DomUtil.create('div', 'echo-map-notice');
+  notice.setAttribute('role', 'status');
+  notice.hidden = true;
+  const say = (text, ms = 5000) => {
+    notice.textContent = text; notice.hidden = !text;
+    clearTimeout(notice._t); if (text && ms) notice._t = setTimeout(() => { notice.hidden = true; }, ms);
+  };
+  const satFail = () => {
+    if (current !== 'satellite') return;
+    setBase('default');
+    say('Satellite imagery is temporarily unavailable.', 6000);
+  };
+  if (bases.satellite) {
+    bases.satellite.on('tileload', () => { satLoaded++; });
+    bases.satellite.on('tileerror', () => { satFailed++; if (satFailed >= 4 && !satLoaded) satFail(); });
+  }
+
   function setBase(name) {
     if (!bases[name] || name === current) return current;
     map.removeLayer(bases[current]);
@@ -461,6 +481,15 @@ export async function drawPickerMap(el, data, { onTap, onSelect, ...state } = {}
     bases[name].bringToBack();
     current = name;
     for (const b of switcher.querySelectorAll('[data-base]')) b.setAttribute('aria-pressed', String(b.dataset.base === current));
+    clearTimeout(satTimer);
+    if (name === 'satellite') {
+      satLoaded = 0; satFailed = 0;
+      say(data.tiles?.satellite?.note || '', 4000);
+      /* Nothing at all after 8 s is a failure too. */
+      satTimer = setTimeout(() => { if (!satLoaded) satFail(); }, 8000);
+    } else if (!notice.textContent.startsWith('Satellite imagery is')) {
+      say('');
+    }
     return current;
   }
 
@@ -483,7 +512,7 @@ export async function drawPickerMap(el, data, { onTap, onSelect, ...state } = {}
   recentre.setAttribute('aria-label', 'Centre the map on my location');
   recentre.style.display = 'none';
   const box = L.DomUtil.create('div', 'echo-map-tools');
-  box.append(switcher, recentre);
+  box.append(switcher, recentre, notice);
   L.DomEvent.disableClickPropagation(box);
   switcher.addEventListener('click', (e) => { const b = e.target.closest('[data-base]'); if (b && !b.disabled) setBase(b.dataset.base); });
   recentre.addEventListener('click', focusLive);

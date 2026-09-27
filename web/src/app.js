@@ -19,7 +19,7 @@
 import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/data/client.js';
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
 import { campusOption } from '../../packages/ui/campus-option.js';
-import { mapPointChosen, mapPointAnswered, mapPointConfirmed, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
+import { mapPointChosen, mapPointAnswered, spotChosen, usableSpot, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
 
 restoreTheme();
 
@@ -1190,7 +1190,7 @@ const drawnMaps = new WeakSet();
 let picker = null;   // { host, ctl }
 
 const pickerState = () => ({
-  pin: S.pick?.pin || S.destination?.pin || null,
+  pin: S.pick?.pin || S.destination?.pin || S.destination?.spot || null,
   pinStatus: S.pick ? (S.pick.pending ? 'checking' : S.pick.error ? 'refused' : 'ok') : 'ok',
   selectedId: S.destination?.id || null,
   /* Only a reading the server accepted is ever drawn. */
@@ -1999,27 +1999,25 @@ const DestChoice = (c, sub, pin = null) => `
     <div class="t-xs muted">${esc(sub)}</div></div>
     ${S.destination?.id === c.id ? Ico(I.check, 18) : ''}</button>`;
 
-/* Said, word for word, whenever the student's map point is not one we deliver to. */
-const PICK_UNSUPPORTED = 'Choose a supported delivery point inside the campus delivery area.';
-
-/* What the server said about the student's own map point. It stays a point:
-   nothing here selects a destination for them. */
+/* The student's own map point and what the server said about it. Inside the
+   active boundary it is a delivery spot in itself (migration 027); the named
+   points near it are offered only as landmarks they may prefer. */
 function PinResults() {
   const p = S.pick;
   if (!p) return '';
-  const at = `Your point: ${p.pin.lat.toFixed(5)}, ${p.pin.lng.toFixed(5)}`;
-  if (p.pending) return `<p class="t-xs muted" role="status">${esc(at)} · checking…</p>`;
-  if (p.error) {
-    return `<div class="campusnote" role="alert">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)">${
-      esc(at)}. ${esc(p.error)} ${esc(PICK_UNSUPPORTED)}</p></div>`;
+  const at = `${p.pin.lat.toFixed(5)}, ${p.pin.lng.toFixed(5)}`;
+  if (p.pending) return `<p class="t-xs muted" role="status">Selected spot ${esc(at)} · checking…</p>`;
+  if (p.error || !p.inside) {
+    return `<div class="campusnote" role="alert">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)"><b>Selected spot</b> ${
+      esc(at)}<br>${esc(p.error || 'This spot is outside the campus delivery area.')}</p></div>`;
   }
-  if (!p.candidates?.length) {
-    return `<div class="campusnote" role="status">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">${
-      esc(at)}. It is not a delivery point. ${esc(PICK_UNSUPPORTED)}</p></div>`;
-  }
-  return `<p class="t-xs faint">${esc(at)}. ${p.confirmed ? 'Spot saved. Deliveries are handed over at a confirmed delivery point: choose the one the rider should come to for your spot:'
-    : 'It is not itself a delivery point. Press “Use this spot” to keep it, then choose the delivery point near it:'}</p>`
-    + p.candidates.map((c) => DestChoice(c, `~${c.metres} m from your pin`, p.pin)).join('');
+  return `<div class="card card-pad stack g1" role="status" id="spot-ok">
+      ${Label('Delivery spot selected')}
+      <div class="t-sm" style="font-weight:700">${esc(at)}</div>
+      <div class="t-xs" style="color:var(--accent-text)">Inside ${esc(S.me?.profile?.campus?.name || 'campus')} delivery area. You can deliver to this spot.</div>
+    </div>`
+    + (p.candidates?.length ? `<p class="t-xs faint">Or deliver to a named point near it:</p>`
+      + p.candidates.map((c) => DestChoice(c, `~${c.metres} m from your spot`, p.pin)).join('') : '');
 }
 
 /* The bottom button: never disabled without saying why. See pickerCta(). */
@@ -2029,23 +2027,27 @@ function PickerFoot() {
     <button class="btn btn-primary btn-block btn-lg" ${c.enabled ? `data-act="${c.act}"` : 'disabled aria-describedby="pick-reason"'}>${esc(c.label)}</button></div>`;
 }
 
-/* What the server said about the last live-location reading. */
+/* What the server said about the last live-location reading. Accepted, the
+   reading itself can be the delivery spot; the server re-checks it. */
 function GpsResults() {
   const g = S.gps;
   if (!g) return '';
   if (g.error) return `<div class="campusnote" role="alert">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)">${esc(g.error)}</p></div>`;
-  if (!g.candidates?.length) {
-    return `<div class="campusnote" role="status">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">${
-      esc(g.note || 'You are on campus, but not near a supported delivery point. Select a spot on the map or choose from the list.')}</p></div>`;
-  }
-  return `<p class="t-xs faint">You are on campus${g.fix?.accuracy ? ` (accurate to about ${Math.round(g.fix.accuracy)} m)` : ''}. Delivery points near you:</p>`
-    + g.candidates.map((c) => DestChoice(c, `${c.path && c.path !== c.name ? `${c.path} · ` : ''}~${c.metres} m away`)).join('');
+  const f = g.fix;
+  return `<div class="card card-pad stack g2" role="status">
+      ${Label('Your live location')}
+      ${f ? `<div class="t-sm" style="font-weight:700">${esc(`${Number(f.lat).toFixed(5)}, ${Number(f.lng).toFixed(5)}`)} · ±${Math.round(f.accuracy)} m</div>` : ''}
+      <div class="t-xs" style="color:var(--accent-text)">Inside the campus delivery area.</div>
+      ${f ? `<button class="btn btn-secondary btn-sm" data-act="useLiveSpot" style="align-self:flex-start">Deliver to my live location</button>` : ''}
+    </div>`
+    + (g.candidates?.length ? `<p class="t-xs faint">Or a named delivery point near you:</p>`
+      + g.candidates.map((c) => DestChoice(c, `${c.path && c.path !== c.name ? `${c.path} · ` : ''}~${c.metres} m away`)).join('') : '');
 }
 
 /* What each thing on the picker map means. */
 const MapLegend = () => `<div class="maplegend t-xs muted" aria-hidden="true">
-  <span><i class="lg lg-dest"></i>Delivery point</span>
-  <span><i class="lg lg-pin"></i>Your point (not a delivery point)</span>
+  <span><i class="lg lg-dest"></i>Named delivery point</span>
+  <span><i class="lg lg-pin"></i>Your delivery spot</span>
   ${S.liveFix ? '<span><i class="lg lg-live"></i>You (live location)</span>' : ''}
   <span><i class="lg lg-area"></i>Campus delivery area</span></div>`;
 
@@ -2080,7 +2082,7 @@ function Sheet() {
         ${S.destination ? `<div class="card card-pad stack g1">
           ${Label('Selected location')}
           <div class="t-h3">${esc(S.destination.name)}</div>
-          <div class="t-xs muted">${esc([S.me?.profile?.campus?.name, S.destination.pin ? 'Pinned on the map' : ''].filter(Boolean).join(' · '))}</div>
+          <div class="t-xs muted">${esc([S.me?.profile?.campus?.name, S.destination.spot ? S.destination.path : '', S.destination.pin ? 'Pinned on the map' : ''].filter(Boolean).join(' · '))}</div>
           ${addrLine(addrView(S.checkout)) ? `<div class="t-xs">${esc(addrLine(addrView(S.checkout)))}</div>` : ''}
         </div>` : ''}` : ''}
         ${parent ? `<button class="btn btn-ghost btn-sm" data-act="sheetUp" style="align-self:flex-start;padding-inline:0">${I.back} All areas</button>` : ''}
@@ -2408,11 +2410,16 @@ document.addEventListener('click', async (e) => {
         pin: a.pinLat ? { lat: Number(a.pinLat), lng: Number(a.pinLng) } : null }));
       render(); break;
     case 'useSpot': {
-      /* Keeps the student's exact point; selects no delivery point for them. */
-      const next = mapPointConfirmed(S);
-      if (next) Object.assign(S, next);
-      render();
-      document.getElementById('pin-results')?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+      /* "Choose this spot": the exact point the server said is inside becomes
+         the destination, and the picker closes. The order re-validates it. */
+      const next = spotChosen(usableSpot(S), { source: 'map' });
+      if (next) { Object.assign(S, next); setSheet(null); toast('Delivery spot chosen'); } else render();
+      break;
+    }
+    case 'useLiveSpot': {
+      const f = S.gps?.fix;
+      const next = f && spotChosen({ lat: Number(f.lat), lng: Number(f.lng) }, { source: 'gps', accuracy: Number(f.accuracy) });
+      if (next) { Object.assign(S, next); setSheet(null); toast('Delivering to your live location'); } else render();
       break;
     }
     case 'pickOnMap':
@@ -2460,7 +2467,7 @@ document.addEventListener('click', async (e) => {
           S.sheet = { ...S.sheet, mode: 'map' };
           S.liveFocus = true;
           /* A map tap that led nowhere is not left beside the live answer. */
-          if (S.pick && !S.pick.candidates?.length) S.pick = null;
+          if (S.pick && !S.pick.inside) S.pick = null;
           S.gps = { candidates: out.candidates || [], note: out.note, fix: out.fix };
         }
         render();
@@ -2513,6 +2520,8 @@ document.addEventListener('click', async (e) => {
              the map pin if the spot was chosen on the map. */
           address: S.fulfilment === 'delivery' && hasAddr(S.checkout) ? addrPayload(S.checkout) : undefined,
           pin: S.fulfilment === 'delivery' ? (S.destination?.pin || undefined) : undefined,
+          /* Or the exact spot itself (migration 027); the server re-validates it. */
+          spot: S.fulfilment === 'delivery' ? (S.destination?.spot || undefined) : undefined,
         });
         const intent = await quad.paymentIntent(draft.id);
         await openGateway(intent, draft);

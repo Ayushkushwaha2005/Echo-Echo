@@ -305,17 +305,87 @@ test('live GPS accuracy: 10, 30 and 100 m are used; 212 m and anything over 100 
   for (const c of tight.candidates) assert.ok(OPEN.includes(c.name) && c.name !== 'Energy Block', c.name);
 });
 
-test('a map pin on campus but away from every delivery point says so, and offers nothing', async () => {
+test('a map pin on campus but away from every named point is itself a valid delivery spot (migration 027)', async () => {
   const r = await (await student()).post('/campus/pin', READINGS['91']);   // Tulips, 214 m from the nearest point
   assert.equal(r.status, 200);
-  assert.equal(r.body.inside, true);
-  assert.deepEqual(r.body.candidates, []);
-  assert.equal(r.body.note, 'Choose a supported delivery point inside the campus delivery area.');
-  /* And an order cannot carry that pin to a delivery point it is not near. */
+  assert.deepEqual([r.body.inside, r.body.deliverable, r.body.note], [true, true, null]);
+  assert.deepEqual(r.body.candidates, [], 'no named point is near; none is invented');
+  /* A named point still cannot carry a pin it is not near. */
   const { v, item } = await openOutlet();
   const d = await (await student()).post('/orders/draft', { vendorId: v.id, lines: [{ itemId: item.id, qty: 1 }],
     fulfilment: 'delivery', destinationId: place('Enrollment Office').id, pin: READINGS['91'] });
   assert.equal(d.status, 400);
+});
+
+/* ============ migration 027: the exact spot as the destination ============ */
+
+const SPOT = { lat: 30.41621, lng: 77.96981 };   // the production screenshot's point
+
+test('the production point 30.41621, 77.96981: inside, orderable as itself, stored exactly, never snapped', async () => {
+  const s = await student();
+  const pin = await s.post('/campus/pin', SPOT);
+  assert.deepEqual([pin.status, pin.body.inside, pin.body.deliverable], [200, true, true]);
+  const { v, item } = await openOutlet();
+  const d = await s.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: item.id, qty: 1 }],
+    fulfilment: 'delivery', spot: { ...SPOT, source: 'map' } });
+  assert.equal(d.status, 200, JSON.stringify(d.body));
+  const o = (await pool.query(`SELECT * FROM food_order WHERE id = $1`, [d.body.id])).rows[0];
+  assert.deepEqual([o.destination_kind, o.destination_id, Number(o.spot_lat), Number(o.spot_lng)],
+                   ['manual_map_spot', null, SPOT.lat, SPOT.lng]);
+  assert.deepEqual([o.destination_snapshot.lat, o.destination_snapshot.lng, o.destination_snapshot.source], [SPOT.lat, SPOT.lng, 'map']);
+  assert.ok(!/HUBBLE|Enrollment/.test(JSON.stringify(o.destination_snapshot)), 'not snapped to a named place');
+  const nodes = (await pool.query(`SELECT count(*)::int n FROM campus_node WHERE lat = $1`, [SPOT.lat])).rows[0].n;
+  assert.equal(nodes, 0, 'no campus place created for a spot');
+  /* The tracking view draws that exact spot as the destination. */
+  const t = await s.get(`/orders/${o.id}/tracking`);
+  assert.equal(t.status, 200);
+  assert.deepEqual([t.body.destination?.lat, t.body.destination?.lng], [SPOT.lat, SPOT.lng]);
+});
+
+test('a spot outside the boundary, with no boundary, or without a source is refused server-side', async () => {
+  const s = await student();
+  const { v, item } = await openOutlet();
+  const order = (spot) => s.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: item.id, qty: 1 }], fulfilment: 'delivery', spot });
+  const out = await order({ ...READINGS['98'], source: 'map' });             // 58 m outside
+  assert.equal(out.status, 403);
+  assert.match(out.body.error, /outside the campus delivery area/);
+  assert.equal((await order({ ...SPOT })).status, 400, 'no source');
+  assert.equal((await order({ lat: 'x', lng: 1, source: 'map' })).status, 400);
+  assert.equal((await order({ lat: 91, lng: 77, source: 'map' })).status, 400);
+  await pool.query(`UPDATE campus_boundary SET active = false, status = 'retired'`);
+  const none = await order({ ...SPOT, source: 'map' });
+  assert.equal(none.status, 403);
+  assert.match(none.body.error, /Campus delivery area is currently unavailable/);
+});
+
+test('a live-location spot: accuracy <= 100 m, not nearer the edge than its uncertainty; never IP', async () => {
+  const s = await student();
+  const { v, item } = await openOutlet();
+  const order = (spot) => s.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: item.id, qty: 1 }], fulfilment: 'delivery', spot });
+  const ok = await order({ ...SPOT, source: 'gps', accuracy: 12 });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal((await pool.query(`SELECT destination_kind k FROM food_order WHERE id = $1`, [ok.body.id])).rows[0].k, 'live_gps_spot');
+  assert.equal((await order({ ...SPOT, source: 'gps', accuracy: 101 })).status, 403);
+  assert.equal((await order({ ...SPOT, source: 'gps' })).status, 400, 'no accuracy, no spot');
+  const edge = await order({ ...READINGS['98'], source: 'gps', accuracy: 5 });
+  assert.equal(edge.status, 403);
+  /* Inside but 20 m from the edge with a 60 m reading: cannot tell which side. */
+  const { metresToEdge, pointInPolygon } = await import('../src/services/campus.js');
+  const near = Object.values(READINGS).find((p) => pointInPolygon(p.lat, p.lng, OSM) && metresToEdge(p.lat, p.lng, OSM) < 60);
+  if (near) assert.equal((await order({ ...near, source: 'gps', accuracy: 60 })).status, 403);
+  const src = fs.readFileSync(root('src/services/campus.js'), 'utf8') + fs.readFileSync(root('src/routes/orders.js'), 'utf8');
+  assert.ok(!/ipapi|geoip|ip-api|x-forwarded-for.*lat/i.test(src), 'no IP location');
+});
+
+test('once an order leaves draft its spot is frozen; the database rejects a spot and a node together', async () => {
+  const s = await student();
+  const { v, item } = await openOutlet();
+  const d = await s.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: item.id, qty: 1 }], fulfilment: 'delivery', spot: { ...SPOT, source: 'map' } });
+  await pool.query(`UPDATE food_order SET state = 'awaiting_payment' WHERE id = $1`, [d.body.id]);
+  await assert.rejects(pool.query(`UPDATE food_order SET spot_lat = 30.4 WHERE id = $1`, [d.body.id]), /frozen/);
+  await assert.rejects(pool.query(`UPDATE food_order SET destination_id = $2 WHERE id = $1`, [d.body.id, place('The HUBBLE').id]));
+  const d2 = await s.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: item.id, qty: 1 }], fulfilment: 'delivery', spot: { ...SPOT, source: 'map' } });
+  await assert.rejects(pool.query(`UPDATE food_order SET destination_id = $2 WHERE id = $1`, [d2.body.id, place('The HUBBLE').id]), /delivery_needs_destination/);
 });
 
 test('the picker map: the campus, its outline, and one labelled marker per delivery place - nothing else', async () => {
@@ -499,21 +569,26 @@ test('a map point is never stored as a destination, and live location chooses no
 
 test('the Satellite base map: only from server config, credited, and never in the browser code', async () => {
   const { mapTiles } = await import('../src/services/campus.js');
-  assert.deepEqual(mapTiles({}), { satellite: null });
-  assert.deepEqual(mapTiles({ ARCGIS_BASEMAP_TOKEN: '  ' }), { satellite: null });
+  /* Without a token: EOX Sentinel-2 cloudless 2016 (CC BY 4.0), keyless, credited. */
+  for (const env of [{}, { ARCGIS_BASEMAP_TOKEN: '  ' }]) {
+    const e = mapTiles(env).satellite;
+    assert.equal(e.provider, 'eox-s2cloudless-2016');
+    assert.equal(e.url, 'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg');
+    assert.match(e.attribution, /Sentinel-2 cloudless - https:\/\/s2maps\.eu.*EOX IT Services GmbH.*Copernicus Sentinel data 2016/);
+  }
   const t = mapTiles({ ARCGIS_BASEMAP_TOKEN: 'abc/+=' }).satellite;
   assert.equal(t.url, 'https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token=abc%2F%2B%3D');
   assert.match(t.attribution, /Powered by <a href="https:\/\/www\.esri\.com">Esri<\/a>/);
   assert.match(t.attribution, /Maxar/);
-  /* Not configured in tests, so the map says there is no Satellite layer. */
-  assert.deepEqual((await (await student()).get('/campus/map')).body.tiles, { satellite: null });
+  /* No token in tests: the map is sent the keyless layer, never a disabled one. */
+  assert.equal((await (await student()).get('/campus/map')).body.tiles.satellite.provider, 'eox-s2cloudless-2016');
 
   /* Switching base maps swaps only the base layer: OSM is the default, the
      Satellite layer is built from exactly what the server sent. */
   const { baseLayers, OSM_TILES } = await MAP_JS;
   const made = [];
   const L = { tileLayer: (url, options) => { const l = { url, options }; made.push(l); return l; } };
-  assert.equal(baseLayers(L, { satellite: null }).satellite, null);
+  assert.equal(baseLayers(L, { satellite: null }).satellite, null, 'only if a server ever sends none');
   const b = baseLayers(L, { satellite: t });
   assert.equal(b.default.url, OSM_TILES.url);
   assert.equal(b.satellite.url, t.url);
@@ -521,35 +596,34 @@ test('the Satellite base map: only from server config, credited, and never in th
   assert.equal(b.satellite.options.referrerPolicy, 'strict-origin-when-cross-origin');
 });
 
-test('the picker button: a tapped spot can be used, every refusal says why, nothing is chosen for the student', async () => {
-  const { mapPointChosen, mapPointAnswered, mapPointConfirmed, destinationChosen, pickerCta } = await PICK;
-  const hubble = place('The HUBBLE');
+test('the picker button: an inside spot is chosen as itself; outside or unchecked says why; nothing is swapped in', async () => {
+  const { mapPointChosen, mapPointAnswered, spotChosen, usableSpot, pickerCta } = await PICK;
   assert.deepEqual([pickerCta({}).enabled, Boolean(pickerCta({}).reason)], [false, true]);
 
-  let S = { destination: null, ...mapPointChosen(30.41645, 77.96655) };
+  /* The production screenshot's point: inside, no named point in reach. */
+  let S = { destination: null, ...mapPointChosen(30.41621, 77.96981) };
   const pin = S.pick.pin;
   assert.equal(pickerCta(S).enabled, false, 'still checking');
-  /* Eligible: inside, a delivery point within reach. The button is usable. */
-  Object.assign(S, mapPointAnswered(S, pin, { candidates: [{ id: hubble.id, name: 'The HUBBLE', metres: 20 }] }));
-  assert.deepEqual([pickerCta(S).label, pickerCta(S).enabled, pickerCta(S).act], ['Use this spot', true, 'useSpot']);
-  Object.assign(S, mapPointConfirmed(S));
-  assert.deepEqual(S.pick.pin, pin, 'the exact point is kept');
-  assert.equal(S.destination, null, 'using the spot selects no delivery point - not The HUBBLE');
-  assert.match(pickerCta(S).reason, /Choose which delivery point/);
-  /* The student chooses; the order carries their exact spot. */
-  Object.assign(S, destinationChosen(hubble, { pin: S.pick.pin }));
-  assert.deepEqual(S.destination.pin, pin);
-  assert.deepEqual([pickerCta(S).enabled, pickerCta(S).label], [true, 'Deliver to your spot near The HUBBLE']);
+  Object.assign(S, mapPointAnswered(S, pin, { inside: true, deliverable: true, candidates: [] }));
+  assert.deepEqual([pickerCta(S).label, pickerCta(S).enabled, pickerCta(S).act], ['Choose this spot', true, 'useSpot']);
+  Object.assign(S, spotChosen(usableSpot(S), { source: 'map' }));
+  assert.deepEqual(S.destination.spot, { lat: 30.41621, lng: 77.96981, source: 'map' }, 'exactly the tapped point');
+  assert.deepEqual([S.destination.id, S.destination.kind, S.destination.pin], [null, 'manual_map_spot', null]);
+  assert.deepEqual([pickerCta(S).enabled, pickerCta(S).label], [true, 'Deliver to this spot']);
 
-  /* Refusals: disabled, with a reason, never a silent substitute. */
-  for (const [answer, re] of [[{ error: 'That spot is outside the campus delivery area.' }, /outside the supported delivery area/],
-                              [{ candidates: [] }, /inside campus but is not currently supported/]]) {
+  /* Outside, or a failed check: disabled with the reason; nothing chosen. */
+  for (const answer of [{ inside: false }, { error: 'This spot is outside the campus delivery area.' }]) {
     const T = { destination: null, ...mapPointChosen(30.4, 77.9) };
     Object.assign(T, mapPointAnswered(T, T.pick.pin, answer));
     const c = pickerCta(T);
     assert.equal(c.enabled, false);
-    assert.match(c.reason, re);
-    assert.equal(mapPointConfirmed(T), null, 'an ineligible spot cannot be used');
+    assert.match(c.reason, /outside the campus delivery area/);
+    assert.equal(usableSpot(T), null);
+    assert.equal(spotChosen(usableSpot(T)), null);
     assert.equal(T.destination, null);
   }
+  /* A live reading becomes a gps spot with its accuracy, never a named point. */
+  const G = spotChosen({ lat: 30.4164, lng: 77.9665 }, { source: 'gps', accuracy: 9 });
+  assert.deepEqual(G.destination.spot, { lat: 30.4164, lng: 77.9665, source: 'gps', accuracy: 9 });
+  assert.equal(pickerCta(G).label, 'Deliver to my live location');
 });

@@ -568,6 +568,7 @@ textarea.input { resize: vertical; min-height: 72px; }
 .echo-map-bases button+button{border-left:1px solid rgba(28,25,23,.15)}
 .echo-map-bases button[aria-pressed="true"]{background:#1C1917;color:#fff}
 .echo-map-bases button:disabled{color:#A8A29E;cursor:not-allowed}
+.echo-map-notice{max-width:190px;background:#fff;color:#1C1917;font-size:11px;line-height:1.35;padding:6px 8px;border-radius:8px;box-shadow:0 1px 5px rgba(28,25,23,.3)}
 .echo-map-recentre{border-radius:8px;box-shadow:0 1px 5px rgba(28,25,23,.3);color:#2563EB}
 .echo-map-choose .leaflet-popup-content{margin:10px}
 .echo-map-choose .btn{width:100%}
