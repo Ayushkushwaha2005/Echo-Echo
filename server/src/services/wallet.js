@@ -264,12 +264,13 @@ export async function dispatchPayout(payoutId, { actorId = null } = {}) {
        FROM payout_destination d
       WHERE p.id=$1 AND p.state='pending' AND d.id = p.destination_id
         AND d.verification_status = 'verified'
-      RETURNING p.*, d.provider_fund_account_id`, [payoutId, PAYOUTS.method]);
+      RETURNING p.*, d.provider_fund_account_id, d.instrument`, [payoutId, PAYOUTS.method]);
   if (!claimed) return { state: 'skipped', note: 'not pending, or no verified destination' };
 
   let r;
   try {
-    r = await adapter.send(claimed, { provider_fund_account_id: claimed.provider_fund_account_id });
+    r = await adapter.send(claimed, { provider_fund_account_id: claimed.provider_fund_account_id,
+                                     instrument: claimed.instrument });
   } catch (e) {
     const definite = e.providerStatus && !e.retryable;
     if (definite) {

@@ -15,7 +15,7 @@
    ========================================================================== */
 import test, { before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { createHmac, generateKeyPairSync, privateDecrypt, constants as cc } from 'node:crypto';
 import { createServer } from 'node:http';
 import { startDb, stopDb, truncateAll, makeUser, makeVendor, makeItem, makeCampus, setTerms,
          makeVerifiedDestination } from './helpers/db.mjs';
@@ -39,7 +39,7 @@ function startStub() {
       req.on('data', (c) => { body += c; });
       req.on('end', () => {
         const b = body ? JSON.parse(body) : null;
-        calls.push({ method: req.method, url: req.url, body: b });
+        calls.push({ method: req.method, url: req.url, body: b, sig: req.headers['x-cf-signature'] || null });
         const json = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
         if (req.method === 'POST' && req.url === '/pg/orders') {
           return json(200, { order_id: b.order_id, order_amount: b.order_amount, order_currency: 'INR',
@@ -77,6 +77,8 @@ function startStub() {
   });
 }
 let reconLines = [];
+const { publicKey: PUB, privateKey: PRIV } = generateKeyPairSync('rsa', { modulusLength: 2048,
+  publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
 
 before(async () => {
   await startDb();
@@ -87,7 +89,7 @@ before(async () => {
     PAYMENT_PROVIDER: 'cashfree', CASHFREE_PG_APP_ID: 'TEST_APP', CASHFREE_PG_SECRET_KEY: PG_SECRET,
     CASHFREE_PG_BASE_URL: stubUrl,
     PAYOUT_PROVIDER: 'cashfree', CASHFREE_PAYOUT_CLIENT_ID: 'TEST_PAYOUT', CASHFREE_PAYOUT_CLIENT_SECRET: PO_SECRET,
-    CASHFREE_PAYOUT_BASE_URL: stubUrl,
+    CASHFREE_PAYOUT_BASE_URL: stubUrl, CASHFREE_PAYOUT_PUBLIC_KEY: PUB,
   });
   ({ pool } = await import('../src/db/index.js'));
   const { build } = await import('../src/index.js');
@@ -100,7 +102,7 @@ after(async () => {
   await stopDb();
   for (const k of ['PAYMENT_PROVIDER', 'CASHFREE_PG_APP_ID', 'CASHFREE_PG_SECRET_KEY', 'CASHFREE_PG_BASE_URL',
                    'PAYOUT_PROVIDER', 'CASHFREE_PAYOUT_CLIENT_ID', 'CASHFREE_PAYOUT_CLIENT_SECRET',
-                   'CASHFREE_PAYOUT_BASE_URL']) delete process.env[k];
+                   'CASHFREE_PAYOUT_BASE_URL', 'CASHFREE_PAYOUT_PUBLIC_KEY']) delete process.env[k];
 });
 
 beforeEach(async () => {
@@ -546,4 +548,24 @@ test('an accusation alone moves no money; a reviewed finding with evidence can a
   assert.equal(w.pendingPaise, 0);
   const ev = (await as_.get(`/admin/incidents/${rep.body.id}/events`)).body.events.map((e) => e.event);
   assert.deepEqual(ev, ['reported', 'resolved', 'action:earning_adjustment', 'action:warning']);
+});
+
+test('payout requests carry a fresh X-Cf-Signature; UPI payees are paid over UPI', async () => {
+  await setPayoutConfig({ earning_hold_hours: 0, min_withdrawal_paise: 1000 });
+  await setTerms(pool, TERMS_115);
+  const partner = await newPartner();
+  const ps = await as(partner);
+  await ps.put('/partner/payout-method', { instrument: 'upi', vpa: 'ravi.k@okhdfc', holderName: 'Ravi Kumar' });
+  const a = await paidOrder(); await deliver(a.orderId, partner, a.cs);
+  const w = await ps.post('/partner/withdrawals', { idempotencyKey: 'wd-upi-sig-1' });
+  assert.equal(w.body.state, 'paid', JSON.stringify(w.body));
+  for (const c of calls.filter((x) => x.url.startsWith('/payout/'))) {
+    assert.ok(c.sig, `${c.url} is signed`);
+    const plain = privateDecrypt({ key: PRIV, padding: cc.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha1' },
+                                 Buffer.from(c.sig, 'base64')).toString();
+    const [id, ts] = plain.split('.');
+    assert.equal(id, 'TEST_PAYOUT');
+    assert.ok(Math.abs(Date.now() / 1000 - Number(ts)) < 60, 'timestamp is current');
+  }
+  assert.equal(calls.find((x) => x.url === '/payout/transfers').body.transfer_mode, 'upi');
 });

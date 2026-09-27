@@ -250,6 +250,13 @@ export const PAYOUTS = {
     clientSecret: env('CASHFREE_PAYOUT_CLIENT_SECRET'),
     mode: env('CASHFREE_PAYOUT_MODE', 'imps'),     // imps | neft | upi
     apiVersion: env('CASHFREE_PAYOUT_API_VERSION', '2024-01-01'),
+    /* Payouts two-factor authentication without a fixed server IP: the
+       public key Cashfree issues (Payouts dashboard > Developers > Two-Factor
+       Authentication > Public Key), as PEM text or a file path. Every
+       request then carries X-Cf-Signature. It is a PUBLIC key, but kept in
+       server config because it identifies this merchant's integration. */
+    publicKey: env('CASHFREE_PAYOUT_PUBLIC_KEY'),
+    publicKeyPath: env('CASHFREE_PAYOUT_PUBLIC_KEY_PATH'),
   },
   razorpayx: {
     /* The RazorpayX current account the money leaves from. Not the same

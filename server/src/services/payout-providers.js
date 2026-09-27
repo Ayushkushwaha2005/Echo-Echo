@@ -37,7 +37,8 @@
    and the route refuses with `configuration_required` before reaching here.
    ========================================================================== */
 import { PAYOUTS } from '../config.js';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual, publicEncrypt, constants as cryptoConstants } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { ProviderUnavailable, Conflict } from '../auth/rbac.js';
 
 /* A provider error carries its HTTP status so the caller can tell a
@@ -131,17 +132,11 @@ export const cashfree = {
         'Add the payee as a beneficiary in the Cashfree dashboard, then record the ' +
         'beneficiary id against them. Quad does not store bank account numbers.');
     }
-    const { clientId, clientSecret, mode, apiVersion } = PAYOUTS.cashfree;
+    const { mode } = PAYOUTS.cashfree;
     const res = await fetch(`${PAYOUTS.cashfreeBase}/payout/transfers`, {
       method: 'POST',
-      headers: {
-        'x-client-id': clientId,
-        'x-client-secret': clientSecret,
-        'x-api-version': apiVersion,
-        'Content-Type': 'application/json',
-        /* Cashfree's request-level replay guard, on top of transfer_id. */
-        'x-request-id': payout.id,
-      },
+      /* Cashfree's request-level replay guard, on top of transfer_id. */
+      headers: cashfreePayoutHeaders({ 'x-request-id': payout.id }),
       body: JSON.stringify({
         /* Cashfree takes rupees as a decimal string. This is the ONE place a
            conversion happens, and it is exact: integer paise divided by 100
@@ -149,7 +144,9 @@ export const cashfree = {
         transfer_amount: `${Math.floor(payout.amount_paise / 100)}.` +
                          String(payout.amount_paise % 100).padStart(2, '0'),
         transfer_id: payout.id,
-        transfer_mode: mode,
+        /* A UPI beneficiary is paid over UPI; a bank one over the
+           configured bank rail (IMPS by default). */
+        transfer_mode: destination.instrument === 'upi' ? 'upi' : mode,
         beneficiary_details: { beneficiary_id: destination.provider_fund_account_id },
         remarks: 'Quad settlement',
       }),
@@ -176,14 +173,9 @@ export const cashfree = {
      `verified` is true only when Cashfree says VERIFIED. INITIATED/PENDING
      leave the destination pending; INVALID/FAILED mark it failed. */
   async createBeneficiary({ beneficiaryId, name, instrument, accountNumber, ifsc, vpa, phone, email }) {
-    const { clientId, clientSecret, apiVersion } = PAYOUTS.cashfree;
     const res = await fetch(`${PAYOUTS.cashfreeBase}/payout/beneficiary`, {
       method: 'POST',
-      headers: {
-        'x-client-id': clientId, 'x-client-secret': clientSecret,
-        'x-api-version': apiVersion, 'Content-Type': 'application/json',
-        'x-request-id': beneficiaryId,
-      },
+      headers: cashfreePayoutHeaders({ 'x-request-id': beneficiaryId }),
       body: JSON.stringify({
         beneficiary_id: beneficiaryId,
         beneficiary_name: name,
@@ -219,12 +211,9 @@ export const cashfree = {
   /* The authoritative answer for a transfer that was accepted but not yet
      settled. Looked up by OUR id, which is Cashfree's transfer_id. */
   async fetchTransfer(transferId) {
-    const { clientId, clientSecret, apiVersion } = PAYOUTS.cashfree;
     const res = await fetch(
-      `${PAYOUTS.cashfreeBase}/payout/transfers?transfer_id=${encodeURIComponent(transferId)}`, {
-        headers: { 'x-client-id': clientId, 'x-client-secret': clientSecret,
-                   'x-api-version': apiVersion },
-      });
+      `${PAYOUTS.cashfreeBase}/payout/transfers?transfer_id=${encodeURIComponent(transferId)}`,
+      { headers: cashfreePayoutHeaders() });
     const text = await res.text();
     if (res.status === 404) return { status: 'NOT_FOUND', outcome: 'not_found' };
     if (!res.ok) throw providerError('cashfree', res, text);
@@ -274,6 +263,33 @@ function normaliseTransfer(t) {
     utr: t.transfer_utr || null,
     reason: t.status_description ? String(t.status_description).slice(0, 200) : null,
   };
+}
+
+
+/* Cashfree Payouts request headers. With a public key configured, each
+   request is signed: RSA-OAEP (SHA-1, per Cashfree's reference
+   implementation) over "<clientId>.<unix seconds>", base64, in
+   X-Cf-Signature. A fresh timestamp per request, so a captured signature
+   expires with Cashfree's window. */
+let cfPublicKey;
+function cashfreePayoutPublicKey() {
+  if (cfPublicKey !== undefined) return cfPublicKey;
+  const c = PAYOUTS.cashfree;
+  cfPublicKey = c.publicKey ? c.publicKey.replace(/\\n/g, '\n')
+    : c.publicKeyPath ? readFileSync(c.publicKeyPath, 'utf8') : null;
+  return cfPublicKey;
+}
+export function cashfreePayoutHeaders(extra = {}) {
+  const { clientId, clientSecret, apiVersion } = PAYOUTS.cashfree;
+  const h = { 'x-client-id': clientId, 'x-client-secret': clientSecret,
+              'x-api-version': apiVersion, 'Content-Type': 'application/json', ...extra };
+  const key = cashfreePayoutPublicKey();
+  if (key) {
+    h['X-Cf-Signature'] = publicEncrypt(
+      { key, padding: cryptoConstants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha1' },
+      Buffer.from(`${clientId}.${Math.floor(Date.now() / 1000)}`)).toString('base64');
+  }
+  return h;
 }
 
 /* ==========================================================================

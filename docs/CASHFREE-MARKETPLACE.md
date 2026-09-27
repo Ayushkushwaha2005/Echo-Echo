@@ -3,19 +3,18 @@
 What is built, what Cashfree has to switch on, and what only the owner can do.
 Money rules live in `docs/FINANCE.md`; provider choice in `docs/PAYMENTS-PROVIDER.md`.
 
-## Status (2026-09-27)
+## Status (2026-09-27, evening)
 
 | | State |
 |---|---|
-| Collection: hosted checkout, server-side order, signed webhook, status pull, `applyOutcome()` | Built and tested against a wire-format stub. **Not yet run against the Cashfree sandbox**: that needs the sandbox keys set on the server. |
-| Payment methods | UPI and cards only (`order_meta.payment_methods = cc,dc,upi`, set by `CASHFREE_PG_PAYMENT_METHODS`). No COD path exists. |
-| Ledger allocation (café / platform fee / partner / gateway fee) | Built. Unchanged: the immutable snapshot and double-entry ledger stay the source of truth. |
-| Café settlement accounts (PENDING until verified) | Built. |
-| Partner wallet, withdrawals, bank/UPI payouts | Built, through Cashfree Payouts. Needs Payouts credentials. |
-| Easy Split | Code path ready and **off**. Needs Cashfree approval (see below). |
-| Refunds, and automatic refund when a paid order is cancelled | Built. |
-| Reconciliation | Settlement report import (earlier), plus missing-webhook, refund, payout-mismatch and duplicate-webhook detection. |
-| Production real money | **Not live.** Needs production approval and production keys. |
+| Collection against the **real Cashfree sandbox** | Verified with `scripts/sandbox-e2e.mjs` (27 pass, 0 fail). Cashfree accepts our orders; payments made with Cashfree's official sandbox UPI instruments are confirmed by Cashfree's own signed webhook, delivered over HTTPS. |
+| Failed attempt | Recorded as failed, never paid. The order stays retryable, and the replaced Cashfree order is TERMINATED. |
+| Refunds | Accepted by Cashfree and reached SUCCESS through the status pull. Duplicate requests are no-ops. |
+| Settlement report API | Reachable (it rejected millisecond timestamps; now fixed). |
+| User-dropped | Only the hosted checkout UI emits it. Covered by signed-webhook tests; not driven live. |
+| Payouts | Code is complete, including the X-Cf-Signature 2FA and UPI transfer mode. **Not yet run live: Payouts sandbox credentials are needed.** |
+| Easy Split | Off. |
+| Production | Not deployed. Migration 028 is not applied. |
 
 ## How the money flows
 
@@ -140,3 +139,21 @@ Reported → Under review → Resolved, with an append-only trail in `delivery_i
    - Then set the production keys with `CASHFREE_PG_BASE_URL=https://api.cashfree.com`.
    - Run migration 028 against prod before deploying this code.
 7. **Café bank accounts.** When a café provides them, enter them with `PUT /admin/vendors/:id/settlement-account`. Cashfree verifies the beneficiary.
+
+## Production deployment sequence (prepared, not executed)
+
+1. **Owner:** get production activation from Cashfree, and Payouts activation if partner payouts should be automatic.
+2. **Render env (production keys only):**
+   - `PAYMENT_PROVIDER=cashfree`
+   - `CASHFREE_PG_APP_ID` and `CASHFREE_PG_SECRET_KEY` (production)
+   - `CASHFREE_PG_BASE_URL` unset (it defaults to api.cashfree.com)
+   - `CASHFREE_PG_NOTIFY_URL=https://echo-echo-api.onrender.com/payments/webhook`
+   - `CASHFREE_PG_RETURN_URL=https://www.echoecho.tech/`
+   - Remove `PAYMENTS_DEFERRED`, and set `SWEEPER` back on, because unpaid orders must expire.
+
+   The boot guard refuses sandbox URLs, TEST app ids and a non-https notify URL.
+3. Apply migration 028 to production **before** the code: `npm --prefix server run migrate:local` against prod. This needs the owner's go-ahead.
+4. Merge `cashfree-marketplace` into main. CI runs the full suite, deploy.yml deploys and runs the live check.
+5. Place one real ₹1-scale order end to end and check that its webhook arrived. Then refund it.
+
+**Rollback.** Redeploy the previous commit. Migration 028 only adds tables, nullable or defaulted columns, and widened CHECK sets, so the previous code runs on the migrated schema unchanged. There is no down-migration; nothing needs one. To stop taking payments immediately, set `PAYMENTS_DEFERRED=true` and unset `PAYMENT_PROVIDER`: checkout returns 503 and no order is placed.
