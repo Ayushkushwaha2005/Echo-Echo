@@ -137,6 +137,10 @@ export const cashfree = {
       method: 'POST',
       /* Cashfree's request-level replay guard, on top of transfer_id. */
       headers: cashfreePayoutHeaders({ 'x-request-id': payout.id }),
+      /* A transfer call that hangs is an UNKNOWN outcome, not a failure:
+         the abort surfaces as a non-provider error, which dispatch treats as
+         "processing, check status later" — never as a reason to resend. */
+      signal: AbortSignal.timeout(PAYOUTS.cashfree.timeoutMs),
       body: JSON.stringify({
         /* Cashfree takes rupees as a decimal string. This is the ONE place a
            conversion happens, and it is exact: integer paise divided by 100
@@ -176,6 +180,7 @@ export const cashfree = {
     const res = await fetch(`${PAYOUTS.cashfreeBase}/payout/beneficiary`, {
       method: 'POST',
       headers: cashfreePayoutHeaders({ 'x-request-id': beneficiaryId }),
+      signal: AbortSignal.timeout(PAYOUTS.cashfree.timeoutMs),
       body: JSON.stringify({
         beneficiary_id: beneficiaryId,
         beneficiary_name: name,
@@ -213,7 +218,7 @@ export const cashfree = {
   async fetchTransfer(transferId) {
     const res = await fetch(
       `${PAYOUTS.cashfreeBase}/payout/transfers?transfer_id=${encodeURIComponent(transferId)}`,
-      { headers: cashfreePayoutHeaders() });
+      { headers: cashfreePayoutHeaders(), signal: AbortSignal.timeout(PAYOUTS.cashfree.timeoutMs) });
     const text = await res.text();
     if (res.status === 404) return { status: 'NOT_FOUND', outcome: 'not_found' };
     if (!res.ok) throw providerError('cashfree', res, text);

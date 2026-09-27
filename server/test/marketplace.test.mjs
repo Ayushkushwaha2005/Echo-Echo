@@ -59,6 +59,7 @@ function startStub() {
           if (transfers.has(b.transfer_id)) return json(409, { code: 'transfer_id_already_exists' });
           if (transferMode === 'reject400') return json(400, { code: 'beneficiary_blacklisted' });
           if (transferMode === 'error500') { transfers.set(b.transfer_id, 'SUCCESS'); return json(502, { code: 'upstream' }); }
+          if (transferMode === 'hang') { transfers.set(b.transfer_id, 'SUCCESS'); return setTimeout(() => json(200, {}), 3000); }
           transfers.set(b.transfer_id, transferMode);
           return json(200, { transfer_id: b.transfer_id, cf_transfer_id: 'cft_' + b.transfer_id.slice(0, 8),
                              status: transferMode, transfer_utr: transferMode === 'SUCCESS' ? 'UTR' + b.transfer_id.slice(0, 6) : null });
@@ -89,7 +90,7 @@ before(async () => {
     PAYMENT_PROVIDER: 'cashfree', CASHFREE_PG_APP_ID: 'TEST_APP', CASHFREE_PG_SECRET_KEY: PG_SECRET,
     CASHFREE_PG_BASE_URL: stubUrl,
     PAYOUT_PROVIDER: 'cashfree', CASHFREE_PAYOUT_CLIENT_ID: 'TEST_PAYOUT', CASHFREE_PAYOUT_CLIENT_SECRET: PO_SECRET,
-    CASHFREE_PAYOUT_BASE_URL: stubUrl, CASHFREE_PAYOUT_PUBLIC_KEY: PUB,
+    CASHFREE_PAYOUT_BASE_URL: stubUrl, CASHFREE_PAYOUT_PUBLIC_KEY: PUB, CASHFREE_PAYOUT_TIMEOUT_MS: '800',
   });
   ({ pool } = await import('../src/db/index.js'));
   const { build } = await import('../src/index.js');
@@ -568,4 +569,40 @@ test('payout requests carry a fresh X-Cf-Signature; UPI payees are paid over UPI
     assert.ok(Math.abs(Date.now() / 1000 - Number(ts)) < 60, 'timestamp is current');
   }
   assert.equal(calls.find((x) => x.url === '/payout/transfers').body.transfer_mode, 'upi');
+});
+
+test('a transfer call that hangs past the timeout is processing, not failed, and is never re-sent', async () => {
+  await setPayoutConfig({ earning_hold_hours: 0, min_withdrawal_paise: 1000 });
+  await setTerms(pool, TERMS_115);
+  const partner = await newPartner();
+  await makeVerifiedDestination(pool, { partnerId: partner.id });
+  const ps = await as(partner);
+  const a = await paidOrder(); await deliver(a.orderId, partner, a.cs);
+  transferMode = 'hang';
+  const r = await ps.post('/partner/withdrawals', { idempotencyKey: 'wd-hang-1' });
+  assert.equal(r.body.state, 'processing');
+  assert.equal(await bal('delivery_payable', `AND partner_id='${partner.id}'`), 1000, 'not paid until Cashfree says so');
+  const { syncInFlightPayouts } = await import('../src/services/wallet.js');
+  await pool.query(`UPDATE payout SET provider_synced_at = now() - interval '1 hour' WHERE id=$1`, [r.body.id]);
+  assert.equal((await syncInFlightPayouts()).paid, 1);
+  assert.equal(calls.filter((c) => c.method === 'POST' && c.url === '/payout/transfers').length, 1);
+});
+
+test('a paid transfer later REVERSED by the bank raises a mismatch and is not silently un-paid', async () => {
+  await setPayoutConfig({ earning_hold_hours: 0, min_withdrawal_paise: 1000 });
+  await setTerms(pool, TERMS_115);
+  const partner = await newPartner();
+  await makeVerifiedDestination(pool, { partnerId: partner.id });
+  const ps = await as(partner);
+  const a = await paidOrder(); await deliver(a.orderId, partner, a.cs);
+  const r = await ps.post('/partner/withdrawals', { idempotencyKey: 'wd-rev-1' });
+  assert.equal(r.body.state, 'paid');
+  transfers.set(r.body.id, 'REVERSED');
+  const { syncInFlightPayouts } = await import('../src/services/wallet.js');
+  await pool.query(`UPDATE payout SET provider_synced_at = now() - interval '2 hours' WHERE id=$1`, [r.body.id]);
+  const s = await syncInFlightPayouts();
+  assert.equal(s.mismatches, 1);
+  assert.equal((await pool.query(`SELECT state FROM payout WHERE id=$1`, [r.body.id])).rows[0].state, 'paid');
+  const ex = await pool.query(`SELECT 1 FROM reconciliation_exception WHERE kind='payout_mismatch' AND state='open'`);
+  assert.equal(ex.rowCount, 1);
 });

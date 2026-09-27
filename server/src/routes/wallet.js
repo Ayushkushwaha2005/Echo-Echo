@@ -25,6 +25,9 @@ import { settle } from '../services/payouts.js';
 import { partnerWallet, requestWithdrawal, retryPayout, payoutConfig, validatePayoutConfig,
          applyTransferOutcome, syncInFlightPayouts } from '../services/wallet.js';
 
+/* Limits per partner, not per IP: a campus shares a handful of NAT IPs. */
+const perActor = (req) => (req.actor?.id ? `actor:${req.actor.id}` : req.ip);
+
 const IFSC = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const ACCOUNT = /^\d{9,18}$/;
 const VPA = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$/;
@@ -107,7 +110,7 @@ export default async function walletRoutes(app) {
     return partnerWallet(req.actor.id);
   });
 
-  app.put('/partner/payout-method', { config: { rateLimit: { max: 5, timeWindow: '1 hour' } } }, async (req) => {
+  app.put('/partner/payout-method', { config: { rateLimit: { max: 5, timeWindow: '1 hour', keyGenerator: perActor, hook: 'preHandler' } } }, async (req) => {
     partnerOnly(req.actor);
     const inflight = await one(`SELECT 1 FROM payout WHERE partner_id=$1 AND state IN ('pending','processing')`,
                                [req.actor.id]);
@@ -120,7 +123,7 @@ export default async function walletRoutes(app) {
     return { destination: shapeDest(d) };
   });
 
-  app.post('/partner/withdrawals', { config: { rateLimit: { max: 10, timeWindow: '1 hour' } } }, async (req) => {
+  app.post('/partner/withdrawals', { config: { rateLimit: { max: 10, timeWindow: '1 hour', keyGenerator: perActor, hook: 'preHandler' } } }, async (req) => {
     partnerOnly(req.actor);
     const key = req.headers['idempotency-key'] || req.body?.idempotencyKey;
     const out = await requestWithdrawal(req.actor.id, { idempotencyKey: key, actorId: req.actor.id });

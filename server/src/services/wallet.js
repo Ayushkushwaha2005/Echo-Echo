@@ -297,6 +297,7 @@ export async function applyTransferOutcome(payoutId, t, { actorId = null } = {})
   const p = await one(`SELECT * FROM payout WHERE id=$1`, [payoutId]);
   if (!p) return { state: 'missing' };
   if (p.state === 'paid') {
+    await q(`UPDATE payout SET provider_status=$2, provider_synced_at=now() WHERE id=$1`, [p.id, t.status || p.provider_status]);
     if (t.outcome === 'failed') {
       /* Paid here, reversed there. Never silently un-paid: a human decides. */
       await raisePayoutMismatch(p, t);
@@ -340,11 +341,18 @@ async function raisePayoutMismatch(p, t) {
 export async function syncInFlightPayouts({ limit = 50 } = {}) {
   const adapter = activeAdapter();
   if (!adapter?.fetchTransfer) return { ran: false };
+  /* In flight, plus provider-paid transfers from the last three days,
+     because a bank can REVERSE a transfer after reporting success. A
+     reversal of a paid payout is never undone here: it raises a
+     payout_mismatch for a person (applyTransferOutcome). */
   const rows = (await q(
-    `SELECT id FROM payout WHERE state='processing'
-        AND (provider_synced_at IS NULL OR provider_synced_at < now() - interval '2 minutes')
+    `SELECT id FROM payout
+      WHERE ((state='processing'
+              AND (provider_synced_at IS NULL OR provider_synced_at < now() - interval '2 minutes'))
+          OR (state='paid' AND method='cashfree_payouts' AND paid_at > now() - interval '3 days'
+              AND (provider_synced_at IS NULL OR provider_synced_at < now() - interval '1 hour')))
       ORDER BY created_at LIMIT $1`, [limit])).rows;
-  const out = { ran: true, checked: 0, paid: 0, failed: 0 };
+  const out = { ran: true, checked: 0, paid: 0, failed: 0, mismatches: 0 };
   for (const { id } of rows) {
     try {
       const t = await adapter.fetchTransfer(id);
@@ -358,6 +366,8 @@ export async function syncInFlightPayouts({ limit = 50 } = {}) {
         continue;
       }
       const r = await applyTransferOutcome(id, { ...t, method: adapter.id });
+      if (r.mismatch) { out.mismatches++; continue; }
+      if (r.duplicate) continue;
       if (r.state === 'paid') out.paid++;
       if (r.state === 'failed') out.failed++;
     } catch { /* provider unreachable: try again next tick */ }

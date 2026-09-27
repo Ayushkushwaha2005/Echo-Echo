@@ -26,3 +26,7 @@ deploy/server.env
 # stay out of Git. 814 MB of JPEGs, and the photos show identifiable people.
 Google map*/
 campus-field/
+
+# Cashfree Payouts 2FA key material, never committed
+public-key/
+*.pem

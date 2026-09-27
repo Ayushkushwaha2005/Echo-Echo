@@ -257,6 +257,7 @@ export const PAYOUTS = {
        server config because it identifies this merchant's integration. */
     publicKey: env('CASHFREE_PAYOUT_PUBLIC_KEY'),
     publicKeyPath: env('CASHFREE_PAYOUT_PUBLIC_KEY_PATH'),
+    timeoutMs: Number(env('CASHFREE_PAYOUT_TIMEOUT_MS', 15000)),
   },
   razorpayx: {
     /* The RazorpayX current account the money leaves from. Not the same
