@@ -54,6 +54,7 @@ import { notifyAsync } from '../services/notify.js';
 import { snapshotFor } from '../services/pricing.js';
 import { postOrderCapture } from '../services/ledger.js';
 import { requireAdapter } from '../services/payment-providers.js';
+import { applyRefundOutcome } from '../services/refund-status.js';
 
 const rupees = (paise) => (paise / 100).toFixed(2);
 
@@ -214,37 +215,6 @@ async function applyOutcome(req, pay, ev, source) {
   return { ok: true, confirmed: true };
 }
 
-/* A provider's verdict on a refund we issued. The ledger was already
-   allocated when the provider accepted the refund; this only records that
-   the money actually reached the customer, or raises a mismatch if the
-   provider says it did not. Nothing here re-allocates money. */
-async function applyRefundOutcome(req, rf) {
-  const r = await one(`SELECT * FROM refund WHERE id::text = $1`, [rf.refundId]);
-  if (!r) return { ok: true, ignored: 'unknown refund' };
-  if (rf.outcome === 'completed' && r.state === 'processing') {
-    await tx(async (c) => {
-      await c.query(`UPDATE refund SET state='completed', settled_at=now() WHERE id=$1 AND state='processing'`, [r.id]);
-      const pay = (await c.query(`SELECT * FROM payment WHERE id=$1 FOR UPDATE`, [r.payment_id])).rows[0];
-      const back = Number((await c.query(
-        `SELECT COALESCE(sum(amount_paise),0)::int AS n FROM refund WHERE payment_id=$1 AND state='completed'`,
-        [pay.id])).rows[0].n);
-      if (back >= pay.amount_paise) await c.query(`UPDATE payment SET status='refunded' WHERE id=$1`, [pay.id]);
-    });
-    await audit(req, { action: 'refund.completed', resource: 'refund', resourceId: r.id, outcome: 'ok',
-                       detail: { source: 'webhook' } });
-    return { ok: true, refund: 'completed' };
-  }
-  if (rf.outcome === 'failed' && r.state !== 'failed') {
-    await q(`INSERT INTO reconciliation_exception (kind, payment_id, order_id, severity, detail)
-             VALUES ('refund_mismatch', $1, $2, 'blocking', $3)
-             ON CONFLICT DO NOTHING`,
-            [r.payment_id, r.order_id, JSON.stringify({ refundId: r.id, quadState: r.state,
-              providerStatus: rf.status, note: 'The provider reports this refund failed after it was allocated.' })]);
-    return { ok: true, refund: 'mismatch_raised' };
-  }
-  return { ok: true, refund: r.state };
-}
-
 export default async function paymentRoutes(app) {
   /* The raw request bytes needed for the signature check are captured by the
      global JSON parser in index.js and exposed as req.rawBody. A re-encoded
@@ -304,6 +274,15 @@ export default async function paymentRoutes(app) {
     if (!pay && adapter.id === 'cashfree' && !customer.phone) {
       throw Conflict('Add a contact mobile number before paying',
         'The payment gateway requires a phone number on the order. Add one under You → Contact number.');
+    }
+    if (!pay && typeof adapter.terminateOrder === 'function') {
+      /* Earlier attempts that failed or were dropped: close them at the
+         provider before opening a new one. */
+      const stale = (await q(`SELECT provider_order_id FROM payment
+                               WHERE order_id=$1 AND provider=$2 AND status IN ('failed','pending')
+                                 AND provider_order_id IS NOT NULL AND flagged_reason IS NULL`,
+                             [order.id, adapter.id])).rows;
+      for (const s of stale) await adapter.terminateOrder(s.provider_order_id).catch(() => false);
     }
     if (!pay) {
       /* Insert FIRST, so the row that owns the attempt exists before the

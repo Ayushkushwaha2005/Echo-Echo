@@ -188,6 +188,10 @@ export const PAYMENTS = {
     returnUrl: env('CASHFREE_PG_RETURN_URL'),
     /* Cashfree checkout method codes: cc credit card, dc debit card, upi. */
     paymentMethods: env('CASHFREE_PG_PAYMENT_METHODS', 'cc,dc,upi'),
+    /* Where Cashfree sends this order's webhooks. Set per order so the
+       endpoint is exactly the one this deployment verifies, whatever the
+       dashboard says. Must be https. */
+    notifyUrl: env('CASHFREE_PG_NOTIFY_URL'),
     /* Easy Split stays off until Cashfree approves the product for this
        merchant AND each café's vendor account is active there. */
     easySplit: env('CASHFREE_EASY_SPLIT', 'off') === 'on',
@@ -544,6 +548,19 @@ export function assertBootable() {
       if (!/^https:\/\//.test(value)) {
         fatal.push(`${name} must be an https URL in production (got "${value}").`);
       }
+    }
+    /* Sandbox and production never mix: a production server pointed at a
+       Cashfree sandbox (or holding TEST credentials) would take "payments"
+       that are not money. */
+    for (const [name, value] of [['CASHFREE_PG_BASE_URL', PAYMENTS.cashfreeBase],
+                                 ['CASHFREE_PAYOUT_BASE_URL', PAYOUTS.cashfreeBase]]) {
+      if (/sandbox|test\.cashfree/i.test(value)) fatal.push(`${name} points at the Cashfree sandbox in production.`);
+    }
+    if (PAYMENTS.provider === 'cashfree' && /^TEST/i.test(PAYMENTS.cashfree.appId || '')) {
+      fatal.push('CASHFREE_PG_APP_ID is a sandbox (TEST) app id; production needs the production key.');
+    }
+    if (PAYMENTS.cashfree.notifyUrl && !/^https:\/\//.test(PAYMENTS.cashfree.notifyUrl)) {
+      fatal.push('CASHFREE_PG_NOTIFY_URL must be https.');
     }
     /* Production refuses anything that would make the product lie or leak.
        These are the items on the readiness gate that can be checked at boot. */

@@ -218,6 +218,7 @@ export const cashfree = {
            wallets, no EMI. Cashfree enforces this on the hosted checkout. */
         order_meta: {
           ...(returnUrl ? { return_url: returnUrl } : {}),
+          ...(PAYMENTS.cashfree.notifyUrl ? { notify_url: PAYMENTS.cashfree.notifyUrl } : {}),
           payment_methods: PAYMENTS.cashfree.paymentMethods,
         },
         /* Easy Split, only when the caller supplied splits — which it does
@@ -373,7 +374,10 @@ export const cashfree = {
   async fetchSettlements({ from, to, settlementId, utr, cursor = null, limit = 100 }) {
     const filters = settlementId ? { cf_settlement_ids: [Number(settlementId)] }
                   : utr          ? { settlement_utrs: [String(utr)] }
-                  : { start_date: from.toISOString(), end_date: to.toISOString() };
+                  /* Second precision: Cashfree's recon API rejects an ISO
+                     timestamp with milliseconds (observed in sandbox). */
+                  : { start_date: from.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+                      end_date: to.toISOString().replace(/\.\d{3}Z$/, 'Z') };
     const res = await fetch(`${PAYMENTS.cashfreeBase}/pg/settlement/recon`, {
       method: 'POST',
       headers: this.headers(),
@@ -404,6 +408,16 @@ export const cashfree = {
         raw: r,
       })),
     };
+  },
+
+  /* Close a Cashfree order that a newer attempt replaced, so the customer
+     cannot pay a stale checkout as well as the new one. Best effort: if it
+     fails, a late success on the old order is still caught by applyOutcome
+     (order no longer awaiting payment -> flagged for refund review). */
+  async terminateOrder(providerOrderId) {
+    const res = await fetch(`${PAYMENTS.cashfreeBase}/pg/orders/${encodeURIComponent(providerOrderId)}`, {
+      method: 'PATCH', headers: this.headers(), body: JSON.stringify({ order_status: 'TERMINATED' }) });
+    return res.ok;
   },
 
   /* Easy Split vendor status, from Cashfree itself. The only source Quad
@@ -453,21 +467,29 @@ export const cashfree = {
     const body = JSON.parse(text);
     const orderStatus = String(body.order_status || '').toUpperCase();
 
-    /* An order marked PAID tells us money arrived but not which payment
-       carried it, and the payment is what we reconcile against. So when it
-       is PAID, ask for the payments too. */
-    let payment = null;
-    if (orderStatus === 'PAID') {
-      const pres = await fetch(
-        `${PAYMENTS.cashfreeBase}/pg/orders/${encodeURIComponent(providerOrderId)}/payments`,
-        { headers: this.headers() });
-      const ptext = await pres.text();
-      if (pres.ok) {
-        const list = JSON.parse(ptext);
-        payment = (Array.isArray(list) ? list : [])
-          .find((p) => String(p.payment_status).toUpperCase() === 'SUCCESS') || null;
-      }
+    /* The order status alone is not enough. PAID says money arrived but not
+       which payment carried it; ACTIVE says the order is still payable, yet
+       an individual attempt on it may already have FAILED (observed in the
+       sandbox: order ACTIVE, attempt FAILED). So the payment attempts are
+       always read, and:
+
+         any SUCCESS attempt on a PAID order  -> paid (that attempt)
+         order ACTIVE, latest attempt FAILED  -> failed (never paid; the
+                                                 order stays retryable)
+         anything else                        -> the order's own status
+
+       A failed attempt never produces 'paid', whatever else the response
+       says: 'paid' requires a SUCCESS attempt AND the order being PAID. */
+    let payments = [];
+    const pres = await fetch(
+      `${PAYMENTS.cashfreeBase}/pg/orders/${encodeURIComponent(providerOrderId)}/payments`,
+      { headers: this.headers() });
+    const ptext = await pres.text();
+    if (pres.ok) {
+      try { const list = JSON.parse(ptext); payments = Array.isArray(list) ? list : []; } catch { payments = []; }
     }
+    const status = (p) => String(p.payment_status || '').toUpperCase();
+    const payment = orderStatus === 'PAID' ? (payments.find((p) => status(p) === 'SUCCESS') || null) : null;
 
     if (payment) {
       return {
@@ -479,6 +501,23 @@ export const cashfree = {
         feePaise: null,
         raw: { order: body, payment },
       };
+    }
+    if (orderStatus === 'ACTIVE' && payments.length) {
+      const latest = [...payments].sort((a, b) =>
+        String(b.payment_time || b.payment_completion_time || '').localeCompare(
+          String(a.payment_time || a.payment_completion_time || '')))[0];
+      const ls = status(latest);
+      if (ls === 'FAILED' || ls === 'USER_DROPPED') {
+        return {
+          outcome: ls === 'FAILED' ? 'failed' : 'dropped',
+          providerOrderId: String(body.order_id),
+          providerPaymentId: latest.cf_payment_id != null ? String(latest.cf_payment_id) : null,
+          amountPaise: rupeesToPaise(latest.payment_amount ?? body.order_amount),
+          currency: String(body.order_currency || '').toUpperCase() || null,
+          feePaise: null,
+          raw: { order: body, payment: latest },
+        };
+      }
     }
     return {
       outcome: cfOrderOutcome(orderStatus),

@@ -33,6 +33,7 @@ import { q, one, tx } from '../db/index.js';
 import { PAYOUTS } from '../config.js';
 import { runScheduledReconciliation, detectOperationalDifferences } from './reconciliation.js';
 import { payoutConfig, syncInFlightPayouts } from './wallet.js';
+import { syncProcessingRefunds } from './refund-status.js';
 import { buildBatch, releaseBatch } from './payouts.js';
 
 const DEFAULTS = {
@@ -238,6 +239,8 @@ export function startSettlementScheduler(app, intervalMs = 60_000) {
          idempotent; neither moves money except by a provider's own SUCCESS. */
       const synced = await syncInFlightPayouts();
       if (synced.checked) app.log.info({ payouts: synced }, 'payout status sync');
+      const refunds = await syncProcessingRefunds();
+      if (refunds.checked) app.log.info({ refunds }, 'refund status sync');
       const ops = await detectOperationalDifferences();
       if (Object.values(ops).some((n) => n > 0)) app.log.warn({ reconciliation: ops }, 'reconciliation differences');
     } catch (e) {
