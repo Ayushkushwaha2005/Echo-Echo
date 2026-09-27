@@ -186,6 +186,11 @@ export const PAYMENTS = {
     secretKey: env('CASHFREE_PG_SECRET_KEY'),
     apiVersion: env('CASHFREE_PG_API_VERSION', '2026-01-01'),
     returnUrl: env('CASHFREE_PG_RETURN_URL'),
+    /* Cashfree checkout method codes: cc credit card, dc debit card, upi. */
+    paymentMethods: env('CASHFREE_PG_PAYMENT_METHODS', 'cc,dc,upi'),
+    /* Easy Split stays off until Cashfree approves the product for this
+       merchant AND each café's vendor account is active there. */
+    easySplit: env('CASHFREE_EASY_SPLIT', 'off') === 'on',
   },
   get configured() {
     if (this.provider === 'razorpay') {

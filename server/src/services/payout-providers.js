@@ -37,6 +37,7 @@
    and the route refuses with `configuration_required` before reaching here.
    ========================================================================== */
 import { PAYOUTS } from '../config.js';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ProviderUnavailable, Conflict } from '../auth/rbac.js';
 
 /* A provider error carries its HTTP status so the caller can tell a
@@ -165,7 +166,115 @@ export const cashfree = {
       utr: body.transfer_utr || null,
     };
   },
+
+  /* ---- beneficiaries ------------------------------------------------------
+     The ONLY place a full bank account number or UPI id travels: from the
+     request that carried it, straight to Cashfree, and never into the
+     database or a log line. What comes back is an opaque beneficiary id and
+     Cashfree's own verdict on the details.
+
+     `verified` is true only when Cashfree says VERIFIED. INITIATED/PENDING
+     leave the destination pending; INVALID/FAILED mark it failed. */
+  async createBeneficiary({ beneficiaryId, name, instrument, accountNumber, ifsc, vpa, phone, email }) {
+    const { clientId, clientSecret, apiVersion } = PAYOUTS.cashfree;
+    const res = await fetch(`${PAYOUTS.cashfreeBase}/payout/beneficiary`, {
+      method: 'POST',
+      headers: {
+        'x-client-id': clientId, 'x-client-secret': clientSecret,
+        'x-api-version': apiVersion, 'Content-Type': 'application/json',
+        'x-request-id': beneficiaryId,
+      },
+      body: JSON.stringify({
+        beneficiary_id: beneficiaryId,
+        beneficiary_name: name,
+        beneficiary_instrument_details: instrument === 'upi'
+          ? { vpa }
+          : { bank_account_number: accountNumber, bank_ifsc: ifsc },
+        ...(phone || email ? { beneficiary_contact_details: {
+          ...(phone ? { beneficiary_phone: String(phone).replace(/^\+91/, '') } : {}),
+          ...(email ? { beneficiary_email: email } : {}) } } : {}),
+      }),
+    });
+    const text = await res.text();
+    /* Never echo the provider's body back: it may contain the account
+       number we just sent. Only the status and a short code survive. */
+    if (!res.ok) {
+      let code = null;
+      try { code = JSON.parse(text).code || null; } catch { /* not json */ }
+      const err = new Error(`cashfree beneficiary ${res.status}${code ? ` ${code}` : ''}`);
+      err.providerStatus = res.status;
+      err.retryable = res.status === 429 || res.status >= 500;
+      throw err;
+    }
+    const body = JSON.parse(text);
+    const status = String(body.beneficiary_status || '').toUpperCase();
+    return {
+      beneficiaryId: String(body.beneficiary_id || beneficiaryId),
+      status,
+      verification: status === 'VERIFIED' ? 'verified'
+        : ['INVALID', 'FAILED', 'CANCELLED', 'DELETED'].includes(status) ? 'failed' : 'pending',
+    };
+  },
+
+  /* The authoritative answer for a transfer that was accepted but not yet
+     settled. Looked up by OUR id, which is Cashfree's transfer_id. */
+  async fetchTransfer(transferId) {
+    const { clientId, clientSecret, apiVersion } = PAYOUTS.cashfree;
+    const res = await fetch(
+      `${PAYOUTS.cashfreeBase}/payout/transfers?transfer_id=${encodeURIComponent(transferId)}`, {
+        headers: { 'x-client-id': clientId, 'x-client-secret': clientSecret,
+                   'x-api-version': apiVersion },
+      });
+    const text = await res.text();
+    if (res.status === 404) return { status: 'NOT_FOUND', outcome: 'not_found' };
+    if (!res.ok) throw providerError('cashfree', res, text);
+    const body = JSON.parse(text);
+    return normaliseTransfer(body);
+  },
+
+  /* Payouts webhooks are signed like PG webhooks, with the payouts client
+     secret: Base64(HMAC-SHA256(timestamp + rawBody)). */
+  verifyWebhook(headers, rawBody) {
+    const secret = PAYOUTS.cashfree.clientSecret;
+    if (!secret) return { ok: false, reason: 'not_configured' };
+    const ts = headers['x-webhook-timestamp'];
+    const sig = headers['x-webhook-signature'];
+    if (!ts || !sig) return { ok: false, reason: 'missing_signature_headers' };
+    const expected = createHmac('sha256', secret)
+      .update(String(ts) + rawBody.toString('utf8')).digest('base64');
+    const a = Buffer.from(String(sig)); const b = Buffer.from(expected);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, reason: 'bad_signature' };
+    const n = Number(ts);
+    const sentMs = n > 1e11 ? n : n * 1000;
+    if (!Number.isFinite(n) || Math.abs(Date.now() - sentMs) > 300_000) {
+      return { ok: false, reason: 'stale_timestamp' };
+    }
+    return { ok: true };
+  },
+
+  readWebhook(body) {
+    const d = body?.data?.transfer || body?.data || {};
+    return { eventType: String(body?.type || body?.event || '').toUpperCase(),
+             ...normaliseTransfer({ ...d, status: d.status || body?.type }) };
+  },
 };
+
+/* Cashfree transfer status -> the three outcomes Quad acts on. Anything not
+   named here is 'processing': an unknown status is never paid and never
+   failed, it is re-checked. */
+function normaliseTransfer(t) {
+  const raw = String(t.status || '').toUpperCase().replace(/^TRANSFER_/, '');
+  const outcome = raw === 'SUCCESS' ? 'paid'
+    : ['FAILED', 'REJECTED', 'REVERSED'].includes(raw) ? 'failed'
+    : 'processing';
+  return {
+    transferId: t.transfer_id ? String(t.transfer_id) : null,
+    providerPayoutId: t.cf_transfer_id != null ? String(t.cf_transfer_id) : null,
+    status: raw, outcome,
+    utr: t.transfer_utr || null,
+    reason: t.status_description ? String(t.status_description).slice(0, 200) : null,
+  };
+}
 
 /* ==========================================================================
    Registry

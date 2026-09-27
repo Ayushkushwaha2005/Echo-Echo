@@ -1797,13 +1797,14 @@ function ScrPartner() {
     offers: await quad.offers(), mine: await quad.orders({ scope: 'partner' }),
     earnings: await quad.earnings(), me: await quad.me(),
     deposit: await quad.deposit(), rating: await quad.partnerRating(),
+    wallet: await quad.wallet(),
   }));
   if (!r) return `<div class="screen">${TopBar('Deliveries', { back: 'profile' })}${Loading('Loading deliveries')}</div>`;
   /* Not (or no longer) a partner: the onboarding screen explains why, rather
      than the raw permission error. */
   if (!r.ok && r.e instanceof ApiError && r.e.status === 403) return ScrJoin();
   if (!r.ok) return `<div class="screen">${TopBar('Deliveries', { back: 'profile' })}${Problem(r.e)}</div>`;
-  const { offers, mine, earnings: e, me, deposit, rating } = r.v;
+  const { offers, mine, earnings: e, me, deposit, rating, wallet } = r.v;
   const online = !!me.partner?.online;
   const carrying = mine.orders.find((o) => ['assigned', 'picked_up'].includes(o.state));
   return `<div class="screen reading">
@@ -1860,23 +1861,55 @@ function ScrPartner() {
           </div>`).join('') : '<p class="t-sm muted">No deliveries yet.</p>'}
       </div>
       ${DepositCard(deposit)}
-      <div class="card card-pad stack g2">
-        ${Label('Earnings')}
-        <div class="between t-sm"><span class="muted">Earned in total</span><span class="money t-sm">${money(e.totalEarnedPaise)}</span></div>
-        <div class="between t-sm"><span class="muted">Already paid</span><span class="money t-sm">${money(e.paidOutPaise)}</span></div>
-        <div class="between t-sm"><span class="muted">Completed deliveries</span><span class="t-sm">${e.completedDeliveries}</span></div>
-        <p class="t-xs faint">You are paid what the order recorded when you delivered it, not a rate recalculated later.</p>
-      </div>
-      <div class="stack g2">
-        ${Label('Payout history')}
-        ${e.payouts.length ? e.payouts.map((p) => `
-          <div class="tile row g3"><div class="grow"><div class="money t-sm">${money(p.amount_paise)}</div>
-            <div class="t-xs muted">${esc(p.state)}${p.external_reference ? ` · ${esc(p.external_reference)}` : ''}</div></div>
-            <span class="t-xs faint">${when(p.paid_at || p.created_at)}</span></div>`).join('')
-          : '<p class="t-sm muted">Nothing paid out yet.</p>'}
-      </div>
+      ${WalletCard(wallet, e)}
       <button class="btn btn-ghost btn-sm" data-act="leavePartner">Leave the partner programme</button>
     </div>
+  </div>`;
+}
+
+/* The partner's wallet: their own money only, read from the ledger. */
+function WalletCard(w, e) {
+  const d = w.destination;
+  const methodForm = `<div class="stack g2">
+      <div class="row g2">
+        <label class="row g1 t-sm"><input type="radio" name="pm-kind" value="upi" ${S.pmKind !== 'bank' ? 'checked' : ''} data-act="pmKind" data-v="upi"> UPI ID</label>
+        <label class="row g1 t-sm"><input type="radio" name="pm-kind" value="bank" ${S.pmKind === 'bank' ? 'checked' : ''} data-act="pmKind" data-v="bank"> Bank account</label>
+      </div>
+      <input class="input" id="pm-name" placeholder="Name as the bank has it" autocomplete="name">
+      ${S.pmKind === 'bank'
+        ? `<input class="input" id="pm-acct" inputmode="numeric" placeholder="Account number" autocomplete="off">
+           <input class="input" id="pm-ifsc" placeholder="IFSC (e.g. SBIN0001234)" autocomplete="off" style="text-transform:uppercase">`
+        : '<input class="input" id="pm-vpa" placeholder="UPI ID (e.g. name@okhdfc)" autocomplete="off">'}
+      <button class="btn btn-secondary btn-sm" data-act="savePayoutMethod">Save payout details</button>
+      <p class="t-xs faint">Your details are sent to our payout provider to verify and pay you. ${BRAND} keeps only the last digits.</p>
+    </div>`;
+  return `<div class="card card-pad stack g3">
+    ${Label('Earnings')}
+    <div class="between"><span class="muted t-sm">Available to withdraw</span><span class="money t-h3">${money(w.availablePaise)}</span></div>
+    <div class="between t-sm"><span class="muted">Pending</span><span class="money t-sm">${money(w.pendingPaise)}</span></div>
+    <div class="between t-sm"><span class="muted">Earned in total</span><span class="money t-sm">${money(w.totalEarnedPaise)}</span></div>
+    <div class="between t-sm"><span class="muted">Completed deliveries</span><span class="t-sm">${e.completedDeliveries}</span></div>
+    <div class="between t-sm"><span class="muted">Last payout</span><span class="t-sm">${w.lastPayout ? `${money(w.lastPayout.amount_paise)} · ${when(w.lastPayout.paid_at)}` : 'None yet'}</span></div>
+    <p class="t-xs faint">An earning is pending for ${w.holdHours} hours after delivery, and while a report about that order is being reviewed. Minimum withdrawal ${money(w.minWithdrawalPaise)}; payouts are ${esc(w.frequency === 'on_request' ? 'on request' : w.frequency)}.</p>
+    ${w.canWithdraw
+      ? `<button class="btn btn-primary" data-act="withdraw">Withdraw ${money(w.availablePaise)}</button>`
+      : `<div class="t-xs muted">${w.blockers.map(esc).join('<br>')}${w.nextEligibility ? `<br>Next withdrawal from ${esc(w.nextEligibility)}.` : ''}</div>`}
+    <div class="stack g2">
+      ${Label('Payout details')}
+      ${d ? `<div class="between t-sm"><span>${esc(d.instrument === 'upi' ? 'UPI' : 'Bank')} · ${esc(d.masked || '')}</span>
+               <span class="badge ${d.status === 'verified' ? 'badge-open' : d.status === 'failed' ? 'badge-danger' : 'badge-warn'}">${esc(d.status === 'verified' ? 'Verified' : d.status === 'failed' ? 'Not verified' : 'Verifying')}</span></div>` : ''}
+      ${S.pmOpen || !d ? methodForm : '<button class="btn btn-ghost btn-sm" data-act="pmOpen">Change payout details</button>'}
+    </div>
+  </div>
+  <div class="stack g2">
+    ${Label('Payout history')}
+    ${w.history.length ? w.history.map((p) => `
+      <div class="tile row g3"><div class="grow"><div class="money t-sm">${money(p.amount_paise)}</div>
+        <div class="t-xs muted">${esc(p.label)}${p.external_reference ? ` · ${esc(p.external_reference)}` : ''}${p.state === 'failed' && p.failure_reason ? ` · ${esc(p.failure_reason.slice(0, 80))}` : ''}</div></div>
+        ${p.state === 'failed' && !w.history.some((x) => x.retry_of === p.id)
+          ? `<button class="btn btn-secondary btn-sm" data-act="retryWithdrawal" data-id="${p.id}">Retry</button>` : ''}
+        <span class="t-xs faint">${when(p.paid_at || p.created_at)}</span></div>`).join('')
+      : '<p class="t-sm muted">Nothing paid out yet.</p>'}
   </div>`;
 }
 
@@ -2579,6 +2612,45 @@ document.addEventListener('click', async (e) => {
     case 'leavePartner':
       if (!confirm('Leave the delivery partner programme? Your student account stays active.')) break;
       await withBusy(t, async () => { await quad.partnerLeave(); drop('me', 'partner'); S.me = await quad.me(); go('join'); });
+      break;
+    case 'pmKind': S.pmKind = a.v; render(); break;
+    case 'pmOpen': S.pmOpen = true; render(); break;
+    case 'savePayoutMethod': {
+      const v = (id) => document.getElementById(id)?.value?.trim() || '';
+      const body = S.pmKind === 'bank'
+        ? { instrument: 'bank', holderName: v('pm-name'), accountNumber: v('pm-acct'), ifsc: v('pm-ifsc').toUpperCase() }
+        : { instrument: 'upi', holderName: v('pm-name'), vpa: v('pm-vpa') };
+      await withBusy(t, async () => {
+        try {
+          const out = await quad.setPayoutMethod(body);
+          S.pmOpen = false;
+          toast(out.destination.status === 'verified' ? 'Payout details verified' : 'Payout details saved; verifying');
+        } catch (e) { toast(explain(e)); }
+        drop('partner'); render();
+      });
+      break;
+    }
+    case 'withdraw':
+      /* One key per intended withdrawal, reused on a double tap or a retry
+         of the same request, so it can never pay twice. */
+      S.withdrawKey ||= (crypto.randomUUID?.() || String(Date.now()) + Math.random().toString(36).slice(2));
+      await withBusy(t, async () => {
+        try {
+          const out = await quad.withdraw(S.withdrawKey);
+          S.withdrawKey = null;
+          toast(out.state === 'paid' ? 'Paid to your account' : out.state === 'failed' ? 'The payout failed; you can retry' : 'Withdrawal requested');
+        } catch (e) {
+          toast(explain(e));
+          if (e.status && e.status < 500) S.withdrawKey = null;
+        }
+        drop('partner'); render();
+      });
+      break;
+    case 'retryWithdrawal':
+      await withBusy(t, async () => {
+        try { await quad.retryWithdrawal(a.id); toast('Retrying the payout'); } catch (e) { toast(explain(e)); }
+        drop('partner'); render();
+      });
       break;
     case 'toggleOnline':
       await withBusy(t, async () => { await quad.partnerOnline(a.v === '1'); drop('partner', 'me'); render(); });

@@ -31,7 +31,8 @@
    ========================================================================== */
 import { q, one, tx } from '../db/index.js';
 import { PAYOUTS } from '../config.js';
-import { runScheduledReconciliation } from './reconciliation.js';
+import { runScheduledReconciliation, detectOperationalDifferences } from './reconciliation.js';
+import { payoutConfig, syncInFlightPayouts } from './wallet.js';
 import { buildBatch, releaseBatch } from './payouts.js';
 
 const DEFAULTS = {
@@ -147,12 +148,15 @@ export async function runSettlementSchedules({ now = new Date(), log } = {}) {
          is attributed to the platform owner — the account accountable for the
          platform's money, and the only one guaranteed to exist. */
       const owner = await platformOwnerId();
+      const partnerFloor = kind === 'partner' ? (await payoutConfig()).min_balance_paise : null;
       const built = await tx((c) => buildBatch(c, {
         kind,
         periodKey: due.periodKey,
         origin: 'scheduled',
         periodEnd: now,
-        minPaise: cfg[kind].min_paise,
+        /* The partner floor is the payout configuration's, so the business
+           changes one number in one place. */
+        minPaise: kind === 'partner' ? partnerFloor : cfg[kind].min_paise,
         actorId: owner,
         note: `Scheduled settlement, ${due.label}`,
       }));
@@ -228,6 +232,14 @@ export function startSettlementScheduler(app, intervalMs = 60_000) {
          Its own guard keeps it to one run a day; this interval is 60s. */
       const recon = await runScheduledReconciliation({ log: app.log });
       if (recon.ran) app.log.info({ reconciliation: recon }, 'settlement reconciliation');
+
+      /* Transfers the provider accepted but has not confirmed: ask again.
+         And the differences no settlement report shows. Both are cheap and
+         idempotent; neither moves money except by a provider's own SUCCESS. */
+      const synced = await syncInFlightPayouts();
+      if (synced.checked) app.log.info({ payouts: synced }, 'payout status sync');
+      const ops = await detectOperationalDifferences();
+      if (Object.values(ops).some((n) => n > 0)) app.log.warn({ reconciliation: ops }, 'reconciliation differences');
     } catch (e) {
       app.log.error({ e }, 'settlement scheduler failed');
     }

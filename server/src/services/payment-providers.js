@@ -214,7 +214,17 @@ export const cashfree = {
         /* Carried back on the webhook and the status pull. Used only as a
            cross-check against our own mapping — never as the mapping. */
         order_tags: { quad_order_id: order.id, quad_order_code: order.code },
-        ...(returnUrl ? { order_meta: { return_url: returnUrl } } : {}),
+        /* Online payment only, and only UPI and cards: no pay-later, no
+           wallets, no EMI. Cashfree enforces this on the hosted checkout. */
+        order_meta: {
+          ...(returnUrl ? { return_url: returnUrl } : {}),
+          payment_methods: PAYMENTS.cashfree.paymentMethods,
+        },
+        /* Easy Split, only when the caller supplied splits — which it does
+           only when CASHFREE_EASY_SPLIT is on AND Cashfree has activated the
+           café's vendor account. Amounts are the ledger's own numbers. */
+        ...(ctx.splits?.length ? { order_splits: ctx.splits.map((x) => ({
+          vendor_id: x.providerVendorId, amount: Number(paiseToRupeeString(x.amountPaise)) })) } : {}),
       }),
     });
     const text = await res.text();
@@ -272,6 +282,8 @@ export const cashfree = {
   eventId(body, headers) {
     const h = headers['x-idempotency-key'];
     if (h) return String(h);
+    const rf = body?.data?.refund;
+    if (rf?.refund_id) return `${body?.type || 'refund'}:${rf.refund_id}:${rf.refund_status || ''}`;
     const cf = body?.data?.payment?.cf_payment_id;
     const type = body?.type || 'event';
     if (cf) return `${type}:${cf}`;
@@ -294,6 +306,20 @@ export const cashfree = {
       currency: String(payment.payment_currency || order.order_currency || '').toUpperCase() || null,
       feePaise: null,             // not reported on the PG webhook; see header
       raw: body,
+    };
+  },
+
+  /* REFUND_STATUS_WEBHOOK carries data.refund; anything else is not a
+     refund event and returns null so the payment path handles it. */
+  readRefundEvent(body) {
+    const r = body?.data?.refund;
+    if (!r || !String(body?.type || '').toUpperCase().includes('REFUND')) return null;
+    const status = String(r.refund_status || '').toUpperCase();
+    return {
+      refundId: r.refund_id ? String(r.refund_id) : null,
+      status,
+      outcome: status === 'SUCCESS' ? 'completed'
+        : ['CANCELLED', 'FAILED'].includes(status) ? 'failed' : 'pending',
     };
   },
 
@@ -378,6 +404,32 @@ export const cashfree = {
         raw: r,
       })),
     };
+  },
+
+  /* Easy Split vendor status, from Cashfree itself. The only source Quad
+     accepts for marking a café's split account active. */
+  async fetchSplitVendor(providerVendorId) {
+    const res = await fetch(
+      `${PAYMENTS.cashfreeBase}/pg/easy-split/vendors/${encodeURIComponent(providerVendorId)}`,
+      { headers: this.headers() });
+    const text = await res.text();
+    if (res.status === 404) return { status: 'NOT_FOUND' };
+    if (!res.ok) throw providerError('cashfree_pg', res, text);
+    const body = JSON.parse(text);
+    return { status: String(body.status || '').toUpperCase() };
+  },
+
+  /* The authoritative status of one refund, for reconciliation. */
+  async fetchRefund(providerOrderId, refundId) {
+    const res = await fetch(
+      `${PAYMENTS.cashfreeBase}/pg/orders/${encodeURIComponent(providerOrderId)}/refunds/${encodeURIComponent(refundId)}`,
+      { headers: this.headers() });
+    const text = await res.text();
+    if (res.status === 404) return { status: 'NOT_FOUND' };
+    if (!res.ok) throw providerError('cashfree_pg', res, text);
+    const body = JSON.parse(text);
+    return { status: String(body.refund_status || '').toUpperCase(),
+             amountPaise: rupeesToPaise(body.refund_amount) };
   },
 
   async fetchOrder(providerOrderId) {

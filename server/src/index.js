@@ -26,6 +26,7 @@ import supportRoutes from './routes/support.js';
 import assetRoutes from './routes/assets.js';
 import enrolmentRoutes from './routes/enrolment.js';
 import financeRoutes from './routes/finance.js';
+import walletRoutes from './routes/wallet.js';
 import profileRoutes from './routes/profile.js';
 import trustRoutes from './routes/trust.js';
 import passkeyRoutes from './routes/passkeys.js';
@@ -63,6 +64,9 @@ export function build() {
           'req.body.challenge', 'req.body.token', 'req.body.currentPassword',
           'req.body.inviteCode', 'req.body.credential', '*.public_key_jwk',
           '*.code_hash', '*.token_hash', '*.apiKey', '*.secret',
+          /* Payout details go to the payout provider and nowhere else. */
+          'req.body.accountNumber', 'req.body.vpa', '*.bank_account_number',
+          'req.headers["x-webhook-signature"]',
         ],
         censor: '[redacted]',
       },
@@ -136,7 +140,7 @@ export function build() {
          we recognise. The gateway webhook is exempt — it is authenticated
          by an HMAC signature instead, and has no cookie to abuse. */
       const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
-      const isWebhook = req.url.startsWith('/payments/webhook');
+      const isWebhook = req.url.startsWith('/payments/webhook') || req.url.startsWith('/payouts/webhook');
       if (mutating && !isWebhook && req.headers.cookie?.includes(SESSION.cookieName)) {
         let source = origin;
         if (!source && req.headers.referer) {
@@ -179,6 +183,7 @@ export function build() {
       /* Passkey sign-in proves possession of a registered private key. */
       /^\/auth\/passkey\/login\/(options|verify)$/,
       /^\/payments\/webhook$/,
+      /^\/payouts\/webhook$/,
       /^\/vendors(\/[^/]+\/(menu|contact|categories))?$/,   // browsing before sign-in
       /^\/menu\/search/, /^\/reviews/,
       /^\/campus\/(tree|destinations|search|resolve|boundary)/,
@@ -299,6 +304,7 @@ export function build() {
     await app.register(assetRoutes);
     await app.register(enrolmentRoutes);
     await app.register(financeRoutes);
+    await app.register(walletRoutes);
     await app.register(profileRoutes);
     await app.register(trustRoutes);
     await app.register(passkeyRoutes);

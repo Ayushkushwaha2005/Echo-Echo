@@ -42,6 +42,7 @@ const FILES = [
   ['finance', 'test/finance.test.mjs'],
   ['settlement', 'test/settlement.test.mjs'],
   ['settlement', 'test/reconciliation.test.mjs'],
+  ['marketplace', 'test/marketplace.test.mjs'],
   ['storage', 'test/storage.test.mjs'],
   ['campus', 'test/campus-config.test.mjs'],
   ['campus', 'test/campus-option.test.mjs'],

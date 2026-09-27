@@ -180,6 +180,12 @@ async function scrFinance() {
 
     <section class="card card-pad" style="margin-top:18px">
       <h2 class="t-label">Settlements</h2>
+      ${d.settlementAccount ? `<p class="t-sm" style="margin:8px 0">Settlement account:
+        <span class="badge ${d.settlementAccount.settlement_status === 'VERIFIED' ? 'badge-open' : 'badge-closed'}">
+          ${esc(d.settlementAccount.settlement_status.replace('_', ' '))}</span>
+        ${d.settlementAccount.masked ? esc(d.settlementAccount.masked) : ''}</p>
+        ${d.settlementAccount.settlement_status === 'VERIFIED' ? ''
+          : '<p class="t-xs faint">Every sale is tracked in full. Evening settlement starts once your bank account is added and verified by ECHO ECHO.</p>'}` : ''}
       ${d.settlements.length ? table(
         ['Amount', 'State', 'Reference', 'When'],
         d.settlements.map((p) => [

@@ -361,7 +361,7 @@ async function truncateOnce(pool) {
              campus_boundary, campus_block, student_address, campus_node, session, otp_challenge, email_challenge,
              review_report, deposit_deduction, deposit_refund_request, deposit_movement,
              partner_policy_consent, partner_deposit_policy, delivery_incident,
-             user_role, app_user, feature_flag, platform_config, email_send_log
+             user_role, app_user, feature_flag, platform_config, email_send_log, payout_webhook
     RESTART IDENTITY CASCADE`);
   /* The finance tables are not empty in a migrated database: 004 seeds the
      platform-wide ledger accounts and a zero-rated default pricing policy,
@@ -529,3 +529,49 @@ if (process.argv[2] === 'init') {
   await initCluster();
   process.exit(0);
 }
+
+/* A verified settlement destination, as if the payout provider had accepted
+   and verified the payee. Only masked data, like production. */
+export async function makeVerifiedDestination(pool, { vendorId = null, partnerId = null,
+                                                      provider = 'cashfree', fundAccountId = null } = {}) {
+  const { rows } = await pool.query(
+    `INSERT INTO payout_destination (vendor_id, partner_id, provider, provider_fund_account_id,
+       instrument, masked, ifsc, holder_name, verification_status, verified_at)
+     VALUES ($1,$2,$3,$4,'bank','XXXX4321','HDFC0001234','Test Payee','verified', now()) RETURNING *`,
+    [vendorId, partnerId, provider, fundAccountId || `ben_${Math.random().toString(36).slice(2, 10)}`]);
+  return rows[0];
+}
+
+/* For suites about ledger ARITHMETIC (finance, settlement, reconciliation)
+   rather than payee onboarding: every café and partner created while this is
+   on gets a verified settlement destination, and earnings have no hold. The
+   onboarding rules themselves are tested in marketplace.test.mjs with this
+   OFF. Installed per process and removed in after(), so it cannot leak into
+   another suite sharing the cluster. */
+export async function autoVerifyPayees(pool, on = true) {
+  await pool.query(`DROP TRIGGER IF EXISTS test_auto_verify_vendor ON vendor;
+                    DROP TRIGGER IF EXISTS test_auto_verify_partner ON user_role;
+                    DROP FUNCTION IF EXISTS test_auto_verify()`);
+  if (!on) return;
+  await pool.query(`
+    CREATE FUNCTION test_auto_verify() RETURNS trigger AS $f$
+    BEGIN
+      IF TG_TABLE_NAME = 'vendor' THEN
+        INSERT INTO payout_destination (vendor_id, provider, provider_fund_account_id, instrument, masked,
+                                        verification_status, verified_at)
+        VALUES (NEW.id, 'test', 'fa_' || NEW.id, 'bank', 'XXXX0000', 'verified', now());
+      ELSIF NEW.role = 'delivery_partner' THEN
+        INSERT INTO payout_destination (partner_id, provider, provider_fund_account_id, instrument, masked,
+                                        verification_status, verified_at)
+        VALUES (NEW.user_id, 'test', 'fa_' || NEW.user_id, 'bank', 'XXXX0000', 'verified', now())
+        ON CONFLICT DO NOTHING;
+      END IF;
+      RETURN NEW;
+    END $f$ LANGUAGE plpgsql;
+    CREATE TRIGGER test_auto_verify_vendor AFTER INSERT ON vendor FOR EACH ROW EXECUTE FUNCTION test_auto_verify();
+    CREATE TRIGGER test_auto_verify_partner AFTER INSERT ON user_role FOR EACH ROW EXECUTE FUNCTION test_auto_verify();`);
+}
+
+export const noEarningHold = (pool) => pool.query(
+  `INSERT INTO platform_config (key, value) VALUES ('partner_payout_config', '{"earning_hold_hours":0,"min_balance_paise":100}')
+   ON CONFLICT (key) DO UPDATE SET value = platform_config.value || EXCLUDED.value`);

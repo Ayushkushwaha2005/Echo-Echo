@@ -492,6 +492,27 @@ export default async function orderRoutes(app) {
     if (to === 'cancelled') {
       notifyAsync(o.customer_id, 'order_cancelled', { body: `Order ${o.code} was cancelled.` });
     }
+    /* A cancelled order that was PAID gives the customer's money back, in
+       full, through the gateway. The refund allocation returns the café's
+       share, the platform fee and the (never earned) delivery money; no
+       partner is paid for an order that was never delivered. Keyed on the
+       order, so a repeated cancellation cannot refund twice. If the gateway
+       is unreachable the refund is recorded failed and reconciliation
+       raises it — the order never silently keeps the money. */
+    if (to === 'cancelled' && ['confirmed', 'preparing'].includes(o.state)) {
+      const paid = await one(`SELECT 1 FROM payment WHERE order_id=$1 AND status='paid'`, [o.id]);
+      if (paid) {
+        try {
+          const { issueRefund } = await import('./support.js');
+          const refund = await issueRefund(req, { orderId: o.id, idemKey: `cancel:${o.id}`,
+            reason: `order cancelled before delivery (${req.body?.note ? String(req.body.note).slice(0, 80) : 'no reason given'})` });
+          return { ...out, refund: { id: refund.id, state: refund.state, amountPaise: refund.amountPaise } };
+        } catch (e) {
+          req.log.error({ err: String(e.message) }, 'automatic refund on cancellation failed');
+          return { ...out, refund: { state: 'failed', note: 'The refund could not be issued automatically; support has been alerted.' } };
+        }
+      }
+    }
     return out;
   });
 

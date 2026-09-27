@@ -214,6 +214,37 @@ async function applyOutcome(req, pay, ev, source) {
   return { ok: true, confirmed: true };
 }
 
+/* A provider's verdict on a refund we issued. The ledger was already
+   allocated when the provider accepted the refund; this only records that
+   the money actually reached the customer, or raises a mismatch if the
+   provider says it did not. Nothing here re-allocates money. */
+async function applyRefundOutcome(req, rf) {
+  const r = await one(`SELECT * FROM refund WHERE id::text = $1`, [rf.refundId]);
+  if (!r) return { ok: true, ignored: 'unknown refund' };
+  if (rf.outcome === 'completed' && r.state === 'processing') {
+    await tx(async (c) => {
+      await c.query(`UPDATE refund SET state='completed', settled_at=now() WHERE id=$1 AND state='processing'`, [r.id]);
+      const pay = (await c.query(`SELECT * FROM payment WHERE id=$1 FOR UPDATE`, [r.payment_id])).rows[0];
+      const back = Number((await c.query(
+        `SELECT COALESCE(sum(amount_paise),0)::int AS n FROM refund WHERE payment_id=$1 AND state='completed'`,
+        [pay.id])).rows[0].n);
+      if (back >= pay.amount_paise) await c.query(`UPDATE payment SET status='refunded' WHERE id=$1`, [pay.id]);
+    });
+    await audit(req, { action: 'refund.completed', resource: 'refund', resourceId: r.id, outcome: 'ok',
+                       detail: { source: 'webhook' } });
+    return { ok: true, refund: 'completed' };
+  }
+  if (rf.outcome === 'failed' && r.state !== 'failed') {
+    await q(`INSERT INTO reconciliation_exception (kind, payment_id, order_id, severity, detail)
+             VALUES ('refund_mismatch', $1, $2, 'blocking', $3)
+             ON CONFLICT DO NOTHING`,
+            [r.payment_id, r.order_id, JSON.stringify({ refundId: r.id, quadState: r.state,
+              providerStatus: rf.status, note: 'The provider reports this refund failed after it was allocated.' })]);
+    return { ok: true, refund: 'mismatch_raised' };
+  }
+  return { ok: true, refund: r.state };
+}
+
 export default async function paymentRoutes(app) {
   /* The raw request bytes needed for the signature check are captured by the
      global JSON parser in index.js and exposed as req.rawBody. A re-encoded
@@ -290,7 +321,21 @@ export default async function paymentRoutes(app) {
            that a client can influence is an open redirect, and here it would
            be one attached to a payment. It comes from server configuration
            (CASHFREE_PG_RETURN_URL) or not at all. */
-        gw = await adapter.createOrder({ paymentId: pay.id, order, amountPaise, customer });
+        /* Easy Split, only for a café whose Cashfree vendor account
+           Cashfree itself reported active, and only with the flag on. The
+           café's share is the snapshot's own number — never recomputed. */
+        let splits = [];
+        if (adapter.id === 'cashfree' && PAYMENTS.cashfree.easySplit && snap.cafeteria_payable_paise > 0) {
+          const sv = await one(`SELECT provider_vendor_id FROM vendor_split_account
+                                 WHERE vendor_id=$1 AND status='active'`, [order.vendor_id]);
+          if (sv) splits = [{ providerVendorId: sv.provider_vendor_id, amountPaise: snap.cafeteria_payable_paise }];
+        }
+        gw = await adapter.createOrder({ paymentId: pay.id, order, amountPaise, customer, splits });
+        for (const x of splits) {
+          await q(`INSERT INTO payment_split (payment_id, vendor_id, provider_vendor_id, amount_paise)
+                   VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+                  [pay.id, order.vendor_id, x.providerVendorId, x.amountPaise]);
+        }
       } catch (e) {
         /* The gateway refused. The attempt is recorded as failed so it is
            visible, and the order stays exactly where it was — unpaid. */
@@ -372,11 +417,22 @@ export default async function paymentRoutes(app) {
     /* Idempotency. A replayed delivery inserts nothing and does no work. */
     const fresh = await one(
       `INSERT INTO payment_webhook (provider, event_id, payload, provider_ts, event_type)
-       VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING event_id`,
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (provider, event_id) DO UPDATE SET duplicate_count = payment_webhook.duplicate_count + 1
+       RETURNING event_id, (xmax = 0) AS inserted`,
       [adapter.id, String(eventId), JSON.stringify(evt),
        v.receivedAtMs ? new Date(v.receivedAtMs) : null,
        String(evt?.type || evt?.event || '').slice(0, 80) || null]);
-    if (!fresh) return { ok: true, duplicate: true };
+    /* Counted, so reconciliation can report how often the provider repeats
+       itself — but a duplicate does no work at all. */
+    if (!fresh.inserted) return { ok: true, duplicate: true };
+
+    /* Refund status webhooks: Cashfree refunds are asynchronous, so the
+       money reaching the customer is learned here (or by reconciliation). */
+    if (adapter.readRefundEvent) {
+      const rf = adapter.readRefundEvent(evt);
+      if (rf) return applyRefundOutcome(req, rf);
+    }
 
     const ev = adapter.readEvent(evt, req.headers);
     if (!ev.providerOrderId) return { ok: true, ignored: true };

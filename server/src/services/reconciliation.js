@@ -594,3 +594,64 @@ export async function resolveException(id, { actorId, note }) {
       WHERE id=$1 AND state='open' RETURNING *`,
     [id, actorId, text.slice(0, 1000)]);
 }
+
+/* ==========================================================================
+   Operational detectors — the differences a settlement report cannot show.
+
+   missing_webhook   a payment Quad confirmed only through its own status
+                     pull, whose webhook never arrived. The money is fine;
+                     the webhook endpoint may not be.
+   refund_stuck      a refund the provider accepted that has not completed.
+   refund_mismatch   a cancelled/refunded order still holding a captured
+                     payment with no refund behind it.
+   payout mismatches are raised where they are observed (services/wallet.js).
+
+   Each raises an exception row; none of them changes any money.
+   ========================================================================== */
+export async function detectOperationalDifferences({ webhookGraceMinutes = 60, refundStuckHours = 72 } = {}) {
+  const out = { missingWebhook: 0, refundStuck: 0, refundMissing: 0 };
+  const noWebhook = (await q(
+    `SELECT p.id, p.order_id, p.provider, p.provider_order_id, p.settled_at FROM payment p
+      WHERE p.status IN ('paid','refunded') AND p.provider_order_id IS NOT NULL
+        AND p.settled_at < now() - ($1 || ' minutes')::interval
+        AND p.settled_at > now() - interval '14 days'
+        AND NOT EXISTS (SELECT 1 FROM payment_webhook w
+                         WHERE w.provider = p.provider AND strpos(w.payload::text, p.provider_order_id) > 0)
+      LIMIT 200`, [String(webhookGraceMinutes)])).rows;
+  for (const p of noWebhook) {
+    if (await tx((c) => raise(c, null, { kind: 'missing_webhook', paymentId: p.id, orderId: p.order_id,
+        severity: 'informational',
+        detail: { providerOrderId: p.provider_order_id, confirmedAt: p.settled_at,
+                  note: 'Confirmed by status pull; no webhook was ever received for it. Check the webhook URL.' } }))) {
+      out.missingWebhook++;
+    }
+  }
+  const stuck = (await q(
+    `SELECT r.id, r.order_id, r.payment_id, r.amount_paise, r.created_at FROM refund r
+      WHERE r.state = 'processing' AND r.created_at < now() - ($1 || ' hours')::interval LIMIT 200`,
+    [String(refundStuckHours)])).rows;
+  for (const r of stuck) {
+    if (await tx((c) => raise(c, null, { kind: 'refund_stuck', paymentId: r.payment_id, orderId: r.order_id,
+        detail: { refundId: r.id, amountPaise: r.amount_paise, since: r.created_at } }))) out.refundStuck++;
+  }
+  const unrefunded = (await q(
+    `SELECT p.id, p.order_id, p.amount_paise, o.state FROM payment p JOIN food_order o ON o.id = p.order_id
+      WHERE p.status = 'paid' AND o.state IN ('cancelled','refunded')
+        AND NOT EXISTS (SELECT 1 FROM refund r WHERE r.payment_id = p.id AND r.state IN ('processing','completed'))
+      LIMIT 200`)).rows;
+  for (const p of unrefunded) {
+    if (await tx((c) => raise(c, null, { kind: 'refund_mismatch', paymentId: p.id, orderId: p.order_id,
+        detail: { amountPaise: p.amount_paise, orderState: p.state,
+                  note: 'The order is cancelled but the customer\'s payment has not been refunded.' } }))) out.refundMissing++;
+  }
+  return out;
+}
+
+/** Duplicate webhook deliveries, measured. Absorbed either way. */
+export async function webhookHealth() {
+  const pay = await one(`SELECT count(*)::int AS events, COALESCE(sum(duplicate_count),0)::int AS duplicates
+                           FROM payment_webhook WHERE received_at > now() - interval '30 days'`);
+  const out = await one(`SELECT count(*)::int AS events, COALESCE(sum(duplicate_count),0)::int AS duplicates
+                           FROM payout_webhook WHERE received_at > now() - interval '30 days'`);
+  return { payments: pay, payouts: out };
+}

@@ -32,7 +32,12 @@ import { audit } from '../audit.js';
 import { notifyAsync } from '../services/notify.js';
 import { getImage } from '../services/storage.js';
 import { setPartnerPhoto } from '../services/partner-photo.js';
-import { balance, postDepositReceived, postDepositDeduction, postDepositRefund } from '../services/ledger.js';
+import { balance, postDepositReceived, postDepositDeduction, postDepositRefund, postAdjustment } from '../services/ledger.js';
+
+async function incidentEvent(c, incidentId, actorId, event, detail = {}) {
+  await c.query(`INSERT INTO delivery_incident_event (incident_id, actor_id, event, detail) VALUES ($1,$2,$3,$4)`,
+                [incidentId, actorId, event, JSON.stringify(detail)]);
+}
 
 const code = (p) => p + randomBytes(3).toString('hex').toUpperCase();
 const text = (v, max = 2000) => String(v ?? '').trim().slice(0, max);
@@ -45,11 +50,13 @@ export const INCIDENT_CATEGORIES = {
   not_delivered: 'Order was not delivered',
   wrong_order: 'Wrong order',
   spilled: 'Food significantly damaged or spilled',
+  lost: 'Order lost in transit',
+  suspected_theft: 'Suspected theft or tampering by someone handling the order',
 };
 const ALLOWED_BY_ROLE = {
-  customer: ['damaged', 'tampered', 'missing', 'not_delivered', 'wrong_order', 'spilled'],
-  partner:  ['partner_not_received', 'damaged', 'tampered', 'missing', 'wrong_order', 'spilled'],
-  vendor:   ['partner_not_received', 'damaged', 'tampered', 'missing', 'wrong_order'],
+  customer: ['damaged', 'tampered', 'missing', 'not_delivered', 'wrong_order', 'spilled', 'suspected_theft'],
+  partner:  ['partner_not_received', 'damaged', 'tampered', 'missing', 'wrong_order', 'spilled', 'lost'],
+  vendor:   ['partner_not_received', 'damaged', 'tampered', 'missing', 'wrong_order', 'suspected_theft'],
   admin:    Object.keys(INCIDENT_CATEGORIES),
 };
 
@@ -364,11 +371,16 @@ export default async function trustRoutes(app) {
     const description = text(req.body?.description, 2000);
     if (description.length < 10) throw BadRequest('Describe what happened (at least 10 characters)');
 
-    const row = await one(
-      `INSERT INTO delivery_incident (code, order_id, partner_id, reported_by, reporter_role, category, description)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT (order_id, reported_by) WHERE state <> 'resolved' DO NOTHING RETURNING *`,
-      [code('I'), o.id, o.partner_id, req.actor.id, role, category, description]);
+    const evidence = text(req.body?.evidence, 4000) || null;
+    const row = await tx(async (c) => {
+      const r = (await c.query(
+        `INSERT INTO delivery_incident (code, order_id, partner_id, reported_by, reporter_role, category, description, evidence)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (order_id, reported_by) WHERE state <> 'resolved' DO NOTHING RETURNING *`,
+        [code('I'), o.id, o.partner_id, req.actor.id, role, category, description, evidence])).rows[0];
+      if (r) await incidentEvent(c, r.id, req.actor.id, 'reported', { category, role });
+      return r;
+    });
     if (!row) throw Conflict('You already have an open report on this order', 'Campus admin is looking into it.');
     await audit(req, { action: 'incident.report', resource: 'delivery_incident', resourceId: row.id, outcome: 'ok',
                        detail: { order: o.code, category, role } });
@@ -413,6 +425,7 @@ export default async function trustRoutes(app) {
     const row = await one(
       `UPDATE delivery_incident SET state = 'investigating' WHERE id = $1 AND state = 'open' RETURNING *`, [req.params.id]);
     if (!row) throw Conflict('Only an open incident can move to investigating');
+    await incidentEvent({ query: q }, row.id, req.actor.id, 'under_review');
     await audit(req, { action: 'incident.investigate', resource: 'delivery_incident', resourceId: row.id, outcome: 'ok' });
     return row;
   });
@@ -426,14 +439,89 @@ export default async function trustRoutes(app) {
       throw BadRequest('Choose an outcome');
     }
     if (note.length < 10) throw BadRequest('Record what the investigation found (at least 10 characters)');
-    const row = await one(
-      `UPDATE delivery_incident SET state = 'resolved', outcome = $2, resolution_note = $3,
-              resolved_by = $4, resolved_at = now()
-        WHERE id = $1 AND state <> 'resolved' RETURNING *`, [req.params.id, outcome, note, req.actor.id]);
-    if (!row) throw Conflict('This incident is already resolved');
+
+    /* What the resolution does, beyond recording a finding. Every action is
+       explicit, and the ones that touch a partner need a finding of fault
+       AND written evidence: a complaint on its own moves nothing. */
+    const ACTIONS = ['replacement_or_refund', 'earning_adjustment', 'suspend_partner', 'account_review', 'warning'];
+    const actions = Array.isArray(req.body?.actions) ? [...new Set(req.body.actions)] : [];
+    if (actions.some((a) => !ACTIONS.includes(a))) throw BadRequest(`actions must be from: ${ACTIONS.join(', ')}`);
+    const againstPartner = actions.filter((a) => ['earning_adjustment', 'suspend_partner', 'warning'].includes(a));
+    const evidence = text(req.body?.evidence, 4000);
+    if (againstPartner.length) {
+      if (outcome !== 'partner_responsible') {
+        throw Conflict('Actions against a partner need a finding that the partner was responsible');
+      }
+      if (evidence.length < 20) {
+        throw BadRequest('Describe the evidence (at least 20 characters)',
+          'What was checked: handover codes, timestamps, photos, counter confirmation, statements from both sides.');
+      }
+    }
+    let adj = null;
+    if (actions.includes('earning_adjustment')) {
+      assertRecentPasskey(req.actor, 'a financial adjustment or deposit deduction');
+      adj = Number(req.body?.earningAdjustmentPaise);
+      if (!Number.isInteger(adj) || adj <= 0) throw BadRequest('Enter the earning adjustment in paise');
+    }
+
+    const row = await tx(async (c) => {
+      const inc = (await c.query(`SELECT i.*, o.total_paise, o.code AS order_code FROM delivery_incident i
+                                    JOIN food_order o ON o.id = i.order_id WHERE i.id=$1 FOR UPDATE OF i`,
+                                 [req.params.id])).rows[0];
+      if (!inc) throw NotFound('No such incident');
+      if (inc.state === 'resolved') throw Conflict('This incident is already resolved');
+      if (adj && adj > inc.total_paise) {
+        throw BadRequest('An adjustment cannot exceed the value of the order', `Order total: ${inc.total_paise} paise.`);
+      }
+      if (againstPartner.length && !inc.partner_id) throw Conflict('This incident names no delivery partner');
+      const r = (await c.query(
+        `UPDATE delivery_incident SET state = 'resolved', outcome = $2, resolution_note = $3,
+                resolved_by = $4, resolved_at = now(), actions = $5, earning_adjustment_paise = $6,
+                evidence = COALESCE(NULLIF($7,''), evidence)
+          WHERE id = $1 RETURNING *`,
+        [inc.id, outcome, note, req.actor.id, JSON.stringify(actions), adj, evidence])).rows[0];
+      await incidentEvent(c, r.id, req.actor.id, 'resolved', { outcome, actions });
+      if (adj) {
+        /* A ledger adjustment against the partner's earnings, idempotent on
+           the incident. Never an edit of a past entry. */
+        await postAdjustment(c, { partnerId: inc.partner_id, amountPaise: -adj, actorId: req.actor.id,
+          reason: `incident ${inc.code} on ${inc.order_code}: ${note.slice(0, 200)}`, ref: `incident:${inc.id}` });
+        await incidentEvent(c, r.id, req.actor.id, 'action:earning_adjustment', { amountPaise: adj });
+      }
+      if (actions.includes('suspend_partner')) {
+        await c.query(`UPDATE partner_profile SET status='suspended', online=false, decided_by=$2, decided_at=now(),
+                              note=$3 WHERE user_id=$1`, [inc.partner_id, req.actor.id, `suspended: incident ${inc.code}`]);
+        await incidentEvent(c, r.id, req.actor.id, 'action:suspend_partner');
+      }
+      for (const a of actions.filter((x) => !['earning_adjustment', 'suspend_partner'].includes(x))) {
+        await incidentEvent(c, r.id, req.actor.id, `action:${a}`);
+      }
+      return r;
+    });
+    if (row.partner_id && againstPartner.length) {
+      notifyAsync(row.partner_id, 'incident_resolved', {
+        body: `Incident ${row.code} was reviewed and found you responsible: ${note}` +
+              (adj ? ` An adjustment of Rs ${(adj / 100).toFixed(2)} was applied to your earnings.` : '') +
+              (actions.includes('suspend_partner') ? ' Your delivery account is suspended pending review.' : '') });
+    }
+    /* Repeated confirmed incidents are surfaced, not auto-punished. */
+    const prior = row.partner_id ? (await one(
+      `SELECT count(*)::int n FROM delivery_incident WHERE partner_id=$1 AND outcome='partner_responsible'
+          AND resolved_at > now() - interval '90 days'`, [row.partner_id])).n : 0;
     await audit(req, { action: 'incident.resolve', resource: 'delivery_incident', resourceId: row.id, outcome: 'ok',
-                       detail: { outcome } });
-    return row;
+                       detail: { outcome, actions, earning_adjustment_paise: adj } });
+    return { ...row, confirmedIncidents90d: prior,
+             escalation: prior >= 3 ? 'Three or more confirmed incidents in 90 days: review for removal from the delivery programme.'
+               : prior === 2 ? 'Second confirmed incident in 90 days: consider suspension and an account review.' : null };
+  });
+
+  app.get('/admin/incidents/:id/events', async (req) => {
+    authorize(req.actor, 'incident.read');
+    const { rows } = await q(
+      `SELECT e.id, e.event, e.detail, e.created_at, u.name AS actor_name
+         FROM delivery_incident_event e LEFT JOIN app_user u ON u.id = e.actor_id
+        WHERE e.incident_id = $1 ORDER BY e.id`, [req.params.id]);
+    return { events: rows };
   });
 
   /* ======================= deductions ===================================== */
