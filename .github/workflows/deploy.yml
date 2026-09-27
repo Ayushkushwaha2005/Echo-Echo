@@ -32,6 +32,8 @@ concurrency:
 env:
   SERVICE_NAME: echo-echo-api
   SITE: https://echo-echo-nu.vercel.app
+  # Every origin the site is served on; each must be in WEB_ORIGIN on Render.
+  SITE_ORIGINS: https://echoecho.tech,https://www.echoecho.tech,https://echo-echo-nu.vercel.app
 
 jobs:
   render:

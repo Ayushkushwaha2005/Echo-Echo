@@ -171,7 +171,8 @@ function cafVM(v) {
   for (const ch of String(v.id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   const [heroBg, markBg] = TINTS[v.slug] || TINT_LIST[h % TINT_LIST.length];
   const mark = (v.name || '?').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-  return { ...v, heroBg, markBg, mark, open: !!(v.is_open && v.accepting), rating: ratingLabel(v.rating) };
+  /* open_now is the server's answer: the café's switch AND its weekly hours. */
+  return { ...v, heroBg, markBg, mark, open: v.open_now ?? !!(v.is_open && v.accepting), rating: ratingLabel(v.rating) };
 }
 
 /* Dishes carry no photos yet, so the tile shows the dish's monogram in the
@@ -268,6 +269,7 @@ const CafCard = (c) => `
       <div class="grow">
         <div class="t-h2">${esc(c.name)}</div>
         <div class="t-xs muted">${esc(c.kind || 'Campus outlet')}</div>
+        ${c.hours?.label ? `<div class="t-xs muted">${esc(c.hours.label)}</div>` : ''}
       </div>
       ${StatusPill(c.open)}
     </div>
@@ -745,6 +747,7 @@ function ScrCafes() {
         <div class="poster-arc" style="width:140px;height:140px;top:-50px;right:-40px"></div>
         <div class="t-label">${esc(COLLEGE())}</div>
         <div class="t-display" style="font-size:1.5rem;margin-top:6px">${esc(campus?.name || 'Campus')}</div>
+        <p class="t-sm" style="margin-top:4px;color:var(--ink-700)">Your campus favourites, brought to your spot.</p>
         <div class="row g2" style="margin-top:12px;flex-wrap:wrap">
           ${S.fulfilment === 'pickup' ? '<span class="badge badge-ink">Self pickup</span>' : '<span class="badge badge-ink">Campus delivery</span>'}
           ${vs?.ok ? `<span class="badge badge-rose">${cafs.length} café${cafs.length === 1 ? '' : 's'}</span>` : ''}
@@ -795,7 +798,10 @@ function ScrMenu() {
 
     <div class="pad site-split">
     <div class="stack g5">
-      ${!c.open ? `<div class="campusnote">${Ico(I.clock, 18)}<p class="t-xs" style="color:var(--text-2)">${esc(c.name)} is closed right now. You can look through the menu, but not order.</p></div>` : ''}
+      ${!c.open ? `<div class="campusnote">${Ico(I.clock, 18)}<p class="t-xs" style="color:var(--text-2)">${esc(c.name)} is closed right now.${
+        c.hours?.closedReason ? ` ${esc(c.hours.closedReason)}` : ''} You can look through the menu, but not order.</p></div>` : ''}
+      ${c.hours?.week ? `<div class="card card-pad stack g1" aria-label="Opening hours">${Label('Hours')}
+        ${c.hours.week.map((d) => `<div class="between t-xs"><span>${esc(d.day)}</span><span class="${d.open ? '' : 'muted'}" style="font-weight:${d.open ? 400 : 700}">${esc(d.open ? d.hours : 'CLOSED')}</span></div>`).join('')}</div>` : ''}
       ${items.length ? cats.map((cat, i) => `
         <div class="stack g1" id="cat-${i}">
           ${Label(cat)}

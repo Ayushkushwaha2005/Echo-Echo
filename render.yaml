@@ -70,8 +70,12 @@ services:
       # The browser only ever sees the Vercel origin: /api/* is rewritten to
       # this service, so the SameSite=Lax session cookie is same-site and the
       # CSRF origin check in src/index.js sees exactly this value.
+      # echoecho.tech is canonical. www.echoecho.tech is listed because it is
+      # attached to the same Vercel project (it serves the site, or redirects
+      # to the apex); the vercel.app URL is kept for deploy checks. Nothing
+      # else: no wildcard, and every entry must be https.
       - key: WEB_ORIGIN
-        value: https://echo-echo-nu.vercel.app
+        value: https://echoecho.tech,https://www.echoecho.tech,https://echo-echo-nu.vercel.app
       - key: WEBAUTHN_RP_ID
         value: echo-echo-nu.vercel.app
       - key: WEBAUTHN_ORIGINS

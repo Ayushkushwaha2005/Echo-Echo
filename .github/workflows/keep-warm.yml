@@ -24,4 +24,4 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: GET /health through the production site
-        run: curl -fsS -m 90 -o /dev/null -w 'health %{http_code} in %{time_total}s\n' https://echo-echo-nu.vercel.app/api/health/
+        run: curl -fsS -m 90 -o /dev/null -w 'health %{http_code} in %{time_total}s\n' https://echoecho.tech/api/health/

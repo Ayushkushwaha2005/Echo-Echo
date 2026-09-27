@@ -126,6 +126,19 @@ for (const path of ['/orders', '/profile', '/admin/flags', '/partner/queue', '/f
                      : bad(`POST /orders returned ${res.status} signed out`);
 }
 
+/* ---- the site's own origins are accepted ---------------------------------
+   The mirror of the check below: a cookie-bearing write from each origin the
+   site is served on must reach authentication (401 for a forged cookie), not
+   be refused as cross-origin (403). Set SITE_ORIGINS to the served origins. */
+for (const origin of String(process.env.SITE_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean)) {
+  const { res, json } = await call('/profile', { method: 'PATCH',
+    headers: { 'content-type': 'application/json', origin,
+               cookie: 'quad_session=forged-value-that-is-not-a-session' },
+    body: JSON.stringify({}) });
+  res.status !== 403 ? ok(`${origin} is an allowed origin (${res.status}, not refused as cross-origin)`)
+                     : bad(`${origin} is refused as cross-origin: ${json?.detail || res.status} - add it to WEB_ORIGIN on Render`);
+}
+
 /* ---- CSRF: a cookie-bearing write from a foreign origin is refused ------
    This exercises the real control in src/index.js: the presence of the
    session cookie NAME is what arms the origin check, so a forged cookie is

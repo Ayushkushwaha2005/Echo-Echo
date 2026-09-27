@@ -11,6 +11,7 @@
    * A price change writes menu_price_history and updates menu_item, but
      never touches order_item — historical orders carry their own snapshot.
    ========================================================================== */
+import { hoursOf, orderableNow } from '../services/hours.js';
 import { q, one, tx } from '../db/index.js';
 import { authorize, can, BadRequest, NotFound, HttpError } from '../auth/rbac.js';
 import { audit } from '../audit.js';
@@ -44,7 +45,7 @@ export default async function catalogRoutes(app) {
     const campusId = req.query?.campusId || null;
     const { rows } = await q(
       `SELECT v.id, v.slug, v.name, v.kind, v.description, v.photo_asset,
-              v.campus_node_id, v.opens_at, v.closes_at, v.is_open, v.accepting,
+              v.campus_node_id, v.opens_at, v.closes_at, v.open_days, v.is_open, v.accepting,
               v.delivery_enabled, v.prep_minutes, v.active, v.campus_site_id,
               cs.name AS campus_name, cs.service_status AS campus_service_status,
               ${RATING} r.vendor_id = v.id AND NOT r.hidden) AS rating
@@ -52,7 +53,8 @@ export default async function catalogRoutes(app) {
         WHERE ($1::boolean OR v.active)
           AND ($2::uuid IS NULL OR v.campus_site_id = $2)
         ORDER BY v.active DESC, v.name`, [all, campusId]);
-    return { vendors: rows.map(shapeRating) };
+    /* open_now: the café's own switch AND its weekly hours, in campus time. */
+    return { vendors: rows.map((v) => ({ ...shapeRating(v), hours: hoursOf(v), open_now: orderableNow(v) })) };
   });
 
   app.get('/vendors/:id/menu', async (req) => {
