@@ -72,13 +72,23 @@ if (needsDb) {
   }
 }
 
+const FILE_TIMEOUT_MS = Number(process.env.QUAD_TEST_FILE_TIMEOUT_MS || 300_000);
 const totals = {};
 let failed = 0;
 
 for (const [kind, file] of selected) {
+  /* A file that hangs must fail loudly with its output, not stall the whole
+     run until CI's job timeout cancels it with nothing to show. */
   const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', file],
-                      { encoding: 'utf8', env: process.env });
+                      { encoding: 'utf8', env: process.env, timeout: FILE_TIMEOUT_MS,
+                        killSignal: 'SIGKILL', maxBuffer: 256 * 1024 * 1024 });
   const out = (r.stdout || '') + (r.stderr || '');
+  if (r.error || r.signal) {
+    failed++;
+    console.log(`FAIL  ${file.padEnd(34)} ${r.error?.code || r.signal} after ${FILE_TIMEOUT_MS / 1000}s`);
+    console.log(out.split('\n').slice(-80).map((l) => '        ' + l).join('\n'));
+    continue;
+  }
   const num = (k) => {
     const m = out.match(new RegExp('^# ' + k + ' (\\d+)', 'm'));
     return m ? Number(m[1]) : 0;
