@@ -868,9 +868,14 @@ export default async function financeRoutes(app) {
             AND vendor_id IS NOT DISTINCT FROM $1 AND partner_id IS NOT DISTINCT FROM $2`,
         [b.vendorId || null, b.partnerId || null, provider]);
       return (await c.query(
+        /* Provisioned by an administrator directly in the provider's
+           console, which is where the payee's details were checked: recorded
+           as verified, attributed to that administrator. */
         `INSERT INTO payout_destination (vendor_id, partner_id, provider,
-           provider_contact_id, provider_fund_account_id, label, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+           provider_contact_id, provider_fund_account_id, label, created_by,
+           verification_status, verified_at, verified_by, verification_note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'verified',now(),$7,'provisioned by an administrator at the provider')
+         RETURNING *`,
         [b.vendorId || null, b.partnerId || null, provider,
          b.contactId || null, String(b.fundAccountId).slice(0, 120),
          b.label ? String(b.label).slice(0, 120) : null, req.actor.id])).rows[0];
@@ -945,8 +950,11 @@ export default async function financeRoutes(app) {
          JOIN ledger_txn t ON t.order_id = o.id AND t.kind = 'order_capture'
         WHERE o.vendor_id = $1 ORDER BY t.created_at DESC LIMIT 25`, [vendorId])).rows;
 
+    const acct = await one(`SELECT settlement_status, instrument, masked FROM v_vendor_settlement_account
+                             WHERE vendor_id = $1`, [vendorId]);
     return {
       vendor: v,
+      settlementAccount: acct,
       todayOrders: today.orders,
       todayFoodPaise: Number(today.food_paise),
       todayCommissionPaise: Number(today.commission_paise),

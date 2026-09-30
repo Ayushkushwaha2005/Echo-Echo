@@ -183,9 +183,50 @@ export default async function supportRoutes(app) {
       throw ProviderUnavailable('Payment provider not configured',
         'A refund cannot be issued without the gateway that took the payment.');
     }
-    const { orderId, reason } = req.body || {};
-    if (!reason) throw BadRequest('A refund reason is required');
     const idemKey = req.body?.idempotencyKey ? String(req.body.idempotencyKey).slice(0, 120) : null;
+    return issueRefund(req, { orderId: req.body?.orderId, reason: req.body?.reason,
+                              amountPaise: req.body?.amountPaise, idemKey });
+  });
+
+  app.get('/admin/refunds', async (req) => {
+    authorize(req.actor, 'order.refund');
+    const { rows } = await q(
+      `SELECT r.*, o.code AS order_code, u.name AS requested_by_name
+         FROM refund r JOIN food_order o ON o.id = r.order_id
+         LEFT JOIN app_user u ON u.id = r.requested_by
+        ORDER BY r.created_at DESC LIMIT 100`);
+    return { refunds: rows };
+  });
+
+  /* ---------- review moderation ------------------------------------------ */
+  app.post('/admin/reviews/:id/hide', async (req) => {
+    authorize(req.actor, 'review.moderate');
+    const r = await one(
+      `UPDATE review SET hidden=$2, hidden_by=$3, hidden_reason=$4,
+              hidden_at = CASE WHEN $2 THEN now() ELSE NULL END
+        WHERE id=$1 RETURNING *`,
+      [req.params.id, req.body?.hidden !== false, req.actor.id, req.body?.reason || null]);
+    if (!r) throw NotFound('No such review');
+    await audit(req, { action: 'review.moderate', resource: 'review', resourceId: r.id,
+                       outcome: 'ok', detail: { hidden: r.hidden, reason: r.hidden_reason } });
+    return r;
+  });
+}
+
+/**
+ * Issue a refund through the gateway that took the payment, then allocate it
+ * in the ledger. Shared by the admin refund route and by cancellation of a
+ * paid order, so both obey the same rules: gateway first, one in-flight
+ * refund per payment, never more than was captured, idempotent on the key.
+ *
+ * `req` supplies the actor and the audit context.
+ */
+export async function issueRefund(req, { orderId, reason, amountPaise, idemKey = null }) {
+  if (!PAYMENTS.configured) {
+    throw ProviderUnavailable('Payment provider not configured',
+      'A refund cannot be issued without the gateway that took the payment.');
+  }
+    if (!reason) throw BadRequest('A refund reason is required');
 
     const order = await one(`SELECT * FROM food_order WHERE id = $1`, [orderId]);
     if (!order) throw NotFound('No such order');
@@ -226,8 +267,8 @@ export default async function supportRoutes(app) {
           `${(locked.amount_paise / 100).toFixed(2)} was captured and the same has been returned.`);
       }
 
-      const amount = req.body.amountPaise === undefined || req.body.amountPaise === null
-        ? remaining : Number(req.body.amountPaise);
+      const amount = amountPaise === undefined || amountPaise === null
+        ? remaining : Number(amountPaise);
       if (!Number.isInteger(amount) || amount <= 0 || amount > remaining) {
         throw BadRequest(`Refund must be between 1 and ${remaining} paise`,
           already ? `${(already / 100).toFixed(2)} has already been refunded on this payment.`
@@ -345,29 +386,4 @@ export default async function supportRoutes(app) {
                                  provider_status: out.status } });
     return { id: refund.id, state: refundState, amountPaise: amount, allocation,
              providerStatus: out.status };
-  });
-
-  app.get('/admin/refunds', async (req) => {
-    authorize(req.actor, 'order.refund');
-    const { rows } = await q(
-      `SELECT r.*, o.code AS order_code, u.name AS requested_by_name
-         FROM refund r JOIN food_order o ON o.id = r.order_id
-         LEFT JOIN app_user u ON u.id = r.requested_by
-        ORDER BY r.created_at DESC LIMIT 100`);
-    return { refunds: rows };
-  });
-
-  /* ---------- review moderation ------------------------------------------ */
-  app.post('/admin/reviews/:id/hide', async (req) => {
-    authorize(req.actor, 'review.moderate');
-    const r = await one(
-      `UPDATE review SET hidden=$2, hidden_by=$3, hidden_reason=$4,
-              hidden_at = CASE WHEN $2 THEN now() ELSE NULL END
-        WHERE id=$1 RETURNING *`,
-      [req.params.id, req.body?.hidden !== false, req.actor.id, req.body?.reason || null]);
-    if (!r) throw NotFound('No such review');
-    await audit(req, { action: 'review.moderate', resource: 'review', resourceId: r.id,
-                       outcome: 'ok', detail: { hidden: r.hidden, reason: r.hidden_reason } });
-    return r;
-  });
 }

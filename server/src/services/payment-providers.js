@@ -214,7 +214,18 @@ export const cashfree = {
         /* Carried back on the webhook and the status pull. Used only as a
            cross-check against our own mapping — never as the mapping. */
         order_tags: { quad_order_id: order.id, quad_order_code: order.code },
-        ...(returnUrl ? { order_meta: { return_url: returnUrl } } : {}),
+        /* Online payment only, and only UPI and cards: no pay-later, no
+           wallets, no EMI. Cashfree enforces this on the hosted checkout. */
+        order_meta: {
+          ...(returnUrl ? { return_url: returnUrl } : {}),
+          ...(PAYMENTS.cashfree.notifyUrl ? { notify_url: PAYMENTS.cashfree.notifyUrl } : {}),
+          payment_methods: PAYMENTS.cashfree.paymentMethods,
+        },
+        /* Easy Split, only when the caller supplied splits — which it does
+           only when CASHFREE_EASY_SPLIT is on AND Cashfree has activated the
+           café's vendor account. Amounts are the ledger's own numbers. */
+        ...(ctx.splits?.length ? { order_splits: ctx.splits.map((x) => ({
+          vendor_id: x.providerVendorId, amount: Number(paiseToRupeeString(x.amountPaise)) })) } : {}),
       }),
     });
     const text = await res.text();
@@ -272,6 +283,8 @@ export const cashfree = {
   eventId(body, headers) {
     const h = headers['x-idempotency-key'];
     if (h) return String(h);
+    const rf = body?.data?.refund;
+    if (rf?.refund_id) return `${body?.type || 'refund'}:${rf.refund_id}:${rf.refund_status || ''}`;
     const cf = body?.data?.payment?.cf_payment_id;
     const type = body?.type || 'event';
     if (cf) return `${type}:${cf}`;
@@ -294,6 +307,20 @@ export const cashfree = {
       currency: String(payment.payment_currency || order.order_currency || '').toUpperCase() || null,
       feePaise: null,             // not reported on the PG webhook; see header
       raw: body,
+    };
+  },
+
+  /* REFUND_STATUS_WEBHOOK carries data.refund; anything else is not a
+     refund event and returns null so the payment path handles it. */
+  readRefundEvent(body) {
+    const r = body?.data?.refund;
+    if (!r || !String(body?.type || '').toUpperCase().includes('REFUND')) return null;
+    const status = String(r.refund_status || '').toUpperCase();
+    return {
+      refundId: r.refund_id ? String(r.refund_id) : null,
+      status,
+      outcome: status === 'SUCCESS' ? 'completed'
+        : ['CANCELLED', 'FAILED'].includes(status) ? 'failed' : 'pending',
     };
   },
 
@@ -347,7 +374,10 @@ export const cashfree = {
   async fetchSettlements({ from, to, settlementId, utr, cursor = null, limit = 100 }) {
     const filters = settlementId ? { cf_settlement_ids: [Number(settlementId)] }
                   : utr          ? { settlement_utrs: [String(utr)] }
-                  : { start_date: from.toISOString(), end_date: to.toISOString() };
+                  /* Second precision: Cashfree's recon API rejects an ISO
+                     timestamp with milliseconds (observed in sandbox). */
+                  : { start_date: from.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+                      end_date: to.toISOString().replace(/\.\d{3}Z$/, 'Z') };
     const res = await fetch(`${PAYMENTS.cashfreeBase}/pg/settlement/recon`, {
       method: 'POST',
       headers: this.headers(),
@@ -380,6 +410,42 @@ export const cashfree = {
     };
   },
 
+  /* Close a Cashfree order that a newer attempt replaced, so the customer
+     cannot pay a stale checkout as well as the new one. Best effort: if it
+     fails, a late success on the old order is still caught by applyOutcome
+     (order no longer awaiting payment -> flagged for refund review). */
+  async terminateOrder(providerOrderId) {
+    const res = await fetch(`${PAYMENTS.cashfreeBase}/pg/orders/${encodeURIComponent(providerOrderId)}`, {
+      method: 'PATCH', headers: this.headers(), body: JSON.stringify({ order_status: 'TERMINATED' }) });
+    return res.ok;
+  },
+
+  /* Easy Split vendor status, from Cashfree itself. The only source Quad
+     accepts for marking a café's split account active. */
+  async fetchSplitVendor(providerVendorId) {
+    const res = await fetch(
+      `${PAYMENTS.cashfreeBase}/pg/easy-split/vendors/${encodeURIComponent(providerVendorId)}`,
+      { headers: this.headers() });
+    const text = await res.text();
+    if (res.status === 404) return { status: 'NOT_FOUND' };
+    if (!res.ok) throw providerError('cashfree_pg', res, text);
+    const body = JSON.parse(text);
+    return { status: String(body.status || '').toUpperCase() };
+  },
+
+  /* The authoritative status of one refund, for reconciliation. */
+  async fetchRefund(providerOrderId, refundId) {
+    const res = await fetch(
+      `${PAYMENTS.cashfreeBase}/pg/orders/${encodeURIComponent(providerOrderId)}/refunds/${encodeURIComponent(refundId)}`,
+      { headers: this.headers() });
+    const text = await res.text();
+    if (res.status === 404) return { status: 'NOT_FOUND' };
+    if (!res.ok) throw providerError('cashfree_pg', res, text);
+    const body = JSON.parse(text);
+    return { status: String(body.refund_status || '').toUpperCase(),
+             amountPaise: rupeesToPaise(body.refund_amount) };
+  },
+
   async fetchOrder(providerOrderId) {
     /* Every fetch target below is rooted in PAYMENTS.* directly rather than
        in a local alias. That is not style: security.test.mjs statically
@@ -401,21 +467,29 @@ export const cashfree = {
     const body = JSON.parse(text);
     const orderStatus = String(body.order_status || '').toUpperCase();
 
-    /* An order marked PAID tells us money arrived but not which payment
-       carried it, and the payment is what we reconcile against. So when it
-       is PAID, ask for the payments too. */
-    let payment = null;
-    if (orderStatus === 'PAID') {
-      const pres = await fetch(
-        `${PAYMENTS.cashfreeBase}/pg/orders/${encodeURIComponent(providerOrderId)}/payments`,
-        { headers: this.headers() });
-      const ptext = await pres.text();
-      if (pres.ok) {
-        const list = JSON.parse(ptext);
-        payment = (Array.isArray(list) ? list : [])
-          .find((p) => String(p.payment_status).toUpperCase() === 'SUCCESS') || null;
-      }
+    /* The order status alone is not enough. PAID says money arrived but not
+       which payment carried it; ACTIVE says the order is still payable, yet
+       an individual attempt on it may already have FAILED (observed in the
+       sandbox: order ACTIVE, attempt FAILED). So the payment attempts are
+       always read, and:
+
+         any SUCCESS attempt on a PAID order  -> paid (that attempt)
+         order ACTIVE, latest attempt FAILED  -> failed (never paid; the
+                                                 order stays retryable)
+         anything else                        -> the order's own status
+
+       A failed attempt never produces 'paid', whatever else the response
+       says: 'paid' requires a SUCCESS attempt AND the order being PAID. */
+    let payments = [];
+    const pres = await fetch(
+      `${PAYMENTS.cashfreeBase}/pg/orders/${encodeURIComponent(providerOrderId)}/payments`,
+      { headers: this.headers() });
+    const ptext = await pres.text();
+    if (pres.ok) {
+      try { const list = JSON.parse(ptext); payments = Array.isArray(list) ? list : []; } catch { payments = []; }
     }
+    const status = (p) => String(p.payment_status || '').toUpperCase();
+    const payment = orderStatus === 'PAID' ? (payments.find((p) => status(p) === 'SUCCESS') || null) : null;
 
     if (payment) {
       return {
@@ -427,6 +501,23 @@ export const cashfree = {
         feePaise: null,
         raw: { order: body, payment },
       };
+    }
+    if (orderStatus === 'ACTIVE' && payments.length) {
+      const latest = [...payments].sort((a, b) =>
+        String(b.payment_time || b.payment_completion_time || '').localeCompare(
+          String(a.payment_time || a.payment_completion_time || '')))[0];
+      const ls = status(latest);
+      if (ls === 'FAILED' || ls === 'USER_DROPPED') {
+        return {
+          outcome: ls === 'FAILED' ? 'failed' : 'dropped',
+          providerOrderId: String(body.order_id),
+          providerPaymentId: latest.cf_payment_id != null ? String(latest.cf_payment_id) : null,
+          amountPaise: rupeesToPaise(latest.payment_amount ?? body.order_amount),
+          currency: String(body.order_currency || '').toUpperCase() || null,
+          feePaise: null,
+          raw: { order: body, payment: latest },
+        };
+      }
     }
     return {
       outcome: cfOrderOutcome(orderStatus),

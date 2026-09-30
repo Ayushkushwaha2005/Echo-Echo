@@ -571,6 +571,37 @@ test('the BACK BUTTON does not pay for anything', async () => {
     'the return path pulls authoritative status from the gateway');
 });
 
+test('an ACTIVE order whose latest attempt FAILED records the failure, confirms nothing, and stays retryable', async () => {
+  /* Observed in the Cashfree sandbox: a failed UPI attempt leaves the ORDER
+     ACTIVE (payable) and marks the ATTEMPT FAILED. */
+  const { draft, c, intent } = await orderAwaitingPayment('+919600000039');
+  orderState = { status: 'ACTIVE', payments: [
+    { cf_payment_id: 880001, payment_status: 'FAILED', payment_amount: '140.00', payment_currency: 'INR',
+      payment_time: '2026-09-27T12:00:00+05:30' }] };
+  const st = await c.get(`/payments/status?orderId=${draft.id}`);
+  assert.equal(st.body.confirmed, false);
+  assert.equal(await stateOf(draft.id), 'awaiting_payment');
+  assert.equal((await paymentOf(draft.id)).status, 'failed');
+  const ledger = await pool.query(`SELECT 1 FROM ledger_txn WHERE order_id=$1`, [draft.id]);
+  assert.equal(ledger.rowCount, 0, 'a failed attempt allocates nothing');
+
+  /* Retry: a fresh Cashfree order, and the stale one is closed. */
+  const retry = await c.post('/payments/intent', { orderId: draft.id });
+  assert.equal(retry.status, 200);
+  assert.notEqual(retry.body.paymentId, intent.paymentId);
+  assert.ok(stubCalls.some((x) => x.method === 'PATCH' && x.url === `/pg/orders/${intent.paymentId}`
+                                   && x.body?.order_status === 'TERMINATED'));
+});
+
+test('a SUCCESS attempt on an order Cashfree does not call PAID is not paid', async () => {
+  const { draft, c } = await orderAwaitingPayment('+919600000038');
+  orderState = { status: 'ACTIVE', payments: [
+    { cf_payment_id: 880002, payment_status: 'SUCCESS', payment_amount: '140.00', payment_currency: 'INR' }] };
+  const st = await c.get(`/payments/status?orderId=${draft.id}`);
+  assert.equal(st.body.confirmed, false);
+  assert.equal(await stateOf(draft.id), 'awaiting_payment');
+});
+
 test('a closed checkout reported as TERMINATED does not confirm', async () => {
   const { draft, c } = await orderAwaitingPayment('+919600000031');
   orderState = { status: 'TERMINATED', payments: [] };

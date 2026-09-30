@@ -282,6 +282,12 @@ export const quad = {
   pickupWithCode: (orderId, code) => post(`/orders/${orderId}/pickup`, { code }),
   handoff: (orderId, code) => post(`/orders/${orderId}/handoff`, { code }),
   earnings: () => get('/partner/earnings'),
+  wallet: () => get('/partner/wallet'),
+  /* Bank details go straight to the server, which passes them to the payout
+     provider and keeps only a masked hint. */
+  setPayoutMethod: (body) => put('/partner/payout-method', body),
+  withdraw: (idempotencyKey) => post('/partner/withdrawals', { idempotencyKey }),
+  retryWithdrawal: (id) => post(`/partner/withdrawals/${id}/retry`),
   partnerPolicy: () => get('/partner/policy'),
   partnerApplyWithConsent: (acceptPolicyId) => post('/partner/apply', { acceptPolicyId }),
   uploadPartnerPhoto: (file) => {

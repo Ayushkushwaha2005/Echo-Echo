@@ -186,6 +186,13 @@ test('production refuses to start in an unsafe configuration', async () => {
   await attempt({ PAYMENT_PROVIDER: '' }, /payment provider/);
   /* Deploying before payment KYC must be an explicit decision. */
   await attempt({ PAYMENT_PROVIDER: '', PAYMENTS_DEFERRED: 'true' }, 'ok');
+  /* Sandbox and production never mix. */
+  const cf = { PAYMENT_PROVIDER: 'cashfree', CASHFREE_PG_APP_ID: 'PRODAPP1', CASHFREE_PG_SECRET_KEY: 's' };
+  await attempt(cf, 'ok');
+  await attempt({ ...cf, CASHFREE_PG_BASE_URL: 'https://sandbox.cashfree.com' }, /sandbox/);
+  await attempt({ ...cf, CASHFREE_PG_APP_ID: 'TEST1234' }, /sandbox \(TEST\) app id/);
+  await attempt({ ...cf, CASHFREE_PAYOUT_BASE_URL: 'https://sandbox.cashfree.com' }, /PAYOUT_BASE_URL points at the Cashfree sandbox/);
+  await attempt({ ...cf, CASHFREE_PG_NOTIFY_URL: 'http://api.example/payments/webhook' }, /NOTIFY_URL must be https/);
   /* Passkeys cannot be switched off, and the RP ID must match the admin origin. */
   await attempt({ ADMIN_PASSKEY_REQUIRED: 'false' }, /ADMIN_PASSKEY_REQUIRED/);
   await attempt({ WEBAUTHN_RP_ID: '' }, /WEBAUTHN_RP_ID/);

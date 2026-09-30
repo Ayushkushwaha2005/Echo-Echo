@@ -54,6 +54,7 @@ import { notifyAsync } from '../services/notify.js';
 import { snapshotFor } from '../services/pricing.js';
 import { postOrderCapture } from '../services/ledger.js';
 import { requireAdapter } from '../services/payment-providers.js';
+import { applyRefundOutcome } from '../services/refund-status.js';
 
 const rupees = (paise) => (paise / 100).toFixed(2);
 
@@ -274,6 +275,15 @@ export default async function paymentRoutes(app) {
       throw Conflict('Add a contact mobile number before paying',
         'The payment gateway requires a phone number on the order. Add one under You → Contact number.');
     }
+    if (!pay && typeof adapter.terminateOrder === 'function') {
+      /* Earlier attempts that failed or were dropped: close them at the
+         provider before opening a new one. */
+      const stale = (await q(`SELECT provider_order_id FROM payment
+                               WHERE order_id=$1 AND provider=$2 AND status IN ('failed','pending')
+                                 AND provider_order_id IS NOT NULL AND flagged_reason IS NULL`,
+                             [order.id, adapter.id])).rows;
+      for (const s of stale) await adapter.terminateOrder(s.provider_order_id).catch(() => false);
+    }
     if (!pay) {
       /* Insert FIRST, so the row that owns the attempt exists before the
          provider is asked for anything. Its id is the idempotency key for
@@ -290,7 +300,21 @@ export default async function paymentRoutes(app) {
            that a client can influence is an open redirect, and here it would
            be one attached to a payment. It comes from server configuration
            (CASHFREE_PG_RETURN_URL) or not at all. */
-        gw = await adapter.createOrder({ paymentId: pay.id, order, amountPaise, customer });
+        /* Easy Split, only for a café whose Cashfree vendor account
+           Cashfree itself reported active, and only with the flag on. The
+           café's share is the snapshot's own number — never recomputed. */
+        let splits = [];
+        if (adapter.id === 'cashfree' && PAYMENTS.cashfree.easySplit && snap.cafeteria_payable_paise > 0) {
+          const sv = await one(`SELECT provider_vendor_id FROM vendor_split_account
+                                 WHERE vendor_id=$1 AND status='active'`, [order.vendor_id]);
+          if (sv) splits = [{ providerVendorId: sv.provider_vendor_id, amountPaise: snap.cafeteria_payable_paise }];
+        }
+        gw = await adapter.createOrder({ paymentId: pay.id, order, amountPaise, customer, splits });
+        for (const x of splits) {
+          await q(`INSERT INTO payment_split (payment_id, vendor_id, provider_vendor_id, amount_paise)
+                   VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+                  [pay.id, order.vendor_id, x.providerVendorId, x.amountPaise]);
+        }
       } catch (e) {
         /* The gateway refused. The attempt is recorded as failed so it is
            visible, and the order stays exactly where it was — unpaid. */
@@ -372,11 +396,22 @@ export default async function paymentRoutes(app) {
     /* Idempotency. A replayed delivery inserts nothing and does no work. */
     const fresh = await one(
       `INSERT INTO payment_webhook (provider, event_id, payload, provider_ts, event_type)
-       VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING event_id`,
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (provider, event_id) DO UPDATE SET duplicate_count = payment_webhook.duplicate_count + 1
+       RETURNING event_id, (xmax = 0) AS inserted`,
       [adapter.id, String(eventId), JSON.stringify(evt),
        v.receivedAtMs ? new Date(v.receivedAtMs) : null,
        String(evt?.type || evt?.event || '').slice(0, 80) || null]);
-    if (!fresh) return { ok: true, duplicate: true };
+    /* Counted, so reconciliation can report how often the provider repeats
+       itself — but a duplicate does no work at all. */
+    if (!fresh.inserted) return { ok: true, duplicate: true };
+
+    /* Refund status webhooks: Cashfree refunds are asynchronous, so the
+       money reaching the customer is learned here (or by reconciliation). */
+    if (adapter.readRefundEvent) {
+      const rf = adapter.readRefundEvent(evt);
+      if (rf) return applyRefundOutcome(req, rf);
+    }
 
     const ev = adapter.readEvent(evt, req.headers);
     if (!ev.providerOrderId) return { ok: true, ignored: true };

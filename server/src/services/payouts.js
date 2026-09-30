@@ -34,6 +34,7 @@ import { PAYOUTS } from '../config.js';
 import { ProviderUnavailable, Conflict, BadRequest } from '../auth/rbac.js';
 import { postPayout } from './ledger.js';
 import { sendPayout, activeAdapter } from './payout-providers.js';
+import { dispatchPayout, payoutConfig, walletNumbers } from './wallet.js';
 
 /* ---------- building a batch ---------------------------------------------
    `daily` and `weekly` are just labels on the period; what makes a batch
@@ -77,8 +78,42 @@ export async function buildBatch(c, { kind, periodStart, periodEnd, minPaise, ac
 
   const created = [];
   const skipped = [];
+  const partnerCfg = kind === 'partner' ? await payoutConfig(c) : null;
   for (const row of owed) {
-    const amount = Number(row.balance_paise);
+    let amount = Number(row.balance_paise);
+    /* A partner is paid what is AVAILABLE: an earning still inside its hold
+       window, or on an order with an open incident, waits for next time. */
+    if (kind === 'partner') {
+      amount = (await walletNumbers(c, row.partner_id, partnerCfg)).availablePaise;
+      if (amount < floor) {
+        skipped.push({ partnerId: row.partner_id, amountPaise: amount,
+                       reason: 'available balance below the minimum (the rest is pending)' });
+        continue;
+      }
+    }
+    /* Easy Split: money Cashfree is settling to the café directly is not
+       ours to pay a second time. */
+    if (kind === 'cafeteria') {
+      const split = Number((await c.query(
+        `SELECT COALESCE(sum(amount_paise),0)::int AS n FROM payment_split
+          WHERE vendor_id = $1 AND state = 'requested'`, [row.vendor_id])).rows[0].n);
+      amount -= split;
+      if (amount < floor) continue;
+    }
+    /* No verified settlement account, no payout. The balance stays in the
+       ledger, exact, and is picked up by the first run after the account is
+       verified. */
+    const verified = await c.query(
+      `SELECT id FROM payout_destination
+        WHERE active AND verification_status = 'verified'
+          AND vendor_id IS NOT DISTINCT FROM $1 AND partner_id IS NOT DISTINCT FROM $2
+        ORDER BY (provider = $3) DESC, created_at DESC LIMIT 1`,
+      [row.vendor_id, row.partner_id, String(PAYOUTS.provider || '').replace('_payouts', '')]);
+    if (!verified.rowCount) {
+      skipped.push({ vendorId: row.vendor_id, partnerId: row.partner_id, amountPaise: amount,
+                     reason: 'settlement account pending: no verified bank account or UPI ID' });
+      continue;
+    }
     /* A payee already has money in flight — do not queue a second transfer
        for the same balance. This is the duplicate-payout case. */
     const live = await c.query(
@@ -91,11 +126,7 @@ export async function buildBatch(c, { kind, periodStart, periodEnd, minPaise, ac
                      amountPaise: amount, reason: 'a payout is already in flight' });
       continue;
     }
-    const dest = await c.query(
-      `SELECT id FROM payout_destination
-        WHERE active AND provider = $3
-          AND vendor_id IS NOT DISTINCT FROM $1 AND partner_id IS NOT DISTINCT FROM $2`,
-      [row.vendor_id, row.partner_id, PAYOUTS.provider || 'none']);
+    const dest = verified;
 
     const p = (await c.query(
       `INSERT INTO payout (batch_id, vendor_id, partner_id, amount_paise,
@@ -150,25 +181,13 @@ export async function releaseBatch({ q, tx }, { batch, actorId }) {
                          reason: 'no fund account provisioned for this payee' });
       continue;
     }
-    try {
-      await q(`UPDATE payout SET state='processing', method=$2 WHERE id=$1`,
-              [p.id, PAYOUTS.method]);
-      const r = await sendPayout(p, { provider_fund_account_id: p.provider_fund_account_id });
-      if (r.settled) {
-        await tx((c) => settle(c, p.id, { method: r.method,
-          providerPayoutId: r.providerPayoutId, externalReference: r.utr, actorId }));
-        out.paid.push({ payoutId: p.id, amountPaise: p.amount_paise });
-      } else {
-        /* Queued or processing at the provider. NOT paid: the payable stays
-           outstanding until the money actually moves. */
-        await q(`UPDATE payout SET provider_payout_id=$2 WHERE id=$1`, [p.id, r.providerPayoutId]);
-        out.submitted.push({ payoutId: p.id, providerStatus: r.status });
-      }
-    } catch (e) {
-      await q(`UPDATE payout SET state='failed', failure_reason=$2 WHERE id=$1`,
-              [p.id, String(e.message).slice(0, 300)]);
-      out.failed.push({ payoutId: p.id, error: String(e.message).slice(0, 200) });
-    }
+    /* One dispatcher for every payout, so a timeout is treated the same way
+       everywhere: unknown, re-checked, never re-sent. */
+    const r = await dispatchPayout(p.id, { actorId });
+    if (r.state === 'paid') out.paid.push({ payoutId: p.id, amountPaise: p.amount_paise });
+    else if (r.state === 'failed') out.failed.push({ payoutId: p.id, error: r.error || 'failed at provider' });
+    else if (r.state === 'processing') out.submitted.push({ payoutId: p.id, providerStatus: r.unknown ? 'UNKNOWN' : 'PROCESSING' });
+    else out.skipped.push({ payoutId: p.id, amountPaise: p.amount_paise, reason: r.note });
   }
   return { released: out.paid.length, mode: PAYOUTS.method, ...out,
            totalPaise: lines.reduce((t, p) => t + p.amount_paise, 0) };

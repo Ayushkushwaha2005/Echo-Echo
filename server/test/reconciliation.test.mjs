@@ -20,7 +20,7 @@ import test, { before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
-import { startDb, stopDb, truncateAll, makeUser, makeVendor, makeItem, makeCampus, setTerms }
+import { startDb, stopDb, truncateAll, makeUser, makeVendor, makeItem, makeCampus, setTerms, autoVerifyPayees, noEarningHold }
   from './helpers/db.mjs';
 import { sessionFor, client } from './helpers/api.mjs';
 
@@ -88,12 +88,14 @@ before(async () => {
   process.env.CASHFREE_PG_SECRET_KEY = SECRET;
   process.env.CASHFREE_PG_BASE_URL = stubUrl;
   ({ pool } = await import('../src/db/index.js'));
+  await autoVerifyPayees(pool);
   recon = await import('../src/services/reconciliation.js');
   const { build } = await import('../src/index.js');
   app = await build();
 });
 
 after(async () => {
+  await autoVerifyPayees(pool, false).catch(() => {});
   await app?.close();
   await pool?.end();
   await new Promise((r) => stub.close(r));
@@ -104,6 +106,7 @@ after(async () => {
 
 beforeEach(async () => {
   await truncateAll(pool);
+  await noEarningHold(pool);
   campus = await makeCampus(pool);
   reconPages = [];
   reconCalls = [];

@@ -10,7 +10,28 @@
      node runtests.mjs                # everything
      node runtests.mjs api            # one group
    ========================================================================== */
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
+
+/* Runs one test file WITHOUT blocking this process. That matters: when this
+   process started the database, embedded-postgres pipes the postmaster's log
+   into our event loop. A blocking spawnSync stops that pipe draining, and
+   once ~64 KB of server log is buffered (Linux) every backend that logs —
+   any query that raises an error — stalls forever. */
+function runFile(file, timeoutMs) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', file], { env: process.env });
+    let stdout = '', stderr = '', signal = null, error = null;
+    child.stdout.setEncoding('utf8').on('data', (d) => { stdout += d; });
+    child.stderr.setEncoding('utf8').on('data', (d) => { stderr += d; });
+    const timer = setTimeout(() => { error = { code: 'ETIMEDOUT' }; child.kill('SIGKILL'); }, timeoutMs);
+    child.on('error', (e) => { error = e; });
+    child.on('close', (status, sig) => {
+      clearTimeout(timer);
+      signal = error ? null : sig;
+      resolve({ status, signal, error, stdout, stderr });
+    });
+  });
+}
 import { startDb, shutdownCluster } from './test/helpers/db.mjs';
 
 const FILES = [
@@ -42,6 +63,7 @@ const FILES = [
   ['finance', 'test/finance.test.mjs'],
   ['settlement', 'test/settlement.test.mjs'],
   ['settlement', 'test/reconciliation.test.mjs'],
+  ['marketplace', 'test/marketplace.test.mjs'],
   ['storage', 'test/storage.test.mjs'],
   ['campus', 'test/campus-config.test.mjs'],
   ['campus', 'test/campus-option.test.mjs'],
@@ -71,13 +93,21 @@ if (needsDb) {
   }
 }
 
+const FILE_TIMEOUT_MS = Number(process.env.QUAD_TEST_FILE_TIMEOUT_MS || 300_000);
 const totals = {};
 let failed = 0;
 
 for (const [kind, file] of selected) {
-  const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap', file],
-                      { encoding: 'utf8', env: process.env });
+  /* A file that hangs must fail loudly with its output, not stall the whole
+     run until CI's job timeout cancels it with nothing to show. */
+  const r = await runFile(file, FILE_TIMEOUT_MS);
   const out = (r.stdout || '') + (r.stderr || '');
+  if (r.error || r.signal) {
+    failed++;
+    console.log(`FAIL  ${file.padEnd(34)} ${r.error?.code || r.signal} after ${FILE_TIMEOUT_MS / 1000}s`);
+    console.log(out.split('\n').slice(-80).map((l) => '        ' + l).join('\n'));
+    continue;
+  }
   const num = (k) => {
     const m = out.match(new RegExp('^# ' + k + ' (\\d+)', 'm'));
     return m ? Number(m[1]) : 0;

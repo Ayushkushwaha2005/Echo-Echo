@@ -13,7 +13,7 @@ import test, { before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
-import { startDb, stopDb, truncateAll, makeUser, makeVendor, makeItem, makeCampus, setTerms }
+import { startDb, stopDb, truncateAll, makeUser, makeVendor, makeItem, makeCampus, setTerms, autoVerifyPayees, noEarningHold }
   from './helpers/db.mjs';
 import { sessionFor, client } from './helpers/api.mjs';
 
@@ -54,12 +54,14 @@ before(async () => {
   process.env.RAZORPAY_BASE_URL = stubUrl;
 
   ({ pool } = await import('../src/db/index.js'));
+  await autoVerifyPayees(pool);
   settlement = await import('../src/services/settlement.js');
   const { build } = await import('../src/index.js');
   app = await build();
 });
 
 after(async () => {
+  await autoVerifyPayees(pool, false).catch(() => {});
   await app?.close();
   await pool?.end();
   await new Promise((r) => stub.close(r));
@@ -70,6 +72,7 @@ after(async () => {
 
 beforeEach(async () => {
   await truncateAll(pool);
+  await noEarningHold(pool);
   campus = await makeCampus(pool);
 });
 
@@ -409,8 +412,8 @@ test('review shows the arithmetic, and approval moves no money', async () => {
   assert.equal(review.body.payouts[0].gross_food_sales_paise, 10000,
     'the reviewer sees the sales behind the number');
   assert.equal(review.body.payouts[0].statement_commission_paise, 200);
-  assert.equal(review.body.counts.withoutDestination, 1,
-    'and that no payee has a provider destination yet');
+  assert.equal(review.body.counts.withoutDestination, 0,
+    'since migration 028 a payout is only built for a payee with a verified destination');
 
   const ok = await admin.post(`/admin/payouts/batches/${batchId}/approve`, {});
   assert.equal(ok.status, 200);
@@ -700,14 +703,19 @@ test('auto-release skips a payee with no fund account rather than guessing',
       const admin = await as(owner);
       await admin.put('/admin/settlement/schedule', { autoRelease: true });
       /* No destination provisioned for this cafeteria. */
+      await pool.query(`DELETE FROM payout_destination WHERE vendor_id=$1`, [vendor.id]);
       const out = await settlement.runSettlementSchedules({ now: IST_8PM_MON });
-      assert.deepEqual(out.cafeteria.autoReleased, { paid: 0, failed: 0, skipped: 1 });
+      /* Since migration 028 a payee with no verified settlement account is
+         not even queued: nothing is built, so nothing can be sent. */
+      assert.equal(out.cafeteria.payouts, 0);
+      assert.equal(out.cafeteria.skipped, 1);
+      assert.equal(out.cafeteria.autoReleased, undefined);
     });
     const bal = row(await pool.query(
       `SELECT balance_paise FROM v_account_balance
         WHERE kind='cafeteria_payable' AND vendor_id=$1`, [vendor.id]));
     assert.equal(Number(bal.balance_paise), 9800, 'still owed, nothing invented');
-    assert.equal(row(await pool.query(`SELECT state FROM payout`)).state, 'pending');
+    assert.equal((await pool.query(`SELECT 1 FROM payout`)).rowCount, 0);
   });
 
 test('a provider that only queues a transfer does not mark it paid', async () => {
