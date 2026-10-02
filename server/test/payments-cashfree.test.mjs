@@ -505,6 +505,17 @@ test('a webhook for an unknown provider order is ignored, not guessed at', async
   assert.equal(await stateOf(draft.id), 'awaiting_payment');
 });
 
+test("the dashboard's signed endpoint test is acknowledged and changes nothing", async () => {
+  const { draft } = await orderAwaitingPayment('+919600000029');
+  const res = await app.inject(signedWebhook(
+    { data: { test_object: { test_key: 'test_value' } }, type: 'WEBHOOK',
+      event_time: new Date().toISOString() }, { key: null }));
+  assert.equal(res.statusCode, 200);
+  assert.equal(JSON.parse(res.body).ignored, 'no event id');
+  assert.equal(Number((await pool.query('SELECT count(*) FROM payment_webhook')).rows[0].count), 0);
+  assert.equal(await stateOf(draft.id), 'awaiting_payment');
+});
+
 test("a successful payment for another order cannot confirm this one", async () => {
   const a = await orderAwaitingPayment('+919600000022');
   const b = await orderAwaitingPayment('+919600000023');
