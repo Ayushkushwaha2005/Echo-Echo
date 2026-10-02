@@ -391,7 +391,11 @@ export default async function paymentRoutes(app) {
 
     const evt = req.body;
     const eventId = adapter.eventId(evt, req.headers);
-    if (!eventId) return reply.code(400).send({ error: 'no event id' });
+    /* Signed by the provider but about no payment, order or refund — the
+       dashboard's endpoint test is exactly this. There is nothing to apply,
+       so acknowledge it; a 400 would only fail verification and invite
+       retries. Nothing is written. */
+    if (!eventId) return { ok: true, ignored: 'no event id' };
 
     /* Idempotency. A replayed delivery inserts nothing and does no work. */
     const fresh = await one(
