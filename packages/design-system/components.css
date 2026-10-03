@@ -37,38 +37,38 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: 700; }
   font-size: var(--t-hero);
   line-height: var(--lh-tight);
   letter-spacing: var(--ls-tight);
-  font-weight: 800;
+  font-weight: 650;
   text-wrap: balance;
 }
 .t-display {
   font-family: var(--font-display);
   font-size: var(--t-display);
-  line-height: 1.05;
-  letter-spacing: var(--ls-tight);
-  font-weight: 800;
+  line-height: 1.16;
+  letter-spacing: -.012em;
+  font-weight: 600;
   text-wrap: balance;
 }
-.t-h1 { font-family: var(--font-display); font-size: var(--t-h1); letter-spacing: -.02em; font-weight: 800; }
-.t-h2 { font-family: var(--font-display); font-size: var(--t-h2); letter-spacing: -.015em; font-weight: 700; }
-.t-h3 { font-size: var(--t-h3); font-weight: 700; letter-spacing: -.01em; }
+.t-h1 { font-family: var(--font-display); font-size: var(--t-h1); line-height: 1.2; letter-spacing: -.01em; font-weight: 600; }
+.t-h2 { font-family: var(--font-display); font-size: var(--t-h2); line-height: 1.25; letter-spacing: -.005em; font-weight: 600; }
+.t-h3 { font-size: var(--t-h3); font-weight: 650; line-height: 1.35; }
 .t-body { font-size: var(--t-body); }
 .t-sm { font-size: var(--t-sm); }
 .t-xs { font-size: var(--t-xs); }
 .muted { color: var(--text-muted); }
 .faint { color: var(--text-faint); }
 .t-label {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: var(--t-label);
   letter-spacing: var(--ls-label);
-  text-transform: uppercase;
   color: var(--text-muted);
-  font-weight: 500;
+  font-weight: 600;
 }
+/* Prices are set in the reading face with figures that line up, so a menu
+   scans like a menu rather than a dashboard. */
 .money {
-  font-family: var(--font-display);
-  font-weight: 700;
+  font-family: var(--font-ui);
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -.02em;
 }
 .code { font-family: var(--font-mono); letter-spacing: .04em; }
 
@@ -255,9 +255,9 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: 700; }
 /* ---------- Badges, chips, status ---------------------------------------- */
 .badge {
   display: inline-flex; align-items: center; gap: 5px;
-  font-family: var(--font-mono); font-size: var(--t-label);
-  letter-spacing: .09em; text-transform: uppercase; font-weight: 500;
-  padding: 4px 9px; border-radius: var(--r-chip); white-space: nowrap;
+  font-family: var(--font-ui); font-size: .76rem;
+  font-weight: 600; line-height: 1.3;
+  padding: 3px 8px; border-radius: 6px; white-space: nowrap;
 }
 .badge-open   { background: var(--ok-bg); color: var(--ok); }
 .badge-closed { background: var(--bg-sunken); color: var(--text-faint); }
@@ -271,7 +271,7 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: 700; }
 
 .chip {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 14px; border-radius: var(--r-chip);
+  padding: 7px 12px; border-radius: 9px;
   background: var(--surface); border: 1px solid var(--line);
   font-size: var(--t-sm); font-weight: 600; white-space: nowrap;
   transition: all var(--d-fast) var(--e-out);
@@ -294,30 +294,24 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: 700; }
 
 /* Sticker — rotated badge, used sparingly on poster surfaces */
 .sticker {
-  display: inline-block; font-family: var(--font-mono); font-size: var(--t-label);
-  letter-spacing: .1em; text-transform: uppercase; font-weight: 500;
-  padding: 6px 12px; border-radius: var(--r-chip);
+  display: inline-block; font-family: var(--font-ui); font-size: .78rem;
+  font-weight: 600; padding: 4px 10px; border-radius: 6px;
   background: var(--coral-400); color: var(--ink-900);
-  transform: rotate(-3deg); box-shadow: var(--shadow-1);
 }
 
 /* ---------- Poster surfaces ----------------------------------------------- */
 .poster {
   position: relative; overflow: hidden;
   background: var(--surface-blush);
-  border-radius: var(--r-sheet);
-  padding: var(--s-6) var(--s-5);
+  border-radius: var(--r-card);
+  padding: var(--s-5) var(--s-5);
 }
-.poster-grid::before {
-  content: ""; position: absolute; inset: 0;
-  background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
-  background-size: 16px 16px; pointer-events: none;
-}
+/* The dotted grid and the decorative blobs added nothing a student needed;
+   the blush surface alone carries the brand. The classes stay so older
+   markup degrades to a plain surface. */
+.poster-grid::before { content: none; }
 .poster > * { position: relative; }
-.poster-arc {
-  position: absolute; border-radius: 50%;
-  background: var(--accent-soft); pointer-events: none;
-}
+.poster-arc { display: none; }
 
 /* ---------- Avatars ------------------------------------------------------- */
 .avatar {
@@ -345,19 +339,18 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: 700; }
   transition: transform var(--d-base) var(--e-out), box-shadow var(--d-base), border-color var(--d-base);
   position: relative; overflow: hidden;
 }
-.cafcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); border-color: transparent; }
+.cafcard:hover { border-color: var(--line-strong); }
+.caf-status { color: var(--text-muted); font-weight: 600; margin-top: 2px; }
+.caf-status.is-open { color: var(--ok); }
 .cafcard:active { transform: scale(.99); }
 .cafcard.closed { opacity: .68; }
 .cafcard-hero {
-  height: 88px; margin: calc(var(--s-4) * -1) calc(var(--s-4) * -1) var(--s-3);
+  height: 64px; margin: calc(var(--s-4) * -1) calc(var(--s-4) * -1) var(--s-3);
   position: relative; overflow: hidden;
   display: flex; align-items: flex-end; padding: var(--s-3);
 }
-.cafcard-hero .wm {
-  position: absolute; right: -6px; bottom: -18px;
-  font-family: var(--font-display); font-weight: 800; font-size: 4rem;
-  letter-spacing: -.05em; opacity: .16; color: var(--ink-900); line-height: 1;
-}
+/* The giant watermark name was decoration; the card already says the name. */
+.cafcard-hero .wm { display: none; }
 .addcaf {
   width: 100%; display: flex; align-items: center; gap: var(--s-3);
   padding: var(--s-4); border-radius: var(--r-card);
@@ -415,7 +408,7 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: 700; }
 .campusnote {
   display: flex; gap: var(--s-3); align-items: flex-start;
   padding: var(--s-3) var(--s-4); border-radius: var(--r-tile);
-  background: var(--accent-faint); border: 1px dashed var(--accent-soft);
+  background: var(--accent-faint); border: 1px solid var(--accent-soft);
 }
 
 /* ---------- Bottom nav ---------------------------------------------------- */
@@ -466,23 +459,37 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: 700; }
 
 /* ---------- AI agent ------------------------------------------------------ */
 .ai-mark {
-  width: 30px; height: 30px; border-radius: 10px; flex: none;
+  width: 28px; height: 28px; border-radius: 8px; flex: none;
   background: var(--surface-ink); color: var(--text-on-ink);
   display: grid; place-items: center;
-  font-family: var(--font-display); font-weight: 800; font-size: .82rem;
-  letter-spacing: -.05em;
+  font-family: var(--font-display); font-weight: 700; font-size: .78rem;
+  letter-spacing: -.03em;
 }
 .bubble-user {
-  align-self: flex-end; max-width: 82%;
+  align-self: flex-end; max-width: 78%;
   background: var(--surface-ink); color: var(--text-on-ink);
-  padding: 11px var(--s-4); border-radius: 18px 18px 5px 18px;
-  font-size: var(--t-body); box-shadow: var(--shadow-1);
+  padding: 9px 14px; border-radius: 14px 14px 4px 14px;
+  font-size: var(--t-body); line-height: 1.5; white-space: pre-wrap;
 }
 .bubble-ai {
-  align-self: flex-start; max-width: 88%;
-  color: var(--text); font-size: var(--t-body);
-  padding: 2px 0;
+  align-self: flex-start; max-width: 86%;
+  background: var(--surface); border: 1px solid var(--line);
+  color: var(--text); font-size: var(--t-body); line-height: 1.55;
+  padding: 10px 14px; border-radius: 14px 14px 14px 4px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
 }
+/* The order an answer proposes, set as a small bill. */
+.bill { display: grid; gap: 3px; margin-top: 2px; }
+.bill-row { display: flex; justify-content: space-between; gap: var(--s-4); font-variant-numeric: tabular-nums; }
+.bill-row.total { font-weight: 700; border-top: 1px solid var(--line); padding-top: 6px; margin-top: 4px; }
+.bill-row .muted { font-weight: 400; }
+.quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.quick button {
+  font-size: var(--t-sm); font-weight: 600; padding: 6px 11px; border-radius: 9px;
+  background: var(--surface); border: 1px solid var(--line-strong); color: var(--text);
+}
+.quick button:hover { border-color: var(--accent); color: var(--accent-text); }
+.quick button.primary { background: var(--accent); color: var(--text-on-rose); border-color: transparent; }
 .msg-in { animation: msgin var(--d-slow) var(--e-out) both; }
 @keyframes msgin { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .thinking { display: inline-flex; gap: 4px; align-items: center; padding: 6px 0; }
@@ -497,9 +504,8 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: 700; }
 }
 .composer-inner {
   display: flex; align-items: flex-end; gap: var(--s-2);
-  background: var(--surface); border: 1.5px solid var(--line-strong);
-  border-radius: 20px; padding: 6px 6px 6px var(--s-4);
-  box-shadow: var(--shadow-2);
+  background: var(--surface); border: 1px solid var(--line-strong);
+  border-radius: 14px; padding: 6px 6px 6px var(--s-4);
 }
 .composer-inner:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .composer textarea {
@@ -508,7 +514,7 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: 700; }
 }
 .composer textarea::placeholder { color: var(--text-faint); }
 .sendbtn {
-  width: 38px; height: 38px; border-radius: 13px; flex: none;
+  width: 38px; height: 38px; border-radius: 10px; flex: none;
   background: var(--accent); color: var(--text-on-rose);
   display: grid; place-items: center;
   transition: transform var(--d-fast) var(--e-spring), opacity var(--d-fast);

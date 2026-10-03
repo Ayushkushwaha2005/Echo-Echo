@@ -391,12 +391,18 @@ export const RETENTION = {
 };
 
 /* ---------- AI ordering assistant ---------------------------------------- */
+/* `local` (the default) is ECHO ECHO's own assistant in services/agent/: it
+   runs in this process and calls no model API. `off` disables it. An
+   external model is used only if an operator explicitly sets
+   AI_PROVIDER=anthropic and a key. */
 export const AI = {
-  provider: env('AI_PROVIDER', null),
+  provider: env('AI_PROVIDER', 'local'),
   model: env('AI_MODEL', 'claude-sonnet-5'),
   apiKey: env('ANTHROPIC_API_KEY'),
   maxTurns: Number(env('AI_MAX_TURNS', 8)),
-  get configured() { return this.provider === 'anthropic' && !!this.apiKey; },
+  get configured() {
+    return this.provider === 'local' || (this.provider === 'anthropic' && !!this.apiKey);
+  },
 };
 
 /* ---------- platform owner ----------------------------------------------

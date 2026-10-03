@@ -87,21 +87,24 @@
   --font-ui: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  --t-hero:    clamp(2.6rem, 11vw, 4rem);
-  --t-display: clamp(2rem, 7.5vw, 2.75rem);
-  --t-h1:      1.6rem;
-  --t-h2:      1.22rem;
-  --t-h3:      1.02rem;
-  --t-body:    0.95rem;
-  --t-sm:      0.85rem;
-  --t-xs:      0.76rem;
-  --t-label:   0.67rem;   /* uppercase mono UI labels */
+  /* An editorial scale: one confident display size, quiet section labels,
+     and body copy that is set to be read. Contrast comes from size and
+     family, not from making everything heavy. */
+  --t-hero:    clamp(2.1rem, 7.5vw, 3.1rem);
+  --t-display: clamp(1.55rem, 4.6vw, 2rem);
+  --t-h1:      1.42rem;
+  --t-h2:      1.14rem;
+  --t-h3:      1rem;
+  --t-body:    0.96rem;
+  --t-sm:      0.87rem;
+  --t-xs:      0.78rem;
+  --t-label:   0.8rem;    /* sentence-case section labels */
 
-  --lh-tight: 1.02;
-  --lh-snug:  1.22;
-  --lh-body:  1.55;
-  --ls-tight: -0.03em;
-  --ls-label: 0.12em;
+  --lh-tight: 1.1;
+  --lh-snug:  1.28;
+  --lh-body:  1.6;
+  --ls-tight: -0.018em;
+  --ls-label: 0;
 
   /* ======================= SPACE (4pt) ================================== */
   --s-1: 4px;   --s-2: 8px;   --s-3: 12px;  --s-4: 16px;
@@ -110,11 +113,11 @@
 
   /* ======================= RADIUS ======================================= */
   /* Deliberately varied by role — not one radius stamped on everything. */
-  --r-chip:   999px;   /* pills, chips, avatars */
-  --r-btn:    12px;    /* rectangular buttons */
-  --r-input:  12px;
-  --r-card:   18px;    /* content cards */
-  --r-tile:   14px;    /* dense tiles, list rows */
+  --r-chip:   999px;   /* avatars and status dots only */
+  --r-btn:    10px;    /* rectangular buttons */
+  --r-input:  10px;
+  --r-card:   14px;    /* content cards */
+  --r-tile:   12px;    /* dense tiles, list rows */
   --r-sheet:  26px;    /* bottom sheets, hero blocks */
   --r-sm:     8px;
 

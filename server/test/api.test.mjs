@@ -349,24 +349,36 @@ test('an unsigned webhook is rejected', async () => {
 
 /* ======================= AI ============================================= */
 
-test('the assistant reports itself unavailable rather than improvising', async () => {
+test('the assistant is ECHO ECHO\'s own and runs with no external provider', async () => {
   const u = await makeUser(pool, { phone: '+919200000050', name: 'A' });
   const c = await as(u);
   const s = await c.get('/ai/status');
-  assert.equal(s.body.available, false);
-  assert.match(s.body.message, /temporarily unavailable/);
+  assert.deepEqual([s.body.available, s.body.provider], [true, 'local']);
+  /* Switched off by an administrator, it says so instead of improvising. */
+  await pool.query(`INSERT INTO feature_flag (key, enabled) VALUES ('ai_ordering', false)
+                    ON CONFLICT (key) DO UPDATE SET enabled = false`);
+  assert.equal((await c.get('/ai/status')).body.available, false);
   const r = await c.post('/ai/chat', { messages: [{ role: 'user', content: 'ground pe burger bhej' }] });
   assert.equal(r.status, 503);
   assert.equal(r.body.code, 'configuration_required');
+  await pool.query(`DELETE FROM feature_flag WHERE key = 'ai_ordering'`);
 });
 
-test('a shopkeeper cannot use the ordering assistant', async () => {
+test('a shopkeeper may ask about the menu but is never handed an order', async () => {
   const v = await makeVendor(pool, { name: 'F', slug: 'f' });
+  await makeItem(pool, v.id, { name: 'Filter Coffee', paise: 3000 });
   const owner = await makeUser(pool, { phone: '+919200000051', name: 'R',
     roles: ['vendor_owner'], vendorId: v.id });
   const c = await as(owner);
-  const r = await c.post('/ai/chat', { messages: [{ role: 'user', content: 'hi' }] });
-  assert.equal(r.status, 403);
+  const msgs = [{ role: 'user', content: '2 filter coffee' }];
+  const ask = await c.post('/ai/chat', { messages: msgs });
+  assert.equal(ask.status, 200);
+  assert.equal(ask.body.proposal.total_paise, ask.body.proposal.subtotal_paise
+    + ask.body.proposal.delivery_fee_paise + ask.body.proposal.platform_fee_paise + ask.body.proposal.tax_paise);
+  const yes = await c.post('/ai/chat', { messages: [...msgs, { role: 'user', content: 'yes' }] });
+  assert.equal(yes.body.action, null);
+  assert.match(yes.body.reply, /can't send this to checkout/);
+  assert.equal((await pool.query(`SELECT count(*)::int n FROM food_order`)).rows[0].n, 0);
 });
 
 /* ======================= verification & partner ========================== */
