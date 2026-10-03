@@ -281,8 +281,7 @@ function proposal(st, w, notes) {
       : `You collect it from ${vendor.name}.`;
   st.pending = open ? { kind: 'confirm' } : null;
   const lead = [...notes, `${notes.length ? 'Your order' : 'Sure'}, from ${vendor.name}:`].join('\n\n');
-  const tail = [how, open ? 'Want me to continue to checkout?'
-    : `${vendor.name} is ${lowerFirst(vendor.status?.line || 'closed')} right now, so this can't go to checkout yet.`].join('\n\n');
+  const tail = [how, open ? 'Want me to continue to checkout?' : closedLine(vendor)].join('\n\n');
   return {
     state: st,
     out: {
@@ -355,6 +354,13 @@ function menuReply(text, vendor, w) {
   }
   const hint = vendors.some((v) => itemsOf(v).length) ? '\n\nAsk for anything by name, like "1 cold coffee".' : '';
   return [`${sections.join('\n\n')}${hint}`, { suggestions: [] }];
+}
+
+/* "Chai Garam is closed right now (opens Mon 8 AM), so ..." */
+function closedLine(vendor) {
+  const [state, when] = String(vendor.status?.line || 'Closed').split(' · ');
+  return when ? `${vendor.name} is ${lowerFirst(state)} right now (${when}), so this can't go to checkout yet.`
+    : `${vendor.name}: ${lowerFirst(state)}, so this can't go to checkout yet.`;
 }
 
 const statusLines = (w) => w.vendors.map((v) => `${v.name}: ${v.status?.line || ''}`).join('\n');

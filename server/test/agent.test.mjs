@@ -129,7 +129,7 @@ test('a closed café, a sold-out dish, a second café and an account that may no
     status: { open: false, state: 'closed', line: 'Closed · opens Mon 8 AM' } }] });
   const o = say(['2 cold coffee', 'yes'], closed);
   assert.equal(o.action, null);
-  assert.match(o.reply, /closed · opens Mon 8 AM right now, so this can't go to checkout yet/);
+  assert.match(o.reply, /Chai Garam is closed right now \(opens Mon 8 AM\), so this can't go to checkout yet/);
 
   const sold = ctx({ items: MENU.map((i) => (i.id === 'cc' ? { ...i, available: false } : i)) });
   assert.match(say(['cold coffee'], sold).reply, /Cold Coffee is sold out right now/);
