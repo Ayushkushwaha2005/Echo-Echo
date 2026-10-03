@@ -208,3 +208,32 @@ test('production refuses to start in an unsafe configuration', async () => {
   await attempt({ RAZORPAY_BASE_URL: 'http://127.0.0.1:9999' }, /RAZORPAY_BASE_URL/);
   await attempt({ TWILIO_BASE_URL: 'http://127.0.0.1:9999' }, /TWILIO_BASE_URL/);
 });
+
+/* render.yaml is what a Blueprint sync would apply to production. Payments
+   are live, so the file must never carry the pre-launch switches again: a
+   sync that set PAYMENTS_DEFERRED or turned the sweeper off would quietly
+   undo the launch. Secrets stay sync: false and never get a value here. */
+test('render.yaml keeps production payments live and commits no secret', () => {
+  const yaml = readFileSync(join(repoRoot, 'render.yaml'), 'utf8');
+  const vars = new Map();
+  for (const m of yaml.matchAll(/^\s*- key: (\S+)[ \t]*\r?\n[ \t]*(value|sync|generateValue): *(.*?)\s*$/gm)) {
+    vars.set(m[1], { kind: m[2], value: m[3].replace(/^"(.*)"$/, '$1') });
+  }
+  assert.ok(!vars.has('PAYMENTS_DEFERRED'), 'PAYMENTS_DEFERRED must not be in render.yaml');
+  assert.deepEqual(vars.get('SWEEPER'), { kind: 'value', value: 'on' });
+  assert.deepEqual(vars.get('PAYMENT_PROVIDER'), { kind: 'value', value: 'cashfree' });
+  assert.deepEqual(vars.get('CASHFREE_EASY_SPLIT'), { kind: 'value', value: 'off' });
+  assert.equal(vars.get('CASHFREE_PG_NOTIFY_URL')?.value,
+    'https://echo-echo-api.onrender.com/payments/webhook');
+  assert.match(vars.get('CASHFREE_PG_RETURN_URL')?.value || '', /^https:\/\//);
+  for (const k of ['CASHFREE_PG_APP_ID', 'CASHFREE_PG_SECRET_KEY', 'DATABASE_URL']) {
+    assert.deepEqual(vars.get(k), { kind: 'sync', value: 'false' }, `${k} must be sync: false`);
+  }
+  /* No sandbox endpoint, and no payout provider until Cashfree activates it. */
+  for (const k of ['CASHFREE_PG_BASE_URL', 'PAYOUT_PROVIDER']) assert.ok(!vars.has(k), k);
+  for (const [k, v] of vars) {
+    if (/SECRET|_KEY$|TOKEN|PASSWORD/.test(k)) {
+      assert.notEqual(v.kind, 'value', `${k} must not have a committed value`);
+    }
+  }
+});
