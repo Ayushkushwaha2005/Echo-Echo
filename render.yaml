@@ -127,16 +127,32 @@ services:
       - key: S3_SECRET_ACCESS_KEY
         sync: false
 
-      # ---- deferred payments ----------------------------------------------
-      # No gateway yet: checkout returns 503 and no order is created. This is
-      # an acknowledged state, not a fallback that fakes a payment.
-      - key: PAYMENTS_DEFERRED
-        value: true
-      # With no orders to sweep, the 30s sweeper would only keep Neon's free
-      # compute awake around the clock and exhaust the monthly CU quota.
-      # Turn this back on in the same change that removes PAYMENTS_DEFERRED.
-      - key: SWEEPER
+      # ---- payments (Cashfree production) ----------------------------------
+      # Live since 1 Oct 2026. PAYMENTS_DEFERRED is deliberately absent: it
+      # must never return here, and test/config-safety.test.mjs fails CI if it
+      # does. The PG base URL is left to its default (api.cashfree.com), so no
+      # sandbox endpoint can be configured by this file. The key pair is
+      # entered in the Render dashboard only.
+      - key: PAYMENT_PROVIDER
+        value: cashfree
+      - key: CASHFREE_PG_APP_ID
+        sync: false
+      - key: CASHFREE_PG_SECRET_KEY
+        sync: false
+      - key: CASHFREE_PG_NOTIFY_URL
+        value: https://echo-echo-api.onrender.com/payments/webhook
+      - key: CASHFREE_PG_RETURN_URL
+        value: https://www.echoecho.tech/
+      # Collect-and-disburse: Cashfree settles everything to the platform and
+      # the ledger pays cafés. Easy Split stays off until Cashfree approves it.
+      - key: CASHFREE_EASY_SPLIT
         value: "off"
+      # No PAYOUT_PROVIDER: Cashfree Payouts is not activated in production,
+      # so settlements are paid by an administrator and recorded by reference.
+      # The sweeper expires stale offers and abandoned checkouts; with live
+      # payments it must run.
+      - key: SWEEPER
+        value: "on"
 
       - key: LOG_LEVEL
         value: info
