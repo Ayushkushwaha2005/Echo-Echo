@@ -49,6 +49,7 @@ const FILES = [
   ['e2e', 'test/location-confirm.test.mjs'],
   ['e2e', 'test/campus-address.test.mjs'],
   ['e2e', 'test/cafe-hours.test.mjs'],
+  ['e2e', 'test/agent.test.mjs'],
   ['security', 'test/security.test.mjs'],
   ['enrolment', 'test/enrolment.test.mjs'],
   ['auth', 'test/admin-login.test.mjs'],

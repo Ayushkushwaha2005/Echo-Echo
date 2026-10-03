@@ -30,7 +30,7 @@ const money = rupees;
 /* Prototype icons that kit.js sizes differently or does not carry. */
 const I = {
   ...KIT,
-  ask: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M12 3.5l1.9 4.7 4.7 1.9-4.7 1.9L12 16.7l-1.9-4.7L5.4 10l4.7-1.9z"/><path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>',
+  ask: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" width="22" height="22"><path d="M4.5 6.5A2.5 2.5 0 0 1 7 4h10a2.5 2.5 0 0 1 2.5 2.5v7A2.5 2.5 0 0 1 17 16h-6.2L6.5 19.5V16H7a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M8.5 9h7M8.5 12h4.5"/></svg>',
   bike: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><circle cx="5.5" cy="17" r="3.2"/><circle cx="18.5" cy="17" r="3.2"/><path d="M8 17h7l-3-8h-3M12 9l2-4h3"/></svg>',
   bag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1 12H6z"/><path d="M9 8V6a3 3 0 016 0v2"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V8a4 4 0 018 0v2.5"/></svg>',
@@ -171,8 +171,14 @@ function cafVM(v) {
   for (const ch of String(v.id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   const [heroBg, markBg] = TINTS[v.slug] || TINT_LIST[h % TINT_LIST.length];
   const mark = (v.name || '?').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-  /* open_now is the server's answer: the café's switch AND its weekly hours. */
-  return { ...v, heroBg, markBg, mark, open: v.open_now ?? !!(v.is_open && v.accepting), rating: ratingLabel(v.rating) };
+  /* open_now and status are the server's answer, read from its own clock in
+     campus time. The browser's clock is never asked whether a café is open. */
+  const statusLine = v.status?.line || (v.open_now ? 'Open now' : 'Closed');
+  /* Beside an Open/Closed badge, only the part that adds something:
+     "Closes 6 PM", "Opens Mon 8 AM". */
+  const rest = statusLine.split(' · ')[1];
+  return { ...v, heroBg, markBg, mark, open: !!v.open_now, statusLine,
+           statusDetail: rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : statusLine, rating: ratingLabel(v.rating) };
 }
 
 /* Dishes carry no photos yet, so the tile shows the dish's monogram in the
@@ -268,7 +274,7 @@ const CafCard = (c) => `
     <div class="between" style="align-items:flex-start">
       <div class="grow">
         <div class="t-h2">${esc(c.name)}</div>
-        <div class="t-xs muted">${esc(c.kind || 'Campus outlet')}</div>
+        <div class="t-sm caf-status ${c.open ? 'is-open' : ''}">${esc(c.statusDetail)}</div>
         ${c.hours?.label ? `<div class="t-xs muted">${esc(c.hours.label)}</div>` : ''}
       </div>
       ${StatusPill(c.open)}
@@ -304,7 +310,7 @@ const ItemRow = (m, vendor) => {
           ? `<span class="item-add" style="border-color:var(--line-strong);color:var(--text-faint)">Closed</span>`
           : inCart
             ? `<div class="qty" style="position:absolute;bottom:-10px;left:50%;transform:translateX(-50%)"><button data-act="step" data-item="${m.id}" data-d="-1" aria-label="Remove one">−</button><span>${inCart}</span><button data-act="step" data-item="${m.id}" data-d="1" aria-label="Add one">+</button></div>`
-            : `<button class="item-add" data-act="add" data-item="${m.id}">ADD +</button>`}
+            : `<button class="item-add" data-act="add" data-item="${m.id}">Add</button>`}
     </div>
   </div>`;
 };
@@ -353,18 +359,16 @@ const BottomNav = () => {
 /* ===================== STUDENT: welcome + sign-in ======================= */
 function ScrWelcome() {
   const vs = needVendors();
-  const open = vs?.ok ? vs.v.vendors.filter((v) => v.is_open && v.accepting).length : null;
+  const open = vs?.ok ? vs.v.vendors.filter((v) => v.open_now).length : null;
   return `<div class="screen no-nav welcome" style="display:flex;flex-direction:column">
-    <div class="poster poster-grid" style="border-radius:0;flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding:var(--s-6) var(--s-5) var(--s-7)">
-      <div class="poster-arc" style="width:230px;height:230px;top:-70px;right:-70px"></div>
-      <div class="poster-arc" style="width:120px;height:120px;top:110px;left:-50px;background:var(--coral-400);opacity:.28"></div>
+    <div class="poster" style="border-radius:0;display:flex;flex-direction:column;justify-content:flex-end;padding:var(--s-7) var(--s-5) var(--s-6)">
       <div class="stack g5 enter">
         <div class="row g2"><div class="cafmark" style="background:var(--surface-ink);width:40px;height:40px;border-radius:12px;font-size:1rem">E.</div>
           <span class="t-label" style="color:var(--text-2)">${BRAND} · UPES Bidholi</span></div>
-        <h1 class="t-hero">Food from your campus.<br>Brought to wherever<br>you <em style="font-style:normal;color:var(--accent-text)">actually are</em>.</h1>
-        <p class="t-body" style="color:var(--text-2);max-width:32ch">Order from the cafés on campus and have it brought to the library, the ground or your block by another student on their way past.</p>
+        <h1 class="t-hero">Campus food, brought to <span style="color:var(--accent-text)">where you are</span>.</h1>
+        <p class="t-body" style="color:var(--text-2);max-width:38ch">Order from the cafés on campus. Another student on their way past brings it to the library, the ground or your block, or you pick it up yourself.</p>
         <div class="row g2" style="flex-wrap:wrap">
-          <span class="sticker">Campus only</span>
+          <span class="badge badge-ink">UPES Bidholi only</span>
           ${open === null ? '' : `<span class="badge badge-rose">${open} café${open === 1 ? '' : 's'} open now</span>`}
         </div>
       </div>
@@ -378,6 +382,10 @@ function ScrWelcome() {
       <button class="btn btn-ghost btn-block" data-act="go" data-route="cafes">Browse cafés first</button>
       <p class="t-xs faint center">Only students with a verified university email can order here.</p>
     </div>
+    ${vs?.ok && vs.v.vendors.length ? `<div class="pad stack g3 welcome-cafes" style="padding-bottom:var(--s-6)">
+      ${Label('Cafés on campus')}
+      <div class="cafgrid">${vs.v.vendors.map(cafVM).map(CafCard).join('')}</div>
+    </div>` : ''}
   </div>`;
 }
 
@@ -407,7 +415,7 @@ function ScrObCollege() {
     ${TopBar('', { back: 'welcome' })}
     <div class="pad stack g5 enter" style="padding-top:var(--s-3)">
       <div class="stack g2">
-        <h1 class="t-display">Choose your<br>college.</h1>
+        <h1 class="t-display">Choose your college</h1>
       </div>
       ${!S.campuses ? Loading('Loading colleges') : `
         <div class="stack g2" role="radiogroup" aria-label="College">
@@ -435,7 +443,7 @@ function ScrObCampus() {
     ${TopBar('', { back: 'ob-college' })}
     <div class="pad stack g5 enter" style="padding-top:var(--s-3)">
       <div class="stack g2">
-        <h1 class="t-display">Which campus<br>are you on?</h1>
+        <h1 class="t-display">Which campus are you on?</h1>
         <p class="t-sm muted">${esc(a.college || COLLEGE())}</p>
       </div>
       ${!S.campuses ? Loading('Loading campuses') : `
@@ -466,7 +474,7 @@ function ScrObEmail() {
     ${TopBar('', { back: 'ob-campus' })}
     <form class="pad stack g5 enter" data-form="email" style="padding-top:var(--s-3)">
       <div class="stack g2">
-        <h1 class="t-display">Your student<br>email.</h1>
+        <h1 class="t-display">Your student email</h1>
         <p class="t-sm muted">Enter your university email to continue.</p>
       </div>
       <div class="field">
@@ -490,7 +498,7 @@ function ScrObEmailCode() {
     ${TopBar('', { back: 'ob-email' })}
     <form class="pad stack g5 enter" data-form="emailcode" style="padding-top:var(--s-3)">
       <div class="stack g2">
-        <h1 class="t-display">Check your<br>inbox.</h1>
+        <h1 class="t-display">Check your inbox</h1>
         <p class="t-sm muted">We sent a code to <b style="color:var(--text)">${esc(a.email)}</b>.
           It expires in 10 minutes.</p>
       </div>
@@ -516,7 +524,7 @@ function ScrObLocation() {
     ${TopBar('')}
     <div class="pad stack g5 enter" style="padding-top:var(--s-3)">
       <div class="stack g2">
-        <h1 class="t-display">Are you on<br>campus?</h1>
+        <h1 class="t-display">Are you on campus?</h1>
         <p class="t-sm muted">${BRAND} delivers on campus only, so we check your location once each
           time you sign in.</p>
       </div>
@@ -551,6 +559,21 @@ const loadVendors = () => quad.vendors({ campusId: browseCampus()?.id });
    has read /campuses and /auth/me. Asking before that fetched the unscoped
    list, threw it away and asked again: one wasted round trip per visit. */
 const needVendors = () => (S.campuses === null ? null : need('vendors', loadVendors));
+/* Cafés open and close by the clock, so a page left open at 7:59 or 5:59
+   must change without a reload. Once a minute the server is asked again
+   (it computes the status in campus time); the page re-renders only when
+   a café's status actually changed. */
+setInterval(async () => {
+  if (document.hidden || S.sheet || !['home', 'cafes', 'welcome', 'menu'].includes(S.route) || S.campuses === null) return;
+  try {
+    const fresh = await loadVendors();
+    const sig = (r) => (r?.vendors || []).map((v) => `${v.id}:${v.open_now}:${v.status?.line}`).join('|');
+    if (cache.vendors?.ok && sig(cache.vendors.v) === sig(fresh)) return;
+    cache.vendors = { ok: true, v: fresh };
+    if (S.route === 'menu') drop(`menu:${S.params.caf}`);
+    render();
+  } catch { /* offline: the next tick tries again */ }
+}, 60_000);
 const loadCampuses = () => quad.campuses().then((r) => { S.campuses = r.campuses; render(); return r; });
 
 function ScrSetup() {
@@ -569,7 +592,7 @@ function ScrSetup() {
     <form class="pad stack g5 enter" data-form="setup" style="padding-top:var(--s-2)">
       <div class="stack g2">
         ${Label('Almost done')}
-        <h1 class="t-display">Set up your<br>profile.</h1>
+        <h1 class="t-display">Set up your profile</h1>
         <p class="t-sm muted">Campus admin and your delivery partner use these details to reach you about an order.</p>
       </div>
 
@@ -651,16 +674,6 @@ function ScrHome() {
         <div class="t-xs muted">Add ${esc(myProfile().missing.map((m) => ({ name: 'your name', student_email: 'your student email', contact_phone: 'a contact number', campus: 'your campus' })[m]).join(', '))} to start ordering.</div></div>${I.chev}</button>` : ''}
       ${active.length ? `<div class="livegrid">${active.map(ActiveOrderCard).join('')}</div>` : ''}
 
-      ${campusOpen() ? `<button class="poster poster-grid" data-act="go" data-route="ai" style="text-align:left;width:100%;border:0;padding:var(--s-5);cursor:pointer">
-        <div class="poster-arc" style="width:150px;height:150px;bottom:-70px;right:-40px"></div>
-        <div class="stack g3">
-          <div class="row g2"><span class="ai-mark">E.</span><span class="t-label">Ask ${BRAND}</span></div>
-          <div class="t-display" style="font-size:1.72rem">Tell ${BRAND}<br>what you want.</div>
-          <p class="t-sm" style="color:var(--text-2)">“Ground pe 2 cold coffee aur ek burger bhej do” — it reads Hinglish, builds the order, you confirm.</p>
-          <span class="btn btn-ink btn-sm btn-pill" style="align-self:flex-start;margin-top:2px">Start ordering ${I.chev}</span>
-        </div>
-      </button>` : ''}
-
       <div class="stack g3">
         ${browseCampus() && !browseCampus().available ? ComingSoon(browseCampus()) : `
         <div class="between">${Label(`Cafés · ${browseCampus()?.name || 'Campus'}`)}<button class="t-xs" data-act="go" data-route="cafes" style="color:var(--accent-text);font-weight:700">See all</button></div>
@@ -669,6 +682,11 @@ function ScrHome() {
           : `<div class="empty"><div class="empty-art">${Ico(I.store, 34)}</div><div class="t-h2">No cafés yet.</div>
                <p class="t-sm muted">Outlets appear here as soon as campus admin adds them.</p></div>`}`}
       </div>
+
+      ${campusOpen() ? `<button class="tile row g3" data-act="go" data-route="ai" style="width:100%;text-align:left">
+        <span class="ai-mark" aria-hidden="true">E.</span>
+        <div class="grow"><div class="t-h3">Know what you want? Just type it.</div>
+        <div class="t-xs muted">"2 cold coffee aur ek veg sandwich" — Ask ${BRAND} puts it together and shows the price.</div></div>${I.chev}</button>` : ''}
 
       ${earlier.length ? `
       <div class="stack g3">
@@ -743,16 +761,8 @@ function ScrCafes() {
   return `<div class="screen">
     ${TopBar('Campus cafés', { sub: vs?.ok ? `${open} of ${cafs.length} open now` : '' })}
     <div class="pad stack g4 enter">
-      <div class="poster" style="padding:var(--s-5)">
-        <div class="poster-arc" style="width:140px;height:140px;top:-50px;right:-40px"></div>
-        <div class="t-label">${esc(COLLEGE())}</div>
-        <div class="t-display" style="font-size:1.5rem;margin-top:6px">${esc(campus?.name || 'Campus')}</div>
-        <p class="t-sm" style="margin-top:4px;color:var(--ink-700)">Your campus favourites, brought to your spot.</p>
-        <div class="row g2" style="margin-top:12px;flex-wrap:wrap">
-          ${S.fulfilment === 'pickup' ? '<span class="badge badge-ink">Self pickup</span>' : '<span class="badge badge-ink">Campus delivery</span>'}
-          ${vs?.ok ? `<span class="badge badge-rose">${cafs.length} café${cafs.length === 1 ? '' : 's'}</span>` : ''}
-        </div>
-      </div>
+      <p class="t-sm muted">${esc(campus?.name || 'Campus')} · ${S.fulfilment === 'pickup' ? 'You pick up from the counter' : 'Delivered on campus'}${
+        vs?.ok ? ` · ${cafs.length} café${cafs.length === 1 ? '' : 's'}` : ''}</p>
       ${!vs ? Loading('Loading cafés') : !vs.ok ? Problem(vs.e)
         : cafs.length ? `<div class="cafgrid">${cafs.map(CafCard).join('')}</div>`
         : `<div class="empty"><div class="empty-art">${Ico(I.store, 34)}</div><div class="t-h2">No cafés yet.</div>
@@ -771,22 +781,21 @@ function ScrMenu() {
   const cats = [...new Set(items.map(sectionFor))];
   const count = cartCount();
   return `<div class="screen">
-    <!-- The hero tint is a light primitive in both themes, so its text is
-         pinned to ink rather than following the theme's text colour. -->
-    <div class="poster hero-band" style="border-radius:0;background:${c.heroBg};color:var(--ink-900);padding:var(--s-4) var(--s-4) var(--s-5)">
+    <!-- The hero tint follows the theme (it is dark in dark mode), so its
+         text does too. -->
+    <div class="poster hero-band" style="border-radius:0;background:${c.heroBg};color:var(--text);padding:var(--s-4) var(--s-4) var(--s-5)">
       <div class="row g3" style="margin-bottom:var(--s-4)">
         <button class="backbtn" data-act="go" data-route="cafes" aria-label="Back">${I.back}</button>
       </div>
-      <span class="wm" style="position:absolute;right:-8px;top:36px;font-family:var(--font-display);font-weight:800;font-size:5rem;opacity:.14;letter-spacing:-.05em;color:var(--ink-900)">${esc(c.name.toUpperCase())}</span>
       <div class="row g3">
         <div class="cafmark" style="background:${c.markBg}">${esc(c.mark)}</div>
         <div class="grow">
-          <div class="t-h1" style="color:var(--ink-900)">${esc(c.name)}</div>
-          <div class="t-xs" style="color:var(--ink-700)">${esc(c.kind || 'Campus outlet')}</div>
+          <div class="t-h1">${esc(c.name)}</div>
+          <div class="t-xs" style="color:var(--text-2)">${esc(c.kind || 'Campus outlet')}</div>
         </div>
       </div>
-      <div class="row g3 t-xs" style="margin-top:var(--s-4);flex-wrap:wrap;color:var(--ink-700)">
-        ${StatusPill(c.open)}
+      <div class="row g3 t-xs" style="margin-top:var(--s-4);flex-wrap:wrap;color:var(--text-2)">
+        ${StatusPill(c.open)}<span>${esc(c.statusDetail)}</span>
         ${c.rating.empty ? '<span>No ratings yet</span>' : `<span class="row g1">${I.star}<b>${c.rating.text}</b></span>`}
         ${c.prep_minutes ? `<span>~${c.prep_minutes} min</span>` : ''}
       </div>
@@ -798,10 +807,9 @@ function ScrMenu() {
 
     <div class="pad site-split">
     <div class="stack g5">
-      ${!c.open ? `<div class="campusnote">${Ico(I.clock, 18)}<p class="t-xs" style="color:var(--text-2)">${esc(c.name)} is closed right now.${
-        c.hours?.closedReason ? ` ${esc(c.hours.closedReason)}` : ''} You can look through the menu, but not order.</p></div>` : ''}
+      ${!c.open ? `<div class="campusnote">${Ico(I.clock, 18)}<p class="t-xs" style="color:var(--text-2)">${esc(c.name)}: ${esc(c.statusLine)}. You can look through the menu, but not order.</p></div>` : ''}
       ${c.hours?.week ? `<div class="card card-pad stack g1" aria-label="Opening hours">${Label('Hours')}
-        ${c.hours.week.map((d) => `<div class="between t-xs"><span>${esc(d.day)}</span><span class="${d.open ? '' : 'muted'}" style="font-weight:${d.open ? 400 : 700}">${esc(d.open ? d.hours : 'CLOSED')}</span></div>`).join('')}</div>` : ''}
+        ${c.hours.week.map((d) => `<div class="between t-xs"><span>${esc(d.day)}</span><span class="${d.open ? '' : 'muted'}">${esc(d.open ? d.hours : 'Closed')}</span></div>`).join('')}</div>` : ''}
       ${items.length ? cats.map((cat, i) => `
         <div class="stack g1" id="cat-${i}">
           ${Label(cat)}
@@ -824,7 +832,7 @@ function ScrCart() {
       <div class="empty">
         <div class="empty-art">${Ico(I.cart, 34)}</div>
         <div class="t-h2">Nothing here yet.</div>
-        <p class="t-sm muted">Pick a café, or just tell ${BRAND} what you're craving.</p>
+        <p class="t-sm muted">Pick a café, or type your order in Ask ${BRAND}.</p>
         <div class="row g2" style="margin-top:8px">
           <button class="btn btn-secondary btn-sm" data-act="go" data-route="cafes">Browse cafés</button>
           <button class="btn btn-primary btn-sm" data-act="go" data-route="ai">Ask ${BRAND}</button>
@@ -1504,7 +1512,6 @@ function ScrProfile() {
     <div class="pad site-split enter">
     <div class="stack g4">
       <div class="poster" style="padding:var(--s-5)">
-        <div class="poster-arc" style="width:130px;height:130px;top:-50px;right:-30px"></div>
         <div class="row g3">
           <div class="avatar avatar-lg">${esc(initials(u.name))}</div>
           <div class="grow"><div class="t-h1">${esc(u.name || 'Unnamed')}</div>
@@ -1747,10 +1754,9 @@ function ScrJoin() {
     ${TopBar(`Deliver with ${BRAND}`, { back: 'profile' })}
     <div class="pad site-split enter">
       <div class="stack g4">
-        <div class="poster poster-grid" style="padding:var(--s-6) var(--s-5)">
-          <div class="poster-arc" style="width:160px;height:160px;top:-60px;right:-50px"></div>
+        <div class="poster" style="padding:var(--s-5)">
           <div class="t-label">Delivery partner programme</div>
-          <div class="t-display" style="font-size:1.9rem;margin-top:8px">Deliver between<br>classes. Get paid.</div>
+          <div class="t-display" style="margin-top:6px">Deliver between classes and get paid</div>
           <p class="t-sm" style="color:var(--text-2);margin-top:10px;max-width:46ch">Students on campus deliver orders from campus cafés to other students. It is flexible, it is on your own campus, and it counts every rupee you earn.</p>
         </div>
         <div class="card" style="overflow:hidden">
@@ -1949,61 +1955,100 @@ function DepositCard(v) {
 }
 
 /* ===================== ASSISTANT ======================================== */
+/* Ask ECHO ECHO runs on the ECHO ECHO server itself. It reads the same menu,
+   hours and prices as the rest of the app, proposes an order, and only on a
+   clear yes puts it in the cart; the checkout screen then builds the real
+   order and payment happens there. */
+const ASK_STARTERS = ['2 cold coffee aur ek veg sandwich', 'Show the menu', 'Chai kitne ki hai?'];
+
+const AskBill = (p) => `<div class="bill t-sm">
+    ${p.lines.map((l) => `<div class="bill-row"><span>${l.qty} × ${esc(l.name)}</span><span>${money(l.line_paise)}</span></div>`).join('')}
+    <div class="bill-row" style="margin-top:4px"><span class="muted">Food subtotal</span><span>${money(p.subtotal_paise)}</span></div>
+    <div class="bill-row"><span class="muted">${p.fulfilment === 'delivery' ? 'Delivery' : 'Pickup'}</span><span>${p.fulfilment === 'delivery' ? money(p.delivery_fee_paise) : '—'}</span></div>
+    <div class="bill-row"><span class="muted">Platform fee</span><span>${money(p.platform_fee_paise)}</span></div>
+    ${p.tax_paise ? `<div class="bill-row"><span class="muted">Tax</span><span>${money(p.tax_paise)}</span></div>` : ''}
+    <div class="bill-row total"><span>Total</span><span>${money(p.total_paise)}</span></div>
+  </div>`;
+
+function AskMessage(m, last) {
+  if (m.who === 'user') return `<div class="bubble-user msg-in">${esc(m.text)}</div>`;
+  const body = m.proposal && m.parts && !m.action
+    ? `${esc(m.parts.lead)}${AskBill(m.proposal)}<div style="margin-top:8px">${esc(m.parts.tail)}</div>`
+    : esc(m.text);
+  const quick = last && m.suggestions?.length ? `<div class="quick" style="margin:8px 0 0 36px">${m.suggestions.map((s, i) =>
+    `<button data-act="aiQuick" data-text="${esc(s)}" class="${i === 0 && /checkout/i.test(s) ? 'primary' : ''}">${esc(s)}</button>`).join('')}</div>` : '';
+  return `<div class="msg-in"><div class="row g2" style="align-items:flex-start"><span class="ai-mark" aria-hidden="true">E.</span>
+    <div class="bubble-ai">${body}</div></div>${quick}</div>`;
+}
+
 function ScrAI() {
   const st = need('ai', () => quad.aiStatus());
-  const empty = !S.chat.messages.length;
-  const unavailable = st?.ok && !st.v.available;
+  const msgs = S.chat.messages;
+  const available = st?.ok && st.v.available;
   return `<div class="screen reading" style="display:flex;flex-direction:column">
     <div class="topbar">
       <span class="ai-mark">E.</span>
       <div class="grow"><div class="t-h3">Ask ${BRAND}</div>
-        <div class="t-xs muted">Hinglish is fine${S.destination ? ` · ${esc(S.destination.name)}` : ''}</div></div>
-      ${S.chat.messages.length ? `<button class="btn btn-ghost btn-sm" data-act="aiClear">Clear</button>` : ''}
+        <div class="t-xs muted">Order the way you'd say it at the counter. Hinglish works.</div></div>
+      ${msgs.length ? `<button class="btn btn-ghost btn-sm" data-act="aiClear">Start over</button>` : ''}
     </div>
 
-    <div class="pad stack g4 grow" style="padding-bottom:var(--s-4)">
-      ${empty ? `
-        <div class="poster poster-grid" style="margin-top:var(--s-2)">
-          <div class="poster-arc" style="width:170px;height:170px;bottom:-90px;left:-50px"></div>
-          <div class="t-label">Order by asking</div>
-          <div class="t-display" style="font-size:1.9rem;margin-top:8px">Just say what<br>you want.</div>
-          <p class="t-sm" style="color:var(--text-2);margin-top:10px">Type it the way you would say it to a friend. It reads the real menu, checks what is actually available today, and puts the order together. Nothing is paid for until you say so.</p>
-        </div>
-        ${!st ? Loading('Checking the assistant') : unavailable || !st.ok
-          ? NotConfigured('The ordering assistant is unavailable',
-              'You can still browse and order normally.')
-          : ''}
-        <div class="campusnote">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)">It can put an order together and tell you what it costs. It cannot pay for one, place one or send anyone out. That is always your decision.</p></div>
-      ` : `<div class="stack g4">${S.chat.messages.map((m) => m.who === 'user'
-          ? `<div class="bubble-user msg-in">${esc(m.text)}</div>`
-          : `<div class="row g2 msg-in" style="align-items:flex-start"><span class="ai-mark">E.</span><div class="bubble-ai grow">${esc(m.text)}</div></div>`).join('')}
-          ${S.chat.busy ? `<div class="row g2 msg-in"><span class="ai-mark">E.</span><span class="thinking"><i></i><i></i><i></i></span></div>` : ''}</div>`}
+    <div class="pad stack g4 grow" style="padding-bottom:var(--s-4)" aria-live="polite">
+      ${!st ? Loading('One moment')
+        : !available ? NotConfigured('Ask ECHO ECHO is switched off right now', 'You can still browse the cafés and order normally.')
+        : !msgs.length ? `
+          <div class="row g2" style="align-items:flex-start"><span class="ai-mark" aria-hidden="true">E.</span>
+            <div class="bubble-ai">Hi! What would you like? Tell me the item and how many, for example "2 cold coffee aur ek veg sandwich". I'll show you the price before anything goes to checkout.</div></div>
+          <div class="quick" style="margin-left:36px">${ASK_STARTERS.map((s) => `<button data-act="aiQuick" data-text="${esc(s)}">${esc(s)}</button>`).join('')}</div>`
+        : `<div class="stack g3">${msgs.map((m, i) => AskMessage(m, i === msgs.length - 1 && !S.chat.busy)).join('')}
+          ${S.chat.busy ? `<div class="row g2 msg-in"><span class="ai-mark">E.</span><span class="thinking" aria-label="Working"><i></i><i></i><i></i></span></div>` : ''}</div>`}
+      ${available ? `<p class="t-xs faint" style="margin-top:auto">Prices and opening hours come straight from the cafés. Nothing is ordered or charged until you pay at checkout.</p>` : ''}
     </div>
 
-    ${st?.ok && st.v.available ? `<div class="composer">
+    ${available ? `<div class="composer">
       <div class="composer-inner">
-        <textarea id="ai-in" rows="1" placeholder="Ground pe 2 cold coffee bhej do…" aria-label="Message ${BRAND}"></textarea>
+        <textarea id="ai-in" rows="1" placeholder="e.g. 2 cold coffee aur ek veg sandwich" aria-label="Message ${BRAND}"></textarea>
         <button class="sendbtn" data-act="aiSend" aria-label="Send">${I.send}</button>
       </div>
     </div>` : ''}
   </div>`;
 }
 
-async function aiSend() {
+async function aiSend(typed) {
   const input = $('#ai-in');
-  const text = input?.value.trim();
+  const text = (typed ?? input?.value ?? '').trim();
   if (!text || S.chat.busy) return;
-  if (!signedIn()) return go('ob-college');
+  if (input && typed === undefined) input.value = '';
   S.chat.messages.push({ who: 'user', text });
   S.chat.busy = true; render();
   try {
-    const out = await quad.aiChat(S.chat.messages.map((m) => ({ role: m.who === 'user' ? 'user' : 'assistant', content: m.text })));
-    S.chat.messages.push({ who: 'ai', text: out.reply });
+    /* Only what the student typed is sent; the server replays it against
+       the live menu, so nothing shown here can change a price. */
+    const out = await quad.aiChat(S.chat.messages.filter((m) => m.who === 'user').map((m) => ({ role: 'user', content: m.text })));
+    S.chat.messages.push({ who: 'ai', text: out.reply, proposal: out.proposal, parts: out.parts,
+                           suggestions: out.suggestions || [], action: out.action });
+    if (out.action?.type === 'checkout') handOffToCart(out);
   } catch (e) {
     S.chat.messages.push({ who: 'ai', text: explain(e) });
   } finally {
     S.chat.busy = false; render();
   }
+}
+
+/* The student said yes: the proposal becomes the ordinary cart, and the
+   ordinary checkout takes it from there (spot, contact number, payment). */
+function handOffToCart(out) {
+  const p = out.proposal;
+  S.cart = out.action.lines.map((l) => {
+    const line = p.lines.find((x) => x.itemId === l.itemId);
+    return { itemId: l.itemId, qty: l.qty, name: line?.name || 'Item', pricePaise: line?.unit_paise ?? 0,
+             veg: null, vendorId: p.vendorId, vendorName: p.vendorName };
+  });
+  S.fulfilment = out.action.fulfilment;
+  setTimeout(() => {
+    if (!signedIn()) { toast('Sign in to finish your order'); go('ob-college'); }
+    else go('cart');
+  }, 900);
 }
 
 /* ===================== sheets =========================================== */
@@ -2098,7 +2143,7 @@ function Sheet() {
     body = `
       <div class="sheet-body stack g4">
         <div class="stack g1">
-          <h2 class="t-display" style="font-size:1.7rem">Where should<br>we bring it?</h2>
+          <h2 class="t-display">Where should we bring it?</h2>
           <p class="t-sm muted">${parent ? esc(S.sheet.parentName || '') : 'Pick a delivery point on the map or from the list. Your block and room go in your address.'}</p>
         </div>
         ${!deliveryOff ? `<div class="segrow">
@@ -2668,6 +2713,7 @@ document.addEventListener('click', async (e) => {
       break;
 
     case 'aiSend': aiSend(); break;
+    case 'aiQuick': if (/^open my orders$/i.test(a.text)) go('orders'); else aiSend(a.text); break;
     case 'aiClear': S.chat.messages = []; render(); break;
   }
 });

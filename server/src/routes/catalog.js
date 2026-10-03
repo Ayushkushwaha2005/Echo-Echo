@@ -11,7 +11,13 @@
    * A price change writes menu_price_history and updates menu_item, but
      never touches order_item — historical orders carry their own snapshot.
    ========================================================================== */
-import { hoursOf, orderableNow } from '../services/hours.js';
+import { hoursOf, statusOf } from '../services/hours.js';
+
+/* What a student is told about a café's hours, computed on the server. */
+const withStatus = (v, now = new Date()) => {
+  const status = statusOf(v, now);
+  return { hours: hoursOf(v, now), open_now: status.open, status };
+};
 import { q, one, tx } from '../db/index.js';
 import { authorize, can, BadRequest, NotFound, HttpError } from '../auth/rbac.js';
 import { audit } from '../audit.js';
@@ -53,8 +59,8 @@ export default async function catalogRoutes(app) {
         WHERE ($1::boolean OR v.active)
           AND ($2::uuid IS NULL OR v.campus_site_id = $2)
         ORDER BY v.active DESC, v.name`, [all, campusId]);
-    /* open_now: the café's own switch AND its weekly hours, in campus time. */
-    return { vendors: rows.map((v) => ({ ...shapeRating(v), hours: hoursOf(v), open_now: orderableNow(v) })) };
+    /* open_now: the weekly hours in campus time, unless the café has paused. */
+    return { vendors: rows.map((v) => ({ ...shapeRating(v), ...withStatus(v) })) };
   });
 
   app.get('/vendors/:id/menu', async (req) => {
@@ -72,7 +78,7 @@ export default async function catalogRoutes(app) {
          FROM menu_item i LEFT JOIN category c ON c.id = i.category_id
         WHERE i.vendor_id = $1 AND ($2::boolean OR i.active)
         ORDER BY c.sort NULLS LAST, i.name`, [v.id, !!privileged]);
-    return { vendor: v, items: rows.map(shapeRating) };
+    return { vendor: { ...v, ...withStatus(v) }, items: rows.map(shapeRating) };
   });
 
   app.post('/vendors', async (req) => {

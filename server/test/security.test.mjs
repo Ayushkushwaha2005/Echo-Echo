@@ -378,8 +378,17 @@ async function orderingSurfaces(c, ctx) {
     ['checkout draft', await c.post('/orders/draft', {
       vendorId: ctx.vendorId, lines: [{ itemId: ctx.itemId, qty: 1 }],
       fulfilment: 'delivery', destinationId: ctx.destinationId })],
-    ['AI assistant', await c.post('/ai/chat', { message: 'order me a coffee' })],
   ];
+}
+
+/* The assistant may talk to anyone, but it must never hand an account that
+   may not order an order to check out — and it never writes one itself. */
+async function assistantRefuses(c) {
+  const msgs = [{ role: 'user', content: '1 coffee' }];
+  const yes = await c.post('/ai/chat', { messages: [...msgs, { role: 'user', content: 'yes' }] });
+  assert.equal(yes.status, 200);
+  assert.equal(yes.body.action, null, 'no checkout hand-off');
+  assert.match(yes.body.reply, /verification/i, 'and it says why');
 }
 
 async function orderingFixture(phone, studentStatus, status = 'active') {
@@ -396,6 +405,7 @@ test('an UNVERIFIED student cannot place an order through any surface', async ()
   for (const [name, r] of await orderingSurfaces(c, ctx)) {
     assert.ok(r.status >= 400, `${name} must refuse an unverified student (got ${r.status})`);
   }
+  await assistantRefuses(c);
   const n = await pool.query(`SELECT count(*)::int AS n FROM food_order`);
   assert.equal(n.rows[0].n, 0, 'not even a draft may exist');
 });

@@ -2,10 +2,15 @@
    ECHO ECHO — A CAFÉ'S WEEKLY HOURS
 
    vendor.open_days (ISO weekday, 1 = Monday .. 7 = Sunday) with opens_at /
-   closes_at, all read in campus time (Asia/Kolkata). No open_days means the
-   café has no schedule and its own open/accepting switch alone decides, as
-   before. A schedule never opens a café whose switch is off; it only closes
-   one outside its hours. Delivery has no hours of its own.
+   closes_at, all read in campus time (Asia/Kolkata) from the SERVER clock.
+
+   A scheduled café opens and closes by its schedule alone: nobody has to
+   switch it on at 8 AM. `is_open` is not consulted for it. `accepting` is
+   the emergency stop: when it is off the café is closed whatever the hour,
+   and the schedule takes over again the moment it is back on.
+
+   No open_days means the café has no schedule, and its own is_open /
+   accepting switches decide, as before. Delivery has no hours of its own.
    ========================================================================== */
 
 const TZ = 'Asia/Kolkata';
@@ -60,5 +65,33 @@ export function hoursOf(v, now = new Date()) {
 
 /** Whether a student can order from this café right now. */
 export function orderableNow(v, now = new Date()) {
-  return Boolean(v.active !== false && v.is_open && v.accepting && hoursOf(v, now).inHours);
+  return statusOf(v, now).open;
+}
+
+/** When a scheduled café next opens: "8 AM", "tomorrow 8 AM" or "Mon 8 AM". */
+function nextOpening(days, opens, { weekday, minutes }) {
+  for (let ahead = 0; ahead <= 7; ahead++) {
+    const d = ((weekday - 1 + ahead) % 7) + 1;
+    if (!days.includes(d) || (ahead === 0 && minutes >= mins(opens))) continue;
+    return ahead === 0 ? clock(opens) : ahead === 1 ? `tomorrow ${clock(opens)}` : `${DAY[d - 1]} ${clock(opens)}`;
+  }
+  return null;
+}
+
+/**
+ * The one answer to "can I order from this café now?", with the line a
+ * student reads. The server computes it; the browser's clock is never asked.
+ *   { open, state: 'open' | 'closed' | 'paused' | 'inactive', line }
+ */
+export function statusOf(v, now = new Date()) {
+  if (v.active === false) return { open: false, state: 'inactive', line: 'No longer on ECHO ECHO' };
+  const h = hoursOf(v, now);
+  if (!h.scheduled) {
+    const open = Boolean(v.is_open && v.accepting);
+    return { open, state: open ? 'open' : 'closed', line: open ? 'Open now' : 'Closed right now' };
+  }
+  if (!v.accepting) return { open: false, state: 'paused', line: 'Not taking orders right now' };
+  if (h.inHours) return { open: true, state: 'open', line: `Open · closes ${clock(v.closes_at)}` };
+  const next = nextOpening(v.open_days.map(Number), v.opens_at, campusClock(now));
+  return { open: false, state: 'closed', line: next ? `Closed · opens ${next}` : 'Closed' };
 }

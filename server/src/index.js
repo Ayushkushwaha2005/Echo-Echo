@@ -187,7 +187,9 @@ export function build() {
       /^\/vendors(\/[^/]+\/(menu|contact|categories))?$/,   // browsing before sign-in
       /^\/menu\/search/, /^\/reviews/,
       /^\/campus\/(tree|destinations|search|resolve|boundary)/,
-      /^\/ai\/status$/, /^\/campuses$/, /^\/partner\/policy$/, /^\/pricing\/current$/,
+      /* The assistant only reads what /vendors and /pricing/current already
+         publish, and is rate-limited; ordering still needs an account. */
+      /^\/ai\/(status|chat)$/, /^\/campuses$/, /^\/partner\/policy$/, /^\/pricing\/current$/,
       /^\/assets\/[0-9a-f-]{36}$/, /^\/assets\/limits$/,
     ];
 

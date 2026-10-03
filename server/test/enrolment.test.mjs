@@ -244,7 +244,8 @@ test('this path needs no external provider at all', async () => {
   const { OTP, PAYMENTS, AI } = await import('../src/config.js');
   assert.equal(OTP.configured, false, 'no SMS gateway in this environment');
   assert.equal(PAYMENTS.configured, false);
-  assert.equal(AI.configured, false);
+  /* The assistant is ECHO ECHO's own: configured, with no key to anyone. */
+  assert.deepEqual([AI.provider, AI.apiKey ?? null], ['local', null]);
 
   /* And yet a real counter can be brought online end to end: an owner issues
      the code, reads it out, and the cafeteria signs in. No SMS gateway, no

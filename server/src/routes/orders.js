@@ -13,7 +13,7 @@ import { randomInt, createHash, randomBytes } from 'node:crypto';
 import { q, one, tx } from '../db/index.js';
 import { authorize, can, assertMayOrder, BadRequest, NotFound, Forbidden, Conflict } from '../auth/rbac.js';
 import { assertDeliverable, assertPin, assertSpot, pathOf } from '../services/campus.js';
-import { hoursOf } from '../services/hours.js';
+import { hoursOf, statusOf } from '../services/hours.js';
 import { normaliseAddress } from '../services/address.js';
 import { validateMobile } from '../services/profile.js';
 import { flag } from '../services/flags.js';
@@ -91,11 +91,13 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
 
   const v = (await c.query(`SELECT * FROM vendor WHERE id = $1`, [vendorId])).rows[0];
   if (!v || !v.active) throw NotFound('No such cafeteria');
-  if (!v.is_open || !v.accepting) throw Conflict(`${v.name} is not accepting orders right now`);
-  /* Its weekly hours, in campus time. A schedule never opens a switched-off
-     café; delivery has no hours of its own beyond these. */
-  const hours = hoursOf(v);
-  if (!hours.inHours) throw Conflict(`${v.name} is closed right now`, hours.closedReason);
+  /* Its weekly hours, in campus time on the server clock, or the café's
+     emergency stop. Delivery has no hours of its own beyond these. */
+  const status = statusOf(v);
+  if (status.state === 'paused' || (status.state === 'closed' && !hoursOf(v).scheduled)) {
+    throw Conflict(`${v.name} is not accepting orders right now`);
+  }
+  if (!status.open) throw Conflict(`${v.name} is closed right now`, hoursOf(v).closedReason);
 
   /* ---- the campus gate ------------------------------------------------
      Read from the database for both sides: the customer's selected campus

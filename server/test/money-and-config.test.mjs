@@ -28,7 +28,8 @@ test('providerStatus reports unconfigured providers honestly', async () => {
   /* With no env set, nothing may claim to be configured. */
   assert.equal(s.otp.configured, false);
   assert.equal(s.payments.configured, false);
-  assert.equal(s.ai.configured, false);
+  /* The ordering assistant is ECHO ECHO's own and needs no provider. */
+  assert.deepEqual([s.ai.provider, s.ai.configured], ['local', true]);
   assert.equal(s.ocr.configured, false);
   assert.equal(s.roster.configured, false);
   assert.equal(s.storage.productionReady, false);
@@ -44,8 +45,9 @@ test('boot refuses without a platform owner', async () => {
 test('feature flags derive from provider configuration', async () => {
   const { FLAG_DEFAULTS, FLAG_REQUIRES } = await import('../src/config.js');
   /* Nothing that needs an absent provider may default to on. */
-  assert.equal(FLAG_DEFAULTS.ai_ordering, false);
   assert.equal(FLAG_DEFAULTS.online_payment, false);
   assert.equal(FLAG_REQUIRES.online_payment(), false);
-  assert.equal(FLAG_REQUIRES.ai_ordering(), false);
+  /* The ordering assistant needs none: it runs in this process. */
+  assert.equal(FLAG_DEFAULTS.ai_ordering, true);
+  assert.equal(FLAG_REQUIRES.ai_ordering(), true);
 });
