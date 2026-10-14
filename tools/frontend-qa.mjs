@@ -140,6 +140,14 @@ else {
         csp.push(`${rel(f)}: ${origin} is not allowed by any fetch directive`);
       }
     }
+    /* Markup built in JavaScript is HTML too: an onclick= in a template
+       string is blocked by the policy exactly like one in a page. */
+    if (f.endsWith('.js')) {
+      for (const m of src.matchAll(/\son[a-z]+="([^"$]*)"/g)) {
+        const h = `'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`;
+        if (!(dirs['script-src-attr'] || []).includes(h)) csp.push(`${rel(f)}: inline handler "${m[1]}" in generated markup`);
+      }
+    }
     if (f.endsWith('.html')) {
       for (const m of src.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)) {
         if (m[1].trim()) csp.push(`${rel(f)}: inline <script> (the policy allows none)`);

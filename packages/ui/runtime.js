@@ -116,7 +116,9 @@ export function fatal(title, detail) {
         ${lockup({ height: 28 })}
         <h1 class="auth-title">${esc(title)}</h1>
         <p class="auth-sub">${esc(detail || '')}</p>
-        <button class="auth-btn" onclick="location.reload()">Try again</button>
+        <!-- A link to this same page rather than an inline onclick: the
+             Content-Security-Policy allows no inline script. -->
+        <a class="auth-btn" style="text-decoration:none;text-align:center" href="">Try again</a>
       </div>
     </div>`;
 }

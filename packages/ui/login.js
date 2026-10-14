@@ -14,7 +14,10 @@
    second door onto a surface that only needs one.
    ========================================================================== */
 import { quad, ApiError, Offline } from '../data/client.js';
-import { lockup } from '../../brand/logo.js';
+import { logo, BRAND_NAME } from '../../brand/logo.js';
+
+/* The sign-in cards open with the whole approved logo. */
+const BrandHead = () => `<div class="auth-brand">${logo({ size: 88, eager: true })}<span class="brand-name">${BRAND_NAME}</span></div>`;
 
 /* Server messages and typed input are text, never markup. */
 const safe = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -30,7 +33,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
     root.append(el(`
       <div class="auth-screen">
         <div class="auth-card">
-          ${lockup({ height: 30 })}
+          ${BrandHead()}
           <h1 class="auth-title">Can't reach ECHO ECHO</h1>
           <p class="auth-sub">${e instanceof Offline
             ? 'The ECHO ECHO server is not responding. Check that it is running and try again.'
@@ -75,7 +78,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
     const node = el(`
       <div class="auth-screen">
         <form class="auth-card" novalidate>
-          ${lockup({ height: 30 })}
+          ${BrandHead()}
           <h1 class="auth-title">Campus Control</h1>
           <p class="auth-sub">Sign in with your administrator email and password.</p>
 
@@ -125,7 +128,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
     const node = el(`
       <div class="auth-screen">
         <form class="auth-card" novalidate>
-          ${lockup({ height: 30 })}
+          ${BrandHead()}
           <h1 class="auth-title">Authenticator code</h1>
           <p class="auth-sub">Enter the 6-digit code for ${safe(email)} from your authenticator app.</p>
 
@@ -174,7 +177,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
     const node = el(`
       <div class="auth-screen">
         <form class="auth-card" novalidate>
-          ${lockup({ height: 30 })}
+          ${BrandHead()}
           <h1 class="auth-title">Reset your password</h1>
           <p class="auth-sub">We will email a code to your administrator address.</p>
 
@@ -213,7 +216,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
     const node = el(`
       <div class="auth-screen">
         <form class="auth-card" novalidate>
-          ${lockup({ height: 30 })}
+          ${BrandHead()}
           <h1 class="auth-title">Check your inbox</h1>
           <p class="auth-sub">${safe(notice || `Enter the code we sent to ${email}.`)}</p>
 
@@ -251,7 +254,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
     const node = el(`
       <div class="auth-screen">
         <form class="auth-card" novalidate>
-          ${lockup({ height: 30 })}
+          ${BrandHead()}
           <h1 class="auth-title">Choose a new password</h1>
           <p class="auth-sub">At least 12 characters. You will still need your authenticator code to sign in.</p>
 
@@ -296,7 +299,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
     const node = el(`
       <div class="auth-screen">
         <form class="auth-card" novalidate>
-          ${lockup({ height: 30 })}
+          ${BrandHead()}
           <h1 class="auth-title">Counter sign-in</h1>
           <p class="auth-sub">Enter the number and code your campus administrator gave you.</p>
           <label class="auth-field">

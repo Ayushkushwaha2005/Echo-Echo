@@ -17,11 +17,6 @@
       "source": "/",
       "destination": "/web/",
       "permanent": false
-    },
-    {
-      "source": "/favicon.ico",
-      "destination": "/favicon.svg",
-      "permanent": true
     }
   ],
   "headers": [

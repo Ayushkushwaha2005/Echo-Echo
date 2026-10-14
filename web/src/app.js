@@ -19,6 +19,7 @@
 import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/data/client.js';
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
 import { campusOption } from '../../packages/ui/campus-option.js';
+import { logo, mark, lockup } from '../../brand/logo.js';
 import { mapPointChosen, mapPointAnswered, spotChosen, usableSpot, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
 
 restoreTheme();
@@ -42,6 +43,8 @@ const I = {
 };
 /* An icon in the slot an emoji glyph used to occupy. */
 const Ico = (svg, size = 20) => `<span class="ico" style="width:${size}px;height:${size}px">${svg}</span>`;
+/* Ask ECHO ECHO speaks as the mascot: the chef-head crop of the approved logo. */
+const AiMark = () => `<span class="ai-mark ai-mark-logo" aria-hidden="true">${mark({ size: 28 })}</span>`;
 
 /* ===================== store ============================================ */
 const S = {
@@ -403,8 +406,8 @@ function ScrWelcome() {
   return `<div class="screen no-nav welcome" style="display:flex;flex-direction:column">
     <div class="poster" style="border-radius:0;display:flex;flex-direction:column;justify-content:flex-end;padding:var(--s-7) var(--s-5) var(--s-6)">
       <div class="stack g5 enter">
-        <div class="row g2"><div class="cafmark" style="background:var(--surface-ink);width:40px;height:40px;border-radius:12px;font-size:1rem">E.</div>
-          <span class="t-label" style="color:var(--text-2)">${BRAND} · UPES Bidholi</span></div>
+        ${logo({ size: 176, className: 'brand-logo hero-logo', eager: true })}
+        <span class="t-label" style="color:var(--text-2)">${BRAND} · UPES Bidholi</span>
         <h1 class="t-hero">Campus food, brought to <span style="color:var(--accent-text)">where you are</span>.</h1>
         <p class="t-body" style="color:var(--text-2);max-width:38ch">Order from the cafés on campus. Another student on their way past brings it to the library, the ground or your block, or you pick it up yourself.</p>
         <div class="row g2" style="flex-wrap:wrap">
@@ -541,6 +544,7 @@ function ScrObCollege() {
     ${TopBar('', { back: 'welcome' })}
     <div class="pad stack g5 enter" style="padding-top:var(--s-3)">
       <div class="stack g2">
+        ${logo({ size: 96 })}
         <h1 class="t-display">Choose your college</h1>
       </div>
       ${!S.campuses ? Loading('Loading colleges') : `
@@ -810,7 +814,7 @@ function ScrHome() {
       </div>
 
       ${campusOpen() ? `<button class="tile row g3" data-act="go" data-route="ai" style="width:100%;text-align:left">
-        <span class="ai-mark" aria-hidden="true">E.</span>
+        ${AiMark()}
         <div class="grow"><div class="t-h3">Know what you want? Just type it.</div>
         <div class="t-xs muted">"2 cold coffee aur ek veg sandwich" — Ask ${BRAND} puts it together and shows the price.</div></div>${I.chev}</button>` : ''}
 
@@ -2109,7 +2113,7 @@ function AskMessage(m, last) {
     : esc(m.text);
   const quick = last && m.suggestions?.length ? `<div class="quick" style="margin:8px 0 0 36px">${m.suggestions.map((s, i) =>
     `<button data-act="aiQuick" data-text="${esc(s)}" class="${i === 0 && /checkout/i.test(s) ? 'primary' : ''}">${esc(s)}</button>`).join('')}</div>` : '';
-  return `<div class="msg-in"><div class="row g2" style="align-items:flex-start"><span class="ai-mark" aria-hidden="true">E.</span>
+  return `<div class="msg-in"><div class="row g2" style="align-items:flex-start">${AiMark()}
     <div class="bubble-ai">${body}</div></div>${quick}</div>`;
 }
 
@@ -2119,7 +2123,7 @@ function ScrAI() {
   const available = st?.ok && st.v.available;
   return `<div class="screen reading" style="display:flex;flex-direction:column">
     <div class="topbar">
-      <span class="ai-mark">E.</span>
+      ${AiMark()}
       <div class="grow"><div class="t-h3">Ask ${BRAND}</div>
         <div class="t-xs muted">Order the way you'd say it at the counter. Hinglish works.</div></div>
       ${msgs.length ? `<button class="btn btn-ghost btn-sm" data-act="aiClear">Start over</button>` : ''}
@@ -2129,11 +2133,11 @@ function ScrAI() {
       ${!st ? Loading('One moment')
         : !available ? NotConfigured('Ask ECHO ECHO is switched off right now', 'You can still browse the cafés and order normally.')
         : !msgs.length ? `
-          <div class="row g2" style="align-items:flex-start"><span class="ai-mark" aria-hidden="true">E.</span>
+          <div class="row g2" style="align-items:flex-start">${AiMark()}
             <div class="bubble-ai">Hi! What would you like? Tell me the item and how many, for example "2 cold coffee aur ek veg sandwich". I'll show you the price before anything goes to checkout.</div></div>
           <div class="quick" style="margin-left:36px">${ASK_STARTERS.map((s) => `<button data-act="aiQuick" data-text="${esc(s)}">${esc(s)}</button>`).join('')}</div>`
         : `<div class="stack g3">${msgs.map((m, i) => AskMessage(m, i === msgs.length - 1 && !S.chat.busy)).join('')}
-          ${S.chat.busy ? `<div class="row g2 msg-in"><span class="ai-mark">E.</span><span class="thinking" aria-label="Working"><i></i><i></i><i></i></span></div>` : ''}</div>`}
+          ${S.chat.busy ? `<div class="row g2 msg-in">${AiMark()}<span class="thinking" aria-label="Working"><i></i><i></i><i></i></span></div>` : ''}</div>`}
       ${available ? `<p class="t-xs faint" style="margin-top:auto">Prices and opening hours come straight from the cafés. Nothing is ordered or charged until you pay at checkout.</p>` : ''}
     </div>
 
@@ -2404,8 +2408,8 @@ const SiteHeader = () => {
   const at = (...r) => (r.includes(S.route) ? 'aria-current="page"' : '');
   const count = cartCount();
   return `<header class="site-head"><div class="site-head-in">
-    <button class="site-brand" data-act="go" data-route="${signedIn() ? 'home' : 'welcome'}">
-      <span class="ai-mark">E.</span>${BRAND}</button>
+    <button class="site-brand" data-act="go" data-route="${signedIn() ? 'home' : 'welcome'}" aria-label="${BRAND} home">
+      ${lockup({ height: 34 })}</button>
     <nav class="site-nav" aria-label="Main">
       <button data-act="go" data-route="home" ${at('home')}>Home</button>
       <button data-act="go" data-route="cafes" ${at('cafes', 'menu')}>Cafés</button>
@@ -2440,7 +2444,7 @@ function render(fresh = false) {
     <div class="site">
       ${SiteHeader()}
       <main class="site-main">${scr}</main>
-      <footer class="site-foot">${BRAND} · ${esc(campusLabel())} · Campus delivery only ·
+      <footer class="site-foot">${mark({ size: 20 })} ${BRAND} · ${esc(campusLabel())} · Campus delivery only ·
         <button class="foot-link" data-act="go" data-route="deliver">Deliver with ${BRAND}</button></footer>
       ${nav}
       ${Sheet()}
