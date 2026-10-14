@@ -37,11 +37,15 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Production build (same-origin path prefix)
-        run: QUAD_API_BASE=/api node build.mjs --production
-
       - name: Production build (separate https origin)
         run: QUAD_API_BASE=https://api.example.invalid node build.mjs --production
+
+      # Last, so the QA and smoke steps below inspect the bundle Vercel
+      # actually deploys (the Vercel project sets QUAD_API_BASE=/api). The
+      # CSP check in frontend-qa rightly refuses a cross-origin API base:
+      # vercel.json's connect-src allows only this origin.
+      - name: Production build (same-origin path prefix, as deployed)
+        run: QUAD_API_BASE=/api node build.mjs --production
 
       # What a browser would catch and this cannot is rendered layout. What
       # it does catch without a browser is the decidable half: an
