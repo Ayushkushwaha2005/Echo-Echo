@@ -49,12 +49,14 @@ import { authorize, assertMayOrder, NotFound, Forbidden, Conflict, ProviderUnava
 import { transition } from './orders.js';
 import { assignDelivery } from '../services/delivery.js';
 import { flag } from '../services/flags.js';
+import { hoursOf, statusOf } from '../services/hours.js';
 import { audit } from '../audit.js';
 import { notifyAsync } from '../services/notify.js';
 import { snapshotFor } from '../services/pricing.js';
 import { postOrderCapture } from '../services/ledger.js';
 import { requireAdapter } from '../services/payment-providers.js';
 import { applyRefundOutcome } from '../services/refund-status.js';
+import { alertOwnerAsync } from '../services/alerts.js';
 
 const rupees = (paise) => (paise / 100).toFixed(2);
 
@@ -70,7 +72,7 @@ const rupees = (paise) => (paise / 100).toFixed(2);
    a webhook that 500s gets retried forever, and a status poll that throws
    tells a customer their paid order is broken when it is merely flagged.
    ========================================================================== */
-async function applyOutcome(req, pay, ev, source) {
+export async function applyOutcome(req, pay, ev, source) {
   /* ---- 1. order mapping ------------------------------------------------
      The event must be about the payment we looked up. The caller found
      `pay` BY the provider order id, so this is belt-and-braces against a
@@ -137,6 +139,10 @@ async function applyOutcome(req, pay, ev, source) {
                        outcome: 'denied',
                        detail: { reason, source, order_id: pay.order_id,
                                  expected_paise: pay.amount_paise, got_paise: ev.amountPaise } });
+    alertOwnerAsync('payment_mismatch', 'A payment did not match its order',
+      [`The provider reported a payment whose ${amountOk ? 'currency' : 'amount'} differs from the order it names.`,
+       'It was refused and flagged; the order was NOT confirmed.',
+       'Campus Control > Finance shows the flagged payment. Check it in the Cashfree dashboard before any refund.']);
     return { ok: true, rejected: amountOk ? 'currency mismatch' : 'amount mismatch' };
   }
 
@@ -238,6 +244,21 @@ export default async function paymentRoutes(app) {
     if (!['draft', 'awaiting_payment'].includes(order.state)) {
       throw Conflict(`This order is already ${order.state}`);
     }
+
+    /* The café is asked again, and so is every item: a draft made at 5:59 PM,
+       or before the counter pressed its emergency stop or sold out of a
+       dish, is not a licence to pay for food nobody will make. Same answer
+       as /orders/draft, from the server's clock in campus time. */
+    const vendor = await one(`SELECT * FROM vendor WHERE id = $1`, [order.vendor_id]);
+    const status = vendor ? statusOf(vendor) : null;
+    if (!status?.open) {
+      throw Conflict(`${vendor?.name || 'This café'} is not taking orders right now`,
+        status?.state === 'closed' ? hoursOf(vendor).closedReason || status.line : 'Nothing has been charged.');
+    }
+    const gone = await one(
+      `SELECT mi.name FROM order_item oi JOIN menu_item mi ON mi.id = oi.item_id
+        WHERE oi.order_id = $1 AND NOT (mi.active AND mi.available) LIMIT 1`, [order.id]);
+    if (gone) throw Conflict(`${gone.name} is unavailable right now`, 'Nothing has been charged. Update your cart and try again.');
 
     /* The amount charged is the frozen snapshot's total, not a number
        recomputed now and not anything in the request body. If the two ever

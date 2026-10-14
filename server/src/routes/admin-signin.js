@@ -50,17 +50,18 @@ export default async function adminSignInRoutes(app) {
     method: 'password_totp',
     configured: ADMIN_AUTH.configured,
     issuer: ADMIN_AUTH.totpIssuer,
-    /* The owner's address is fixed in server configuration and shown so an
-       administrator can tell they are on the right deployment. It is not a
-       secret and it cannot be changed from any client. */
-    ownerEmail: PLATFORM_OWNER.emailValid ? PLATFORM_OWNER.email : null,
+    /* A hint of the owner's address, so an administrator can tell they are
+       on the right deployment. Only a hint: this endpoint is public, and the
+       whole address is the username of the most privileged account. */
+    ownerEmail: PLATFORM_OWNER.emailValid
+      ? PLATFORM_OWNER.email.replace(/^(.)[^@]*@/, (_, first) => `${first}…@`) : null,
   }));
 
   /* ---- stage one: email + password -----------------------------------
      Opens no session and sets no cookie. On success it returns a challenge
      the second screen redeems, and nothing else about the account. */
   app.post('/auth/admin/login/password', {
-    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } },
+    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 }, edgeLimit: true },
   }, async (req) => {
     assertAdminAuthConfigured();
     const email = normEmail(req.body?.email);
@@ -87,7 +88,7 @@ export default async function adminSignInRoutes(app) {
      here, so a correct code for one administrator can never open another's
      session. */
   app.post('/auth/admin/login', {
-    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } },
+    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 }, edgeLimit: true },
   }, async (req, reply) => {
     assertAdminAuthConfigured();
 
@@ -127,7 +128,7 @@ export default async function adminSignInRoutes(app) {
   /* Re-confirmation for money, permissions and campus boundaries. Same two
      factors, no session issued — it refreshes the one already open. */
   app.post('/auth/admin/reauth', {
-    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } },
+    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 }, edgeLimit: true },
   }, async (req) => {
     if (!req.actor) throw Forbidden('Sign in required');
     const email = req.actor.studentEmail;

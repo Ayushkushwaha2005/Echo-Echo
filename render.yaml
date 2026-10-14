@@ -65,6 +65,13 @@ services:
       # request shares one IP, which collapses per-IP rate limits and audit IPs.
       - key: TRUST_PROXY
         value: true
+      # TRUST_PROXY alone keys rate limits on the LEFT-most X-Forwarded-For,
+      # which a direct caller forges (measured 14 Oct 2026). Render's edge is
+      # Cloudflare, which sets cf-connecting-ip itself and refuses a forged
+      # one, so the sign-in routes also limit on that (server/src/edge-limit.js).
+      # Not a secret. Check GET /health/client shows cfConnectingIpPresent.
+      - key: EDGE_CLIENT_IP_HEADER
+        value: cf-connecting-ip
 
       # ---- origin --------------------------------------------------------
       # The browser only ever sees the Vercel origin: /api/* is rewritten to

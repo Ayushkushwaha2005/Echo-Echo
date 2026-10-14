@@ -523,6 +523,28 @@ test('reconciliation flags a cancelled order whose money was never returned', as
   assert.equal(again.refundMissing, 0, 'raised once, not every tick');
 });
 
+test('a payout stuck in processing is raised once for a person, and nothing about it changes', async () => {
+  const vendor = await makeVendor(pool, { name: 'Stuck Café', slug: 'stuck-' + (++seq) });
+  const old = (await pool.query(
+    `INSERT INTO payout (vendor_id, amount_paise, state, created_at)
+     VALUES ($1, 5000, 'processing', now() - interval '30 hours') RETURNING id`, [vendor.id])).rows[0];
+  const fresh = (await pool.query(
+    `INSERT INTO payout (vendor_id, amount_paise, state) VALUES ($1, 7000, 'processing') RETURNING id`,
+    [(await makeVendor(pool, { name: 'Busy Café', slug: 'busy-' + (++seq) })).id])).rows[0];   // one live payout per payee
+  const { detectOperationalDifferences } = await import('../src/services/reconciliation.js');
+  const out = await detectOperationalDifferences();
+  assert.equal(out.payoutStuck, 1, 'only the payout past the threshold');
+  const raised = (await pool.query(
+    `SELECT kind, severity, state, detail FROM reconciliation_exception WHERE kind='payout_mismatch'`)).rows;
+  assert.equal(raised.length, 1);
+  assert.equal(raised[0].detail.payoutId, old.id);
+  assert.equal(raised[0].detail.reason, 'stuck');
+  assert.equal(raised[0].severity, 'blocking');
+  assert.equal((await detectOperationalDifferences()).payoutStuck, 0, 'raised once, not every tick');
+  const states = (await pool.query(`SELECT id, state FROM payout WHERE id = ANY($1)`, [[old.id, fresh.id]])).rows;
+  assert.ok(states.every((p) => p.state === 'processing'), 'an unknown outcome is never failed or resent by a timer');
+});
+
 /* ======================= incidents ====================================== */
 
 test('an accusation alone moves no money; a reviewed finding with evidence can adjust earnings', async () => {

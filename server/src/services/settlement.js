@@ -35,6 +35,7 @@ import { runScheduledReconciliation, detectOperationalDifferences } from './reco
 import { payoutConfig, syncInFlightPayouts } from './wallet.js';
 import { syncProcessingRefunds } from './refund-status.js';
 import { buildBatch, releaseBatch } from './payouts.js';
+import { alertOwnerAsync } from './alerts.js';
 
 const DEFAULTS = {
   timezone: 'Asia/Kolkata',
@@ -242,9 +243,25 @@ export function startSettlementScheduler(app, intervalMs = 60_000) {
       const refunds = await syncProcessingRefunds();
       if (refunds.checked) app.log.info({ refunds }, 'refund status sync');
       const ops = await detectOperationalDifferences();
-      if (Object.values(ops).some((n) => n > 0)) app.log.warn({ reconciliation: ops }, 'reconciliation differences');
+      if (Object.values(ops).some((n) => n > 0)) {
+        app.log.warn({ reconciliation: ops }, 'reconciliation differences');
+        const names = { missingWebhook: 'payment confirmed without its webhook', refundStuck: 'refund stuck with the provider',
+                        refundMissing: 'cancelled order not refunded', payoutStuck: 'payout stuck in processing over 24 h' };
+        alertOwnerAsync('reconciliation', 'Reconciliation needs a person',
+          [...Object.entries(ops).filter(([, n]) => n > 0).map(([k, n]) => `${n} new: ${names[k] || k}`),
+           '', 'Campus Control > Finance > Reconciliation lists each one. Nothing was changed or retried automatically.'],
+          { log: app.log });
+      }
+      if (synced.mismatches) {
+        alertOwnerAsync('payout_mismatch', 'A payout disagrees with the provider',
+          [`${synced.mismatches} payout(s): ECHO ECHO and the payout provider disagree on the outcome.`,
+           'Nothing was resent. Check Campus Control > Finance before acting.'], { log: app.log });
+      }
     } catch (e) {
       app.log.error({ e }, 'settlement scheduler failed');
+      alertOwnerAsync('scheduler_failed', 'The settlement scheduler failed',
+        ['The job that builds café settlements, reconciles payments and checks payouts threw an error.',
+         'It retries every minute. Check the Render logs for "settlement scheduler failed".'], { log: app.log });
     }
   }, intervalMs);
   timer.unref?.();

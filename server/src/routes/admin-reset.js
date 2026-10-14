@@ -56,7 +56,7 @@ async function administratorFor(email) {
 export default async function adminResetRoutes(app) {
   /* ---- step 1: ask for a code ---------------------------------------- */
   app.post('/auth/admin/password-reset/request', {
-    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } },
+    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 }, edgeLimit: true },
   }, async (req) => {
     const email = normEmail(req.body?.email);
     const u = await administratorFor(email);
@@ -89,7 +89,7 @@ export default async function adminResetRoutes(app) {
 
   /* ---- step 2: prove the code ---------------------------------------- */
   app.post('/auth/admin/password-reset/verify', {
-    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } },
+    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 }, edgeLimit: true },
   }, async (req) => {
     const email = normEmail(req.body?.email);
     const u = await administratorFor(email);
@@ -108,7 +108,7 @@ export default async function adminResetRoutes(app) {
 
   /* ---- step 3: choose the new password -------------------------------- */
   app.post('/auth/admin/password-reset/complete', {
-    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } },
+    config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 }, edgeLimit: true },
   }, async (req) => {
     const userId = await completePasswordReset({
       token: req.body?.token, password: req.body?.password,

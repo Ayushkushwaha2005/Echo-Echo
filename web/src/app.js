@@ -19,6 +19,7 @@
 import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/data/client.js';
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
 import { campusOption } from '../../packages/ui/campus-option.js';
+import { logo, mark, lockup } from '../../brand/logo.js';
 import { mapPointChosen, mapPointAnswered, spotChosen, usableSpot, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
 
 restoreTheme();
@@ -42,6 +43,8 @@ const I = {
 };
 /* An icon in the slot an emoji glyph used to occupy. */
 const Ico = (svg, size = 20) => `<span class="ico" style="width:${size}px;height:${size}px">${svg}</span>`;
+/* Ask ECHO ECHO speaks as the mascot: the chef-head crop of the approved logo. */
+const AiMark = () => `<span class="ai-mark ai-mark-logo" aria-hidden="true">${mark({ size: 28 })}</span>`;
 
 /* ===================== store ============================================ */
 const S = {
@@ -96,12 +99,53 @@ const campusOpen = () => !browseCampus() || browseCampus().available;
 const campusById = (id) => (S.campuses || []).find((c) => c.id === id) || null;
 const prettyPhone = (p) => String(p || '').replace(/^\+91(\d{5})(\d{5})$/, '+91 $1 $2');
 
+/* ---------- the address bar ----------------------------------------------
+   Each screen has its own URL fragment, so the phone's Back button steps
+   back through the site instead of leaving it, and a café's menu can be
+   linked to directly. The fragment only names a screen; whether the visitor
+   may see it is decided by go() exactly as for a tap. */
+const PUBLIC_ROUTES = ['welcome', 'home', 'cafes', 'menu', 'cart', 'ai', 'deliver'];
+const hashFor = (route, params = {}) =>
+  route === 'welcome' ? '' : `#/${route}${route === 'menu' && params.caf ? `/${encodeURIComponent(params.caf)}`
+    : route === 'tracking' && params.id ? `/${encodeURIComponent(params.id)}` : ''}`;
+function routeFromHash(hash = location.hash) {
+  const [route, id] = String(hash || '').replace(/^#\/?/, '').split('/').map((s) => decodeURIComponent(s || ''));
+  if (!route || !(route in ROUTES)) return null;
+  if (route === 'menu') return id ? { route, params: { caf: id } } : { route: 'cafes', params: {} };
+  if (route === 'tracking') return id ? { route, params: { id } } : { route: 'orders', params: {} };
+  return { route, params: {} };
+}
+function syncHistory(route, params, mode) {
+  const url = location.pathname + location.search + hashFor(route, params);
+  const here = location.pathname + location.search + location.hash;
+  try {
+    if (mode === 'push' && url !== here) history.pushState({ route, params }, '', url);
+    else if (url !== here || mode === 'replace') history.replaceState({ route, params }, '', url);
+  } catch { /* a sandboxed frame without history still renders */ }
+}
+
+/* Fetched once and reused; it changes only when an admin changes it. A
+   failed fetch is retried on the next screen that needs it. */
+let pricingAsked = false;
+function needPricing() {
+  if (!S.pricing && !pricingAsked) {
+    pricingAsked = true;
+    quad.currentPricing().then((p) => { S.pricing = p; render(); }, () => { pricingAsked = false; });
+  }
+  return S.pricing;
+}
+
 let poll = null;
-function go(route, params = {}) {
+function go(route, params = {}, { history: mode = 'push' } = {}) {
   if (NEEDS_ACCOUNT.includes(route) && !signedIn()) {
     S.auth.next = { route, params };
     route = 'welcome'; params = {};
     toast('Sign in to continue', 'bad');
+  }
+  /* Back from the first screen after signing in must not land on a sign-in
+     step that is already done. */
+  if (signedIn() && ['welcome', 'ob-college', 'ob-campus', 'ob-email', 'ob-email-code'].includes(route)) {
+    route = 'home'; params = {};
   }
   /* Ordering needs a complete profile. The server enforces it; this sends the
      student to the screen that fixes it instead of to a refusal. */
@@ -115,13 +159,12 @@ function go(route, params = {}) {
   if (['home', 'cafes', 'welcome'].includes(route)) drop('vendors');
   /* The fees the server would charge, so the bill is honest before payment.
      Fetched once and reused; it changes only when an admin changes it. */
-  if (['cart', 'checkout'].includes(route) && !S.pricing) {
-    quad.currentPricing().then((p2) => { S.pricing = p2; render(); }).catch(() => {});
-  }
+  if (['cart', 'checkout'].includes(route)) needPricing();
   if (route === 'menu' && params.caf) drop(`menu:${params.caf}`);
   if (['join', 'profile', 'partner'].includes(route)) { drop('me'); S.joinError = ''; }
   if (route === 'partner') drop('partner');
   S.route = route; S.params = params; S.sheet = null;
+  syncHistory(route, params, mode);
   if (route === 'tracking') {
     /* The order advances on the server. Re-read it, never simulate it. */
     poll = setInterval(() => { drop(`order:${S.params.id}`); render(); }, 15000);
@@ -363,8 +406,8 @@ function ScrWelcome() {
   return `<div class="screen no-nav welcome" style="display:flex;flex-direction:column">
     <div class="poster" style="border-radius:0;display:flex;flex-direction:column;justify-content:flex-end;padding:var(--s-7) var(--s-5) var(--s-6)">
       <div class="stack g5 enter">
-        <div class="row g2"><div class="cafmark" style="background:var(--surface-ink);width:40px;height:40px;border-radius:12px;font-size:1rem">E.</div>
-          <span class="t-label" style="color:var(--text-2)">${BRAND} · UPES Bidholi</span></div>
+        ${logo({ size: 176, className: 'brand-logo hero-logo', eager: true })}
+        <span class="t-label" style="color:var(--text-2)">${BRAND} · UPES Bidholi</span>
         <h1 class="t-hero">Campus food, brought to <span style="color:var(--accent-text)">where you are</span>.</h1>
         <p class="t-body" style="color:var(--text-2);max-width:38ch">Order from the cafés on campus. Another student on their way past brings it to the library, the ground or your block, or you pick it up yourself.</p>
         <div class="row g2" style="flex-wrap:wrap">
@@ -375,7 +418,7 @@ function ScrWelcome() {
     </div>
     <div class="pad stack g3 welcome-cta" style="padding-block:var(--s-5) var(--s-6);background:var(--bg)">
       <div class="stack g1 only-lg" style="margin-bottom:var(--s-2)">
-        <div class="t-h1">Order in two minutes</div>
+        <div class="t-h1">Ready to order?</div>
         <p class="t-sm muted">Sign in with your university email, or have a look at the menus first.</p>
       </div>
       <button class="btn btn-primary btn-lg btn-block" data-act="go" data-route="ob-college">Sign in with your student email</button>
@@ -386,6 +429,92 @@ function ScrWelcome() {
       ${Label('Cafés on campus')}
       <div class="cafgrid">${vs.v.vendors.map(cafVM).map(CafCard).join('')}</div>
     </div>` : ''}
+    <div class="pad stack g5 welcome-info" style="padding-bottom:var(--s-7)">
+      <section class="stack g3" aria-labelledby="how-h">
+        <h2 class="t-label" id="how-h">How it works</h2>
+        <ol class="stepgrid">
+          ${HOW.map(([icon, t, d], i) => `<li class="tile stack g2">
+            <div class="row g2">${Ico(icon, 20)}<span class="t-xs muted">Step ${i + 1}</span></div>
+            <div class="t-h3">${esc(t)}</div><p class="t-xs muted">${esc(d)}</p></li>`).join('')}
+        </ol>
+      </section>
+      <div class="infogrid">
+        ${PriceCard()}
+        <button class="tile stack g2" data-act="go" data-route="deliver" style="width:100%;text-align:left">
+          <div class="row g2">${Ico(I.bike, 20)}<span class="t-h3 grow">Deliver with ${BRAND}</span>${I.chev}</div>
+          <p class="t-xs muted">Verified students can earn by delivering campus orders between classes. See how joining works.</p>
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* The landing page's three steps: what the product does, in its own order. */
+const HOW = [
+  [I.store, 'Pick a campus café', 'Browse the menus, see which cafés are open right now, and add what you want.'],
+  [I.pin, 'Choose where on campus', 'A delivery spot on campus, or self pickup from the counter. Deliveries stay inside UPES Bidholi.'],
+  [I.lock, 'Pay online, collect with a code', 'Another verified student brings your order. You hand them your code to receive it.'],
+];
+
+/* What an order costs, from the server's live pricing policy. Nothing here
+   is a number of this page's own: until the server answers, it says less. */
+function PriceCard() {
+  const f = needPricing();
+  const row = (k, v) => `<div class="between t-sm"><span class="muted">${esc(k)}</span><span class="money t-sm">${v}</span></div>`;
+  return `<section class="card card-pad stack g2" aria-labelledby="price-h">
+    <h2 class="t-label" id="price-h">What you pay</h2>
+    ${row('Food', 'Each café\'s menu price')}
+    ${f ? `${row('Platform fee', `${money(f.platformFeeFlatPaise)} per order`)}
+      ${row('Campus delivery', money(f.deliveryFeePaise))}` : ''}
+    ${row('Self pickup', 'No delivery fee')}
+    <p class="t-xs faint">You see the full total before you pay. Online payment only: UPI or card, no cash on delivery.</p>
+  </section>`;
+}
+
+/* ===================== DELIVER WITH ECHO ECHO — public explainer ========
+   For a visitor who is not signed in. Everything here is either the
+   programme's real rules or read live from the published partner policy;
+   a signed-in student gets the onboarding screen itself. */
+function ScrDeliver() {
+  if (signedIn()) return ScrJoin();
+  const pol = need('policy', () => quad.partnerPolicy());
+  const policy = pol?.ok ? pol.v.policy : null;
+  const steps = ['Sign in with your university student email',
+    'Add a clear photo of yourself and accept the partner policy',
+    policy && policy.amountPaise === 0 ? 'No security deposit is required right now' : 'Pay the security deposit, if the policy sets one',
+    'Campus admin reviews and approves your application',
+    'Go online when you are free and accept the deliveries you want'];
+  return `<div class="screen">
+    ${TopBar(`Deliver with ${BRAND}`, { back: 'welcome' })}
+    <div class="pad site-split enter">
+      <div class="stack g4">
+        <div class="poster" style="padding:var(--s-5)">
+          <div class="t-label">Delivery partner programme</div>
+          <h1 class="t-display" style="margin-top:6px">Deliver between classes and get paid</h1>
+          <p class="t-sm" style="color:var(--text-2);margin-top:10px;max-width:46ch">Verified UPES students pick up orders from campus cafés and bring them to other students on campus. You go online when it suits you.</p>
+        </div>
+        <div class="card" style="overflow:hidden">
+          ${PERKS.map(([icon, t, d]) => `
+            <div class="adminrow">${Ico(icon, 20)}
+              <div class="grow"><div class="t-sm" style="font-weight:700">${esc(t)}</div>
+              <div class="t-xs muted">${esc(d)}</div></div></div>`).join('')}
+        </div>
+        ${policy ? `<details class="card card-pad">
+          <summary class="t-h3">Read the partner policy: earnings, payouts and deposit</summary>
+          <p class="t-xs" style="color:var(--text-2);white-space:pre-line;margin-top:var(--s-3)">${esc(policy.terms)}</p>
+        </details>` : pol && !pol.ok ? Problem(pol.e) : ''}
+      </div>
+      <aside class="stack g4 first-mobile">
+        <div class="card card-pad stack g3">
+          ${Label('How joining works')}
+          <ol class="stack g2" style="padding-left:1.2em;margin:0">
+            ${steps.map((s) => `<li class="t-sm">${esc(s)}</li>`).join('')}
+          </ol>
+          <button class="btn btn-primary btn-lg btn-block" data-act="signInFor" data-route="join">Sign in to apply</button>
+          <p class="t-xs faint">Applying is not joining: you deliver only once campus admin approves you.</p>
+        </div>
+      </aside>
+    </div>
   </div>`;
 }
 
@@ -415,6 +544,7 @@ function ScrObCollege() {
     ${TopBar('', { back: 'welcome' })}
     <div class="pad stack g5 enter" style="padding-top:var(--s-3)">
       <div class="stack g2">
+        ${logo({ size: 96 })}
         <h1 class="t-display">Choose your college</h1>
       </div>
       ${!S.campuses ? Loading('Loading colleges') : `
@@ -684,7 +814,7 @@ function ScrHome() {
       </div>
 
       ${campusOpen() ? `<button class="tile row g3" data-act="go" data-route="ai" style="width:100%;text-align:left">
-        <span class="ai-mark" aria-hidden="true">E.</span>
+        ${AiMark()}
         <div class="grow"><div class="t-h3">Know what you want? Just type it.</div>
         <div class="t-xs muted">"2 cold coffee aur ek veg sandwich" — Ask ${BRAND} puts it together and shows the price.</div></div>${I.chev}</button>` : ''}
 
@@ -709,6 +839,10 @@ function ScrHome() {
         <div class="t-xs muted">Skip the delivery fee, collect from the counter</div></div>
         <button class="btn btn-secondary btn-sm" data-act="pickupMode">Pick up</button>
       </div>` : ''}
+
+      ${campusOpen() && (!S.me?.partner || S.me.partner.status === 'left') ? `<button class="tile row g3" data-act="go" data-route="deliver" style="width:100%;text-align:left">
+        ${Ico(I.bike, 22)}<div class="grow"><div class="t-h3">Deliver with ${BRAND}</div>
+        <div class="t-xs muted">Verified students earn by delivering campus orders between classes</div></div>${I.chev}</button>` : ''}
     </div>
   </div>`;
 }
@@ -921,7 +1055,8 @@ const Bill = () => {
     ${Label('Bill')}
     <div class="between t-sm"><span class="muted">Food</span><span class="money t-sm">${money(sub2)}</span></div>
     ${platformFee === null ? '' : `
-      <div class="between t-sm"><span class="muted">Platform fee</span><span class="money t-sm">${money(platformFee)}</span></div>`}
+      <div class="between t-sm"><span class="muted">Platform fee</span><span class="money t-sm">${money(platformFee)}</span></div>
+      <p class="t-xs faint" style="margin-top:-4px">One flat fee per order, the same whatever you order. It keeps ${BRAND} running.</p>`}
     ${delivering
       ? `<div class="between t-sm"><span class="muted">Campus delivery</span><span class="money t-sm">${f ? money(deliveryFee) : 'Set by the server'}</span></div>`
       : `<div class="between t-sm"><span class="muted">Self pickup</span><span class="t-sm muted">No delivery fee</span></div>`}
@@ -1842,7 +1977,8 @@ function ScrPartner() {
         ${carrying ? '' : offers.offers.length ? offers.offers.map((o) => `
           <div class="tile row g3">
             <div class="grow"><div class="t-sm" style="font-weight:700">${esc(o.vendor_name)}</div>
-            <div class="t-xs muted">${esc(o.destination || 'Pickup')} · ${money(o.total_paise)}</div></div>
+            <div class="t-xs muted">${esc(o.destination || 'Pickup')} · order ${money(o.total_paise)}</div>
+            ${o.earning_paise ? `<span class="badge badge-open" style="margin-top:4px">You earn ${money(o.earning_paise)}</span>` : ''}</div>
             <button class="btn btn-primary btn-sm" data-act="acceptOffer" data-id="${o.id}">Accept</button>
           </div>`).join('')
           : `<div class="tile stack g2" style="background:var(--surface-blush);border-color:transparent">
@@ -1977,7 +2113,7 @@ function AskMessage(m, last) {
     : esc(m.text);
   const quick = last && m.suggestions?.length ? `<div class="quick" style="margin:8px 0 0 36px">${m.suggestions.map((s, i) =>
     `<button data-act="aiQuick" data-text="${esc(s)}" class="${i === 0 && /checkout/i.test(s) ? 'primary' : ''}">${esc(s)}</button>`).join('')}</div>` : '';
-  return `<div class="msg-in"><div class="row g2" style="align-items:flex-start"><span class="ai-mark" aria-hidden="true">E.</span>
+  return `<div class="msg-in"><div class="row g2" style="align-items:flex-start">${AiMark()}
     <div class="bubble-ai">${body}</div></div>${quick}</div>`;
 }
 
@@ -1987,7 +2123,7 @@ function ScrAI() {
   const available = st?.ok && st.v.available;
   return `<div class="screen reading" style="display:flex;flex-direction:column">
     <div class="topbar">
-      <span class="ai-mark">E.</span>
+      ${AiMark()}
       <div class="grow"><div class="t-h3">Ask ${BRAND}</div>
         <div class="t-xs muted">Order the way you'd say it at the counter. Hinglish works.</div></div>
       ${msgs.length ? `<button class="btn btn-ghost btn-sm" data-act="aiClear">Start over</button>` : ''}
@@ -1997,11 +2133,11 @@ function ScrAI() {
       ${!st ? Loading('One moment')
         : !available ? NotConfigured('Ask ECHO ECHO is switched off right now', 'You can still browse the cafés and order normally.')
         : !msgs.length ? `
-          <div class="row g2" style="align-items:flex-start"><span class="ai-mark" aria-hidden="true">E.</span>
+          <div class="row g2" style="align-items:flex-start">${AiMark()}
             <div class="bubble-ai">Hi! What would you like? Tell me the item and how many, for example "2 cold coffee aur ek veg sandwich". I'll show you the price before anything goes to checkout.</div></div>
           <div class="quick" style="margin-left:36px">${ASK_STARTERS.map((s) => `<button data-act="aiQuick" data-text="${esc(s)}">${esc(s)}</button>`).join('')}</div>`
         : `<div class="stack g3">${msgs.map((m, i) => AskMessage(m, i === msgs.length - 1 && !S.chat.busy)).join('')}
-          ${S.chat.busy ? `<div class="row g2 msg-in"><span class="ai-mark">E.</span><span class="thinking" aria-label="Working"><i></i><i></i><i></i></span></div>` : ''}</div>`}
+          ${S.chat.busy ? `<div class="row g2 msg-in">${AiMark()}<span class="thinking" aria-label="Working"><i></i><i></i><i></i></span></div>` : ''}</div>`}
       ${available ? `<p class="t-xs faint" style="margin-top:auto">Prices and opening hours come straight from the cafés. Nothing is ordered or charged until you pay at checkout.</p>` : ''}
     </div>
 
@@ -2261,6 +2397,7 @@ const ROUTES = {
   home: ScrHome, cafes: ScrCafes, menu: ScrMenu, cart: ScrCart, checkout: ScrCheckout,
   tracking: ScrTracking, orders: ScrOrders, profile: ScrProfile, ai: ScrAI,
   verify: ScrVerify, partner: ScrPartner, join: ScrJoin, setup: ScrSetup, address: ScrAddress,
+  deliver: ScrDeliver,
 };
 const NAVLESS = ['welcome', 'ob-college', 'ob-campus', 'ob-email', 'ob-email-code',
                  'ob-location', 'checkout', 'setup'];
@@ -2271,8 +2408,8 @@ const SiteHeader = () => {
   const at = (...r) => (r.includes(S.route) ? 'aria-current="page"' : '');
   const count = cartCount();
   return `<header class="site-head"><div class="site-head-in">
-    <button class="site-brand" data-act="go" data-route="${signedIn() ? 'home' : 'welcome'}">
-      <span class="ai-mark">E.</span>${BRAND}</button>
+    <button class="site-brand" data-act="go" data-route="${signedIn() ? 'home' : 'welcome'}" aria-label="${BRAND} home">
+      ${lockup({ height: 34 })}</button>
     <nav class="site-nav" aria-label="Main">
       <button data-act="go" data-route="home" ${at('home')}>Home</button>
       <button data-act="go" data-route="cafes" ${at('cafes', 'menu')}>Cafés</button>
@@ -2307,7 +2444,8 @@ function render(fresh = false) {
     <div class="site">
       ${SiteHeader()}
       <main class="site-main">${scr}</main>
-      <footer class="site-foot">${BRAND} · ${esc(campusLabel())} · Campus delivery only</footer>
+      <footer class="site-foot">${mark({ size: 20 })} ${BRAND} · ${esc(campusLabel())} · Campus delivery only ·
+        <button class="foot-link" data-act="go" data-route="deliver">Deliver with ${BRAND}</button></footer>
       ${nav}
       ${Sheet()}
       ${S.toast ? `<div class="toast"><span>${S.toast.icon}</span>${esc(S.toast.msg)}</div>` : ''}
@@ -2391,6 +2529,7 @@ document.addEventListener('click', async (e) => {
 
   switch (a.act) {
     case 'go': if (a.route === 'verify') drop('myverif'); go(a.route); break;
+    case 'signInFor': S.auth.next = { route: a.route, params: {} }; go('ob-college'); break;
     case 'theme': toggleTheme(); break;
     case 'menu': go('menu', { caf: a.caf || S.cart[0]?.vendorId }); break;
     case 'track': go('tracking', { id: a.id }); break;
@@ -3019,11 +3158,26 @@ async function openGateway(intent, draft) {
     }
   }
   S.campuses ??= [];
-  go(!signedIn() ? 'welcome'
+  /* A link to a screen (a café's menu, Deliver with ECHO ECHO) opens that
+     screen. Signed out, only the screens anyone may see are honoured. */
+  const asked = routeFromHash();
+  const wanted = asked && (signedIn() || PUBLIC_ROUTES.includes(asked.route)) ? asked : null;
+  const gate = !signedIn() ? null
     : profileIncomplete() && S.me.roles?.includes('student') ? 'setup'
     /* Reloading the page does not get you past the location check: it is
        recorded on the session, so the answer survives the refresh and a
        session that never passed it lands back here. */
     : S.me.location?.required && !S.me.location?.confirmed && S.me.roles?.includes('student') ? 'ob-location'
-    : 'home');
+    : null;
+  if (gate) {
+    if (gate === 'setup') S.setupNext = wanted; else S.locationNext = wanted;
+    go(gate, {}, { history: 'replace' });
+  } else if (wanted) go(wanted.route, wanted.params, { history: 'replace' });
+  else go(signedIn() ? 'home' : 'welcome', {}, { history: 'replace' });
 })();
+
+/* Back and Forward. An open sheet closes with the screen it sat on. */
+window.addEventListener?.('popstate', (e) => {
+  const st = e.state?.route ? e.state : routeFromHash() || { route: signedIn() ? 'home' : 'welcome', params: {} };
+  go(st.route, st.params || {}, { history: 'none' });
+});

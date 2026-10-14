@@ -223,6 +223,9 @@ test('render.yaml keeps production payments live and commits no secret', () => {
   assert.deepEqual(vars.get('SWEEPER'), { kind: 'value', value: 'on' });
   assert.deepEqual(vars.get('PAYMENT_PROVIDER'), { kind: 'value', value: 'cashfree' });
   assert.deepEqual(vars.get('CASHFREE_EASY_SPLIT'), { kind: 'value', value: 'off' });
+  /* The edge limit is only real when the header it trusts is named. */
+  assert.deepEqual(vars.get('TRUST_PROXY'), { kind: 'value', value: 'true' });
+  assert.deepEqual(vars.get('EDGE_CLIENT_IP_HEADER'), { kind: 'value', value: 'cf-connecting-ip' });
   assert.equal(vars.get('CASHFREE_PG_NOTIFY_URL')?.value,
     'https://echo-echo-api.onrender.com/payments/webhook');
   assert.match(vars.get('CASHFREE_PG_RETURN_URL')?.value || '', /^https:\/\//);

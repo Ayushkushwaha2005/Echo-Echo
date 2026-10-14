@@ -604,12 +604,17 @@ export async function resolveException(id, { actorId, note }) {
    refund_stuck      a refund the provider accepted that has not completed.
    refund_mismatch   a cancelled/refunded order still holding a captured
                      payment with no refund behind it.
+   payout stuck      a payout sent to the provider and still 'processing'
+                     long after any transfer settles (an unknown outcome
+                     the status pull never resolved). Raised as a
+                     payout_mismatch so it needs no new exception kind.
    payout mismatches are raised where they are observed (services/wallet.js).
 
    Each raises an exception row; none of them changes any money.
    ========================================================================== */
-export async function detectOperationalDifferences({ webhookGraceMinutes = 60, refundStuckHours = 72 } = {}) {
-  const out = { missingWebhook: 0, refundStuck: 0, refundMissing: 0 };
+export async function detectOperationalDifferences({ webhookGraceMinutes = 60, refundStuckHours = 72,
+                                                    payoutStuckHours = 24 } = {}) {
+  const out = { missingWebhook: 0, refundStuck: 0, refundMissing: 0, payoutStuck: 0 };
   const noWebhook = (await q(
     `SELECT p.id, p.order_id, p.provider, p.provider_order_id, p.settled_at FROM payment p
       WHERE p.status IN ('paid','refunded') AND p.provider_order_id IS NOT NULL
@@ -643,6 +648,22 @@ export async function detectOperationalDifferences({ webhookGraceMinutes = 60, r
     if (await tx((c) => raise(c, null, { kind: 'refund_mismatch', paymentId: p.id, orderId: p.order_id,
         detail: { amountPaise: p.amount_paise, orderState: p.state,
                   note: 'The order is cancelled but the customer\'s payment has not been refunded.' } }))) out.refundMissing++;
+  }
+  /* Nothing is changed and nothing is retried: a payout whose outcome is
+     unknown must not be sent again or marked failed by a timer. One open
+     row per payout, the same dedupe services/wallet.js uses. */
+  const stuckPayouts = (await q(
+    `SELECT p.id, p.partner_id, p.amount_paise, p.created_at, p.provider_synced_at FROM payout p
+      WHERE p.state = 'processing' AND p.created_at < now() - ($1 || ' hours')::interval
+        AND NOT EXISTS (SELECT 1 FROM reconciliation_exception x
+                         WHERE x.kind = 'payout_mismatch' AND x.state = 'open' AND x.detail->>'payoutId' = p.id::text)
+      LIMIT 200`, [String(payoutStuckHours)])).rows;
+  for (const p of stuckPayouts) {
+    await q(`INSERT INTO reconciliation_exception (kind, severity, detail) VALUES ('payout_mismatch', 'blocking', $1::jsonb)`,
+      [JSON.stringify({ payoutId: p.id, quadState: 'processing', reason: 'stuck',
+                        amountPaise: p.amount_paise, since: p.created_at, lastProviderCheck: p.provider_synced_at,
+                        note: `Still processing after ${payoutStuckHours} h. Check the transfer in the provider dashboard; do not resend.` })]);
+    out.payoutStuck++;
   }
   return out;
 }

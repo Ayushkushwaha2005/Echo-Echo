@@ -25,3 +25,13 @@ jobs:
     steps:
       - name: GET /health through the production site
         run: curl -fsS -m 90 -o /dev/null -w 'health %{http_code} in %{time_total}s\n' https://echoecho.tech/api/health/
+      # Readiness, too: the database answers and every migration is applied.
+      # A failed run emails whoever last edited this schedule. A coarse signal
+      # (GitHub runs this every few hours in practice, measured 2026-10-14),
+      # not uptime monitoring: see docs/LAUNCH-READINESS-2026-10-14-FOLLOWUP.md.
+      - name: GET /ready through the production site
+        run: |
+          set -euo pipefail
+          body=$(curl -fsS -m 90 https://www.echoecho.tech/api/ready/)
+          echo "$body" | grep -q '"ready":true' || { echo "::error title=Not ready::/ready did not report ready"; exit 1; }
+          echo "ready"

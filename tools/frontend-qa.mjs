@@ -114,6 +114,53 @@ for (const f of files.filter((x) => /\.(js|mjs|html|css|json|svg)$/.test(x))) {
 }
 report('secret in a shipped file', leaky, 'no API-key-shaped string in anything served to a browser');
 
+/* ---------- 5. the Content-Security-Policy matches what ships -------------
+   vercel.json carries the policy. A new CDN, tile server or payment script
+   added to the code without a matching source in the policy would be
+   blocked in browsers the day the policy is enforced; an inline <script> or
+   an inline event handler without its hash would be too. Both fail here. */
+const csp = [];
+const vercel = JSON.parse(readFileSync(join(dist, '..', 'vercel.json'), 'utf8'));
+const cspHeader = vercel.headers.flatMap((h) => h.headers)
+  .find((h) => /^Content-Security-Policy(-Report-Only)?$/i.test(h.key));
+if (!cspHeader) csp.push('vercel.json sets no Content-Security-Policy');
+else {
+  const dirs = Object.fromEntries(cspHeader.value.split(';').map((d) => d.trim().split(/\s+/))
+    .filter((d) => d[0]).map(([k, ...v]) => [k, v]));
+  const allows = (dir, origin) => (dirs[dir] || dirs['default-src'] || []).some((s) =>
+    s === origin || (s.startsWith('https://*.') && origin.endsWith(s.slice('https://*'.length))));
+  const { createHash } = await import('node:crypto');
+  for (const f of files.filter((x) => /\.(js|html|css)$/.test(x))) {
+    const src = readFileSync(f, 'utf8');
+    /* Code that fetches or embeds: script sources and the tile templates. */
+    for (const m of src.matchAll(/https:\/\/([a-z0-9.-]+\.[a-z]{2,})(?=[/'"`{])/g)) {
+      const origin = `https://${m[1]}`;
+      if (/w3\.org|www\.openstreetmap\.org$|osmfoundation|www\.echoecho\.tech|esri\.com|s2maps\.eu|eox\.at$/.test(origin)) continue;   // links and namespaces, never fetched
+      if (!['script-src', 'img-src', 'style-src', 'font-src', 'connect-src'].some((d) => allows(d, origin))) {
+        csp.push(`${rel(f)}: ${origin} is not allowed by any fetch directive`);
+      }
+    }
+    /* Markup built in JavaScript is HTML too: an onclick= in a template
+       string is blocked by the policy exactly like one in a page. */
+    if (f.endsWith('.js')) {
+      for (const m of src.matchAll(/\son[a-z]+="([^"$]*)"/g)) {
+        const h = `'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`;
+        if (!(dirs['script-src-attr'] || []).includes(h)) csp.push(`${rel(f)}: inline handler "${m[1]}" in generated markup`);
+      }
+    }
+    if (f.endsWith('.html')) {
+      for (const m of src.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)) {
+        if (m[1].trim()) csp.push(`${rel(f)}: inline <script> (the policy allows none)`);
+      }
+      for (const m of src.matchAll(/\son[a-z]+="([^"]*)"/g)) {
+        const h = `'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`;
+        if (!(dirs['script-src-attr'] || []).includes(h)) csp.push(`${rel(f)}: inline handler "${m[1]}" has no hash in script-src-attr`);
+      }
+    }
+  }
+}
+report('Content-Security-Policy', csp, 'every external origin in shipped code is allowed by the policy; no unhashed inline code');
+
 console.log('');
 if (findings.length) {
   console.error(`x frontend QA FAILED - ${findings.length} finding(s).\n`);

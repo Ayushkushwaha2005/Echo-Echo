@@ -310,6 +310,12 @@ textarea.input { resize: vertical; min-height: 72px; }
   align-self:stretch;display:flex;align-items:center}
 .auth-input{flex:1;border:0;background:transparent;padding:13px 12px;font:inherit;
   font-size:16px;color:var(--text,#1C1917);outline:none;min-width:0}
+/* A field on its own (email, password) gets the same box as the phone field;
+   inside .auth-phone the wrapper draws it. Without this the password box
+   was invisible: no border, no fill. */
+.auth-field > .auth-input:not(.auth-code){border:1px solid var(--text-faint,#8C7A7E);border-radius:11px;
+  background:var(--bg-sunken,#FFFBF8)}
+.auth-field > .auth-input:not(.auth-code):focus{border-color:var(--rose-500,#E0567A);box-shadow:0 0 0 3px rgba(224,86,122,.13)}
 .auth-code{border:1px solid var(--line,rgba(28,25,23,.14));border-radius:11px;
   background:var(--bg-sunken,#FFFBF8);font-family:'DM Mono',monospace;
   font-size:26px;letter-spacing:.42em;text-align:center;padding:14px 12px}
@@ -440,6 +446,18 @@ textarea.input { resize: vertical; min-height: 72px; }
   text-align: center; color: var(--text-faint); font-size: var(--t-xs);
 }
 .site .only-lg { display: none; }
+.site-foot .foot-link {
+  color: var(--accent-text); font-weight: 700; font-size: inherit;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+
+/* The landing page's "how it works" steps and the price / partner pair. */
+.stepgrid { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-3); }
+.infogrid { display: grid; gap: var(--s-3); align-items: start; }
+@media (min-width: 720px) {
+  .stepgrid { grid-template-columns: repeat(3, 1fr); }
+  .infogrid { grid-template-columns: 1fr 1fr; gap: var(--s-4); }
+}
 
 /* Layout helpers used by the customer screens. Single column on phones. */
 .cafgrid, .menugrid, .livegrid { display: grid; gap: var(--s-3); }
@@ -478,7 +496,7 @@ textarea.input { resize: vertical; min-height: 72px; }
   .site .poster.hero-band { border-radius: var(--r-sheet) !important; margin: var(--s-6) var(--s-6) 0; padding: var(--s-7) var(--s-7) var(--s-7); }
   .site .welcome { display: grid !important; grid-template-columns: 1.25fr .75fr; gap: var(--s-6); padding: var(--s-7) var(--s-6) var(--s-9); align-items: center; }
   .site .welcome > .poster { border-radius: var(--r-card) !important; }
-  .site .welcome > .welcome-cafes { grid-column: 1 / -1; padding: 0 !important; }
+  .site .welcome > .welcome-cafes, .site .welcome > .welcome-info { grid-column: 1 / -1; padding: 0 !important; }
   .site .welcome > .welcome-cta { align-self: center; padding: var(--s-6) !important; }
 
   /* Sheets become centred dialogs. */
@@ -604,3 +622,24 @@ textarea.input { resize: vertical; min-height: 72px; }
 /* Leaflet's own controls, toned to the product rather than its defaults. */
 .leaflet-container{font:inherit}
 .leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.82)}
+
+/* ---------- the approved logo ---------------------------------------------
+   brand/logo.js renders it; these rules only size and place it. The artwork
+   sits on its own cream background, so it is shown as a rounded tile and
+   never recoloured, stretched or filtered (object-fit keeps proportions). */
+.brand-logo, .brand-mark { display: block; flex: none; object-fit: contain; background: #FEF7E7; }
+.brand-logo { border-radius: 22%; }
+.brand-mark { border-radius: 26%; }
+.brand-lockup { display: inline-flex; align-items: center; gap: 9px; }
+.brand-lockup .brand-mark { width: var(--brand-h); height: var(--brand-h); }
+.brand-name { font-family: var(--font-display); font-weight: 700; letter-spacing: -.02em; color: var(--text); white-space: nowrap; }
+.site-brand .brand-name { font-size: 1.1rem; }
+.rail-brand .brand-name { font-size: 1rem; }
+.hero-logo { width: 132px; height: 132px; box-shadow: 0 10px 30px -14px rgba(28, 25, 23, .35); }
+@media (min-width: 720px) { .hero-logo { width: 176px; height: 176px; } }
+.auth-brand { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.auth-brand .brand-name { font-size: 1.05rem; }
+.site-foot .brand-mark { display: inline-block; vertical-align: middle; margin-right: 4px; }
+/* The assistant's avatar is the mascot itself, not a lettered tile. */
+.ai-mark.ai-mark-logo { background: none; padding: 0; overflow: hidden; }
+.ai-mark.ai-mark-logo .brand-mark { width: 100%; height: 100%; border-radius: 8px; }

@@ -69,7 +69,11 @@ const staging = join(dist, '_v', 'staging');
 for (const dir of ['packages', 'brand', ...SURFACES]) {
   cpSync(join(root, dir), join(staging, dir), {
     recursive: true,
-    filter: (src) => !PROTOTYPE_MODULES.some((m) => src.endsWith(m)),
+    /* brand/qr holds the print artwork for the poster, not site assets. */
+    /* The logo's original is the 200 KB master the web sizes are made from,
+       not a site asset. */
+    filter: (src) => !PROTOTYPE_MODULES.some((m) => src.endsWith(m)) && !/[\\/]brand[\\/]qr(?:[\\/]|$)/.test(src)
+      && !/echoecho-logo-original\.jpeg$/.test(src),
   });
 }
 for (const surface of SURFACES) {
@@ -112,9 +116,17 @@ function importGraph(entry) {
 for (const surface of SURFACES) {
   const p = join(dist, surface, 'index.html');
   let html = readFileSync(p, 'utf8');
-  html = html.replace(
-    /window\.QUAD_API_BASE = window\.QUAD_API_BASE \|\| '[^']*';/,
-    `window.QUAD_API_BASE = ${JSON.stringify(API_BASE)};`);
+  /* The API base goes in a file of its own beside the page, not an inline
+     <script>: the Content-Security-Policy in vercel.json then allows only
+     scripts from this origin and never inline code. A classic script, so it
+     has run before the deferred module entry reads it. */
+  const inline = /<script>\s*\/\*[\s\S]*?\*\/\s*window\.QUAD_API_BASE = window\.QUAD_API_BASE \|\| '[^']*';\s*<\/script>/;
+  if (!inline.test(html)) { console.error(`✗ ${surface}/index.html: the API-base script block was not found`); process.exit(1); }
+  html = html.replace(inline, '<script src="./config.js"></script>');
+  writeFileSync(join(dist, surface, 'config.js'),
+    `/* Written by build.mjs. Nothing secret is ever placed here. */
+window.QUAD_API_BASE = ${JSON.stringify(API_BASE)};
+`);
   const base = `../_v/${VERSION}`;
   html = html.replaceAll('href="../packages/', `href="${base}/packages/`)
              .replace('src="./src/app.js"', `src="${base}/${surface}/src/app.js"`);
@@ -125,9 +137,44 @@ for (const surface of SURFACES) {
   writeFileSync(p, html);
 }
 
-/* The brand favicon at the site root, from the one logo source. */
-const { favicon } = await import('./brand/logo.js');
-writeFileSync(join(dist, 'favicon.svg'), favicon());
+/* Browser icons and the social image at the site root, where browsers and
+   link previews look for them. All derived from the approved logo. */
+const { ICON_FILES } = await import('./brand/logo.js');
+for (const f of ICON_FILES) cpSync(join(root, 'brand', 'logo', f), join(dist, f));
+
+/* Search engines may index the customer site; the staff surfaces and the
+   versioned assets are nobody's landing page. */
+writeFileSync(join(dist, 'robots.txt'), [
+  'User-agent: *', 'Allow: /web/', 'Disallow: /admin/', 'Disallow: /shop/', 'Disallow: /api/', '',
+].join('\n'));
+
+/* The host serves this for any path that does not exist, instead of its own
+   generic error page: same brand, and one way back to the site. */
+writeFileSync(join(dist, '404.html'), `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Page not found · ECHO ECHO</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+  :root { color-scheme: light dark; --bg: #FFF6F1; --text: #1C1917; --muted: #57534E; --accent: #B83560; --on-accent: #fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1C1917; --text: #FAF7F2; --muted: #A8A29E; --accent: #F28BA8; --on-accent: #1C1917; } }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 16px; box-sizing: border-box; }
+  main { max-width: 420px; text-align: center; }
+  h1 { font-size: 1.5rem; margin: 0 0 8px; }
+  p { color: var(--muted); margin: 0 0 24px; }
+  a { display: inline-block; background: var(--accent); color: var(--on-accent); padding: 12px 22px; border-radius: 999px;
+      text-decoration: none; font-weight: 700; }
+  a:focus-visible { outline: 3px solid var(--text); outline-offset: 3px; }
+</style></head>
+<body><main>
+  <img src="/icon-192.png" width="96" height="96" alt="ECHO ECHO" style="border-radius:24px;margin-bottom:16px">
+  <h1>This page does not exist</h1>
+  <p>The link may be old or mistyped. ECHO ECHO lives at one address.</p>
+  <a href="/web/">Go to ECHO ECHO</a>
+</main></body></html>
+`);
 
 /* Static-server config (read by `serve`, used by `npm run web`). Each surface
    loads its modules by relative path, so /web without the slash would resolve
@@ -142,8 +189,6 @@ writeFileSync(join(dist, 'serve.json'), JSON.stringify({
   trailingSlash: true,
   redirects: [
     { source: '/', destination: '/web/', type: 302 },
-    /* Browsers ask for /favicon.ico on their own; answer with the brand mark. */
-    { source: '/favicon.ico', destination: '/favicon.svg', type: 301 },
   ],
   headers: [{
     source: '**/*',

@@ -14,7 +14,8 @@
 #   B2_BACKUP_REGION         e.g. us-west-004
 #
 # Until those seven secrets exist the preflight job reports "production
-# database not configured" and the backup job is skipped. It never fabricates
+# database not configured", the backup job is skipped, and a SCHEDULED run
+# fails so the failure email says so. It never fabricates
 # a backup, and a PARTIAL configuration is a hard failure so a half-finished
 # setup is never mistaken for a working one.
 #
@@ -54,7 +55,11 @@ jobs:
           HAVE_B2_BACKUP_APP_KEY: ${{ secrets.B2_BACKUP_APP_KEY != '' }}
           HAVE_B2_BACKUP_ENDPOINT: ${{ secrets.B2_BACKUP_ENDPOINT != '' }}
           HAVE_B2_BACKUP_REGION: ${{ secrets.B2_BACKUP_REGION != '' }}
-          STRICT: ${{ inputs.strict }}
+          # A scheduled run with nothing configured FAILS. It used to pass
+          # with a warning, so the Actions list showed a green tick every
+          # night while no backup existed; a red run is what sends the
+          # owner GitHub's failure email. A manual run can still opt out.
+          STRICT: ${{ github.event_name == 'schedule' || inputs.strict }}
         run: |
           set -euo pipefail
           required="BACKUP_DATABASE_URL BACKUP_PASSPHRASE B2_BACKUP_BUCKET B2_BACKUP_KEY_ID B2_BACKUP_APP_KEY B2_BACKUP_ENDPOINT B2_BACKUP_REGION"
@@ -112,6 +117,16 @@ jobs:
     if: needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # A throwaway PostgreSQL for the restore drill. It exists only for this
+    # job, holds nothing else and is destroyed with the runner.
+    services:
+      drill:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: drill-only-not-a-secret
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
       - name: Install PostgreSQL 17 client
         run: |
@@ -155,6 +170,12 @@ jobs:
           # Dump to disk first so a mid-dump failure cannot be swallowed by a
           # pipe into gpg, which is how the previous version turned an
           # unreachable database into a confusing gpg error.
+          # Row counts of append-only tables just before and just after the
+          # dump. The dump's own snapshot lies between the two, so a faithful
+          # restore must too. Counts only: no data leaves the database here.
+          COUNT_SQL="SELECT 'schema_migration', count(*) FROM schema_migration UNION ALL SELECT 'app_user', count(*) FROM app_user UNION ALL SELECT 'food_order', count(*) FROM food_order UNION ALL SELECT 'payment', count(*) FROM payment UNION ALL SELECT 'ledger_txn', count(*) FROM ledger_txn UNION ALL SELECT 'order_financials', count(*) FROM order_financials"
+          echo "COUNT_SQL=$COUNT_SQL" >> "$GITHUB_ENV"
+          PGCONNECT_TIMEOUT=15 psql --dbname="$DATABASE_URL" -AtF' ' -c "$COUNT_SQL" > counts-before.txt
           PGCONNECT_TIMEOUT=15 pg_dump --format=custom --no-owner --no-privileges \
             --dbname="$DATABASE_URL" --file=raw.dump
           test -s raw.dump
@@ -173,6 +194,7 @@ jobs:
             --pinentry-mode loopback --passphrase-fd 3 \
             -o "$name" raw.dump 3<<<"$PASSPHRASE"
           test -s "$name"
+          PGCONNECT_TIMEOUT=15 psql --dbname="$DATABASE_URL" -AtF' ' -c "$COUNT_SQL" > counts-after.txt
           shred -u raw.dump
           echo "DUMP_TABLES=$tables" >> "$GITHUB_ENV"
 
@@ -186,6 +208,24 @@ jobs:
             -o verify.dump "$BACKUP_NAME" 3<<<"$PASSPHRASE" 2>/dev/null
           pg_restore --list verify.dump > /dev/null
           echo "Round-trip verified: the uploaded file decrypts and is a valid pg_restore archive."
+          # The restore drill: into the throwaway database, never anywhere else.
+          export PGPASSWORD=drill-only-not-a-secret
+          DRILL="postgres://postgres@localhost:5432/postgres"
+          pg_restore --no-owner --no-privileges --dbname="$DRILL" verify.dump 2> restore.log || true
+          psql "$DRILL" -AtF' ' -c "$COUNT_SQL" > counts-restored.txt
+          ok=1
+          while read -r t before; do
+            after=$(awk -v t="$t" '$1==t{print $2}' counts-after.txt)
+            got=$(awk -v t="$t" '$1==t{print $2}' counts-restored.txt)
+            if [ -z "$got" ] || [ "$got" -lt "$before" ] || [ "$got" -gt "$after" ]; then
+              echo "::error title=Restore drill::$t restored $got rows, expected between $before and $after"; ok=0
+            else echo "restore drill: $t $got rows (live $before..$after)"; fi
+          done < counts-before.txt
+          [ "$(awk '$1=="schema_migration"{print $2}' counts-restored.txt)" = "$(awk '$1=="schema_migration"{print $2}' counts-before.txt)" ] || { echo "::error::migration count differs"; ok=0; }
+          if grep -qi "error" restore.log; then echo "pg_restore reported (non-fatal) messages:"; grep -ci error restore.log; fi
+          [ "$ok" = 1 ] || exit 1
+          echo "DRILL_ROWS=$(paste -sd' ' counts-restored.txt)" >> "$GITHUB_ENV"
+          echo "Restore drill passed: the dump restores into an empty PostgreSQL 17 with every checked table intact."
           shred -u verify.dump
 
       - name: Upload to Backblaze B2
@@ -213,10 +253,10 @@ jobs:
             echo "- File: $BACKUP_NAME"
             echo "- Size: $local_size bytes"
             echo "- Tables dumped: $DUMP_TABLES"
-            echo "- Verified: decrypts and lists as a valid pg_restore archive"
+            echo "- Verified: decrypts, and restored into a throwaway PostgreSQL 17 (rows: $DRILL_ROWS)"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "uploaded $BACKUP_NAME ($local_size bytes, verified)"
 
       - name: Remove local artefacts
         if: always()
-        run: rm -f -- *.dump *.dump.gpg
+        run: rm -f -- *.dump *.dump.gpg counts-*.txt restore.log

@@ -61,7 +61,7 @@ export default async function authRoutes(app) {
      One step signs the student in AND proves mailbox control. The account is
      keyed by the verified mailbox; no role is taken from the request. */
   app.post('/auth/email/send', {
-    config: { rateLimit: { max: RATE_LIMITS.emailSend, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } },
+    config: { rateLimit: { max: RATE_LIMITS.emailSend, timeWindow: RATE_LIMITS.windowMinutes * 60_000 }, edgeLimit: true },
   }, async (req) => {
     const email = normaliseStudentEmail(req.body?.email);
     const out = await sendStudentEmailCode(email, { purpose: 'login', ip: req.ip });
@@ -72,7 +72,7 @@ export default async function authRoutes(app) {
   });
 
   app.post('/auth/email/verify', {
-    config: { rateLimit: { max: RATE_LIMITS.emailVerify, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } },
+    config: { rateLimit: { max: RATE_LIMITS.emailVerify, timeWindow: RATE_LIMITS.windowMinutes * 60_000 }, edgeLimit: true },
   }, async (req, reply) => {
     const email = normaliseStudentEmail(req.body?.email);
     try {

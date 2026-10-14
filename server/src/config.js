@@ -26,6 +26,10 @@ export const HTTP = {
   origin: env('WEB_ORIGIN', 'http://localhost:3000'),
   cookieSecret: env('COOKIE_SECRET'),
   secureCookies: bool('SECURE_COOKIES', process.env.NODE_ENV === 'production'),
+  /* A request header that only the edge in front of the API can set, naming
+     the address it saw (cf-connecting-ip behind Cloudflare). Lower-case.
+     Unset: the edge limit keys on req.ip, as every other limit does. */
+  edgeClientIpHeader: (env('EDGE_CLIENT_IP_HEADER', '') || '').trim().toLowerCase() || null,
 };
 
 export const DB = {
@@ -140,6 +144,9 @@ export const RATE_LIMITS = {
   adminLogin: Number(env('RL_ADMIN_LOGIN', 20)),
   ai: Number(env('RL_AI', 30)),
   windowMinutes: Number(env('RL_WINDOW_MINUTES', 10)),
+  /* The edge limit (src/edge-limit.js) on the sign-in routes is this many
+     times the route's own per-IP limit, per address the edge vouches for. */
+  edgeMultiplier: Number(env('RL_EDGE_MULTIPLIER', 5)),
 };
 
 /* ---------- payments -----------------------------------------------------
@@ -422,6 +429,13 @@ export const PLATFORM_OWNER = {
   get configured() { return this.phoneValid || this.emailValid; },
 };
 
+/* Operations alerts (services/alerts.js): an email to the owner when money
+   or a scheduled job needs a person. Defaults to the platform owner. */
+export const ALERTS = {
+  to: (String(env('ALERT_EMAIL', '') || '').trim() || PLATFORM_OWNER.email || null),
+  cooldownHours: Number(env('ALERT_COOLDOWN_HOURS', 6)),
+};
+
 /* ---------- administrators and passkeys ----------------------------------
    PLATFORM_ADMIN_EMAILS: further administrators, by verified institutional
    email. Being listed grants `platform_admin` once the mailbox is proven.
@@ -618,6 +632,8 @@ export function assertBootable() {
     }
     if (process.env.TRUST_PROXY !== 'true') {
       warnProd.push('TRUST_PROXY is not true. Behind a load balancer every request shares one IP, which collapses per-IP rate limits and audit IPs.');
+    } else if (!HTTP.edgeClientIpHeader) {
+      warnProd.push('EDGE_CLIENT_IP_HEADER is not set. With TRUST_PROXY=true a caller can forge X-Forwarded-For past the per-IP limits; set it to the header the edge itself sets (cf-connecting-ip on Render, after checking GET /health/client).');
     }
   }
   if (fatal.length) return { ok: false, fatal };

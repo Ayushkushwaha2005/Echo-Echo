@@ -189,6 +189,51 @@ test('a gateway failure leaves the order unpaid and surfaces an error', async ()
   assert.equal(o.rows[0].state, 'draft', 'the order stays unpaid');
 });
 
+/* A draft priced while the café was open, before anything changed. */
+async function draftWhileOpen(phone, slug) {
+  const n = await makeCampus(pool);
+  const v = await makeVendor(pool, { name: 'Tulips', slug });
+  const i = await makeItem(pool, v.id, { name: 'Softy', paise: 5500 });
+  const u = await makeUser(pool, { phone, name: 'Asha' });
+  const c = await as(u);
+  const draft = (await c.post('/orders/draft', {
+    vendorId: v.id, lines: [{ itemId: i.id, qty: 1 }],
+    fulfilment: 'delivery', destinationId: n.blockB.id })).body;
+  assert.equal(draft.state, 'draft');
+  return { v, i, c, draft };
+}
+
+const refusedUnpaid = async ({ c, draft }, why) => {
+  const r = await c.post('/payments/intent', { orderId: draft.id });
+  assert.equal(r.status, 409, why);
+  assert.equal(stubCalls.length, 0, 'no gateway order was created');
+  const o = await pool.query(`SELECT state FROM food_order WHERE id=$1`, [draft.id]);
+  assert.equal(o.rows[0].state, 'draft', 'the order never reached awaiting_payment');
+  return r;
+};
+
+test('a café that pressed its emergency stop after the draft cannot be paid', async () => {
+  const s = await draftWhileOpen('+919700000020', 'tulips-stop');
+  await pool.query(`UPDATE vendor SET accepting = false WHERE id = $1`, [s.v.id]);
+  await refusedUnpaid(s, 'a paused café takes no paid orders');
+});
+
+test('a café closed by its schedule after the draft cannot be paid', async () => {
+  const s = await draftWhileOpen('+919700000021', 'tulips-hours');
+  /* Open tomorrow only, in campus time: closed now, whatever the hour. */
+  await pool.query(`UPDATE vendor SET opens_at = '08:00', closes_at = '18:00',
+                      open_days = ARRAY[((extract(isodow FROM now() AT TIME ZONE 'Asia/Kolkata')::int) % 7) + 1]::smallint[]
+                     WHERE id = $1`, [s.v.id]);
+  await refusedUnpaid(s, 'a café outside its hours takes no paid orders');
+});
+
+test('an item sold out after the draft cannot be paid for', async () => {
+  const s = await draftWhileOpen('+919700000022', 'tulips-soldout');
+  await pool.query(`UPDATE menu_item SET available = false WHERE id = $1`, [s.i.id]);
+  const r = await refusedUnpaid(s, 'nobody pays for food the counter cannot make');
+  assert.match(r.body.error, /Softy/);
+});
+
 /* ======================= 3–7. webhook: the happy path ==================== */
 
 test('a correctly signed capture confirms the order and persists the payment', async () => {

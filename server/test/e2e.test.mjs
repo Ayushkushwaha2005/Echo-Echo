@@ -312,6 +312,10 @@ test('FLOW C/D — partner joins, delivers with handoff code, then leaves', asyn
       return r.body.offers.length ? r.body : null;
     }, { what: 'a delivery offer to reach the online partner' });
   assert.equal(offers.offers.length, 1, 'ready order is offered to the online partner');
+  const fin = (await pool.query(`SELECT delivery_earning_paise FROM order_financials WHERE order_id = $1`, [d.body.id])).rows[0];
+  assert.ok('earning_paise' in offers.offers[0], 'the offer carries the earning field');
+  assert.equal(offers.offers[0].earning_paise, fin.delivery_earning_paise,
+    'the offer names what the delivery pays, from the frozen snapshot, before it is accepted');
   assert.equal((await cp.post(`/partner/offers/${offers.offers[0].id}/accept`)).status, 200);
 
   /* The customer now sees a REAL partner name, because one exists. */

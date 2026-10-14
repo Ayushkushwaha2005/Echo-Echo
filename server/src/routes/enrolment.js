@@ -63,7 +63,7 @@ export default async function enrolmentRoutes(app) {
      Rate limited like the OTP endpoints, and deliberately vague about
      whether the number or the code was wrong. */
   app.post('/auth/enrol', {
-    config: { rateLimit: { max: RATE_LIMITS.enrol, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } },
+    config: { rateLimit: { max: RATE_LIMITS.enrol, timeWindow: RATE_LIMITS.windowMinutes * 60_000 }, edgeLimit: true },
   }, async (req, reply) => {
     const phone = normalisePhone(req.body?.phone);
     const code = String(req.body?.code || '');
