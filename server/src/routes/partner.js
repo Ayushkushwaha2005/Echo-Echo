@@ -117,10 +117,14 @@ export default async function partnerRoutes(app) {
     authorize(req.actor, 'delivery.read', { ownerId: req.actor.id });
     const { rows } = await q(
       `SELECT o.id, o.expires_at, f.code, f.total_paise, f.fulfilment,
-              v.name AS vendor_name, COALESCE(d.name, f.destination_snapshot->>'label') AS destination
+              v.name AS vendor_name, COALESCE(d.name, f.destination_snapshot->>'label') AS destination,
+              /* What this delivery pays, from the order's frozen snapshot, so
+                 the partner knows before accepting. Never computed here. */
+              fin.delivery_earning_paise AS earning_paise
          FROM delivery_offer o
          JOIN food_order f ON f.id = o.order_id
          JOIN vendor v ON v.id = f.vendor_id
+         LEFT JOIN order_financials fin ON fin.order_id = f.id
          LEFT JOIN campus_node d ON d.id = f.destination_id
         WHERE o.partner_id = $1 AND o.state='offered' AND o.expires_at > now()
         ORDER BY o.offered_at`, [req.actor.id]);

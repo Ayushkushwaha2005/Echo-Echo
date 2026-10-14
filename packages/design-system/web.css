@@ -440,6 +440,18 @@ textarea.input { resize: vertical; min-height: 72px; }
   text-align: center; color: var(--text-faint); font-size: var(--t-xs);
 }
 .site .only-lg { display: none; }
+.site-foot .foot-link {
+  color: var(--accent-text); font-weight: 700; font-size: inherit;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+
+/* The landing page's "how it works" steps and the price / partner pair. */
+.stepgrid { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-3); }
+.infogrid { display: grid; gap: var(--s-3); align-items: start; }
+@media (min-width: 720px) {
+  .stepgrid { grid-template-columns: repeat(3, 1fr); }
+  .infogrid { grid-template-columns: 1fr 1fr; gap: var(--s-4); }
+}
 
 /* Layout helpers used by the customer screens. Single column on phones. */
 .cafgrid, .menugrid, .livegrid { display: grid; gap: var(--s-3); }
@@ -478,7 +490,7 @@ textarea.input { resize: vertical; min-height: 72px; }
   .site .poster.hero-band { border-radius: var(--r-sheet) !important; margin: var(--s-6) var(--s-6) 0; padding: var(--s-7) var(--s-7) var(--s-7); }
   .site .welcome { display: grid !important; grid-template-columns: 1.25fr .75fr; gap: var(--s-6); padding: var(--s-7) var(--s-6) var(--s-9); align-items: center; }
   .site .welcome > .poster { border-radius: var(--r-card) !important; }
-  .site .welcome > .welcome-cafes { grid-column: 1 / -1; padding: 0 !important; }
+  .site .welcome > .welcome-cafes, .site .welcome > .welcome-info { grid-column: 1 / -1; padding: 0 !important; }
   .site .welcome > .welcome-cta { align-self: center; padding: var(--s-6) !important; }
 
   /* Sheets become centred dialogs. */
