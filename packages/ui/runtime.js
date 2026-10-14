@@ -265,7 +265,7 @@ export async function act(btn, fn, { after, ok } = {}) {
 
 /* ---------- misc --------------------------------------------------------- */
 export const brandHeader = (sub) => `
-  <div class="rail-brand">${lockup({ height: 24 })}
+  <div class="rail-brand">${lockup({ height: 32 })}
   ${sub ? `<span class="t-xs faint">${esc(sub)}</span>` : ''}</div>`;
 
 export function signOut() {

@@ -20,7 +20,7 @@ import test, { before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { createServer } from 'node:http';
-import { startDb, stopDb, truncateAll, makeUser, makeVendor, makeItem, makeCampus }
+import { startDb, stopDb, truncateAll, makeUser, makeVendor, makeItem, makeCampus, setTerms }
   from './helpers/db.mjs';
 import { sessionFor, client } from './helpers/api.mjs';
 
@@ -482,4 +482,108 @@ test('the webhook path is audited, and the signature never reaches the log', asy
   const dump = JSON.stringify(rows);
   assert.ok(!dump.includes(WEBHOOK_SECRET), 'the webhook secret must never be logged');
   assert.ok(!dump.includes(KEY_SECRET), 'the key secret must never be logged');
+});
+
+/* ======================= every order: platform fee, online only ========== */
+
+/* The approved terms: a flat ₹10 platform fee on every order, ₹15 delivery
+   fee, ₹10 partner earning. Set explicitly so the test reads as the rule. */
+const LIVE_TERMS = { platform_fee_flat_paise: 1000, delivery_fee_paise: 1500, delivery_earning_paise: 1000 };
+
+async function shopFor(phone, slug) {
+  const n = await makeCampus(pool);
+  const v = await makeVendor(pool, { name: 'Chai Garam', slug });
+  const i = await makeItem(pool, v.id, { name: 'Cold Coffee', paise: 7000 });
+  const u = await makeUser(pool, { phone, name: 'Asha' });
+  return { n, v, i, u, c: await as(u) };
+}
+const snap = async (orderId) => (await pool.query(`SELECT * FROM order_financials WHERE order_id=$1`, [orderId])).rows[0];
+
+test('pickup: food + the ₹10 platform fee and no delivery fee, end to end to the gateway', async () => {
+  await setTerms(pool, LIVE_TERMS);
+  const { v, i, c } = await shopFor('+919700000301', 'cg-pickup');
+  const d = (await c.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: i.id, qty: 2 }], fulfilment: 'pickup' })).body;
+  assert.equal(d.total_paise, 14000 + 1000, '2 × ₹70 + ₹10 platform fee');
+  assert.equal(d.delivery_paise, 0, 'no delivery fee on pickup');
+  const f = await snap(d.id);
+  assert.equal(f.platform_fee_paise, 1000, 'the platform fee never drops to zero for pickup');
+  assert.equal(f.delivery_fee_paise, 0);
+  assert.equal(f.delivery_earning_paise, 0, 'nobody delivers a pickup, nobody is paid to');
+  assert.equal(f.customer_total_paise, 15000);
+  const intent = await c.post('/payments/intent', { orderId: d.id });
+  assert.equal(intent.status, 200, 'pickup is paid online like delivery');
+  assert.equal(intent.body.amountPaise, 15000);
+  assert.equal(intent.body.breakdown.platformFeePaise, 1000);
+  assert.equal(intent.body.breakdown.deliveryPaise, 0);
+  assert.equal(stubCalls[0].body.amount, 15000, 'the gateway is asked for the same figure');
+  assert.equal((await pool.query(`SELECT amount_paise FROM payment WHERE order_id=$1`, [d.id])).rows[0].amount_paise, 15000);
+});
+
+test('delivery: food + the ₹10 platform fee + the ₹15 delivery fee, and the partner earning is separate', async () => {
+  await setTerms(pool, LIVE_TERMS);
+  const { n, v, i, c } = await shopFor('+919700000302', 'cg-delivery');
+  const d = (await c.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: i.id, qty: 2 }],
+    fulfilment: 'delivery', destinationId: n.blockB.id })).body;
+  assert.equal(d.total_paise, 14000 + 1000 + 1500);
+  const f = await snap(d.id);
+  assert.deepEqual([f.platform_fee_paise, f.delivery_fee_paise, f.delivery_earning_paise], [1000, 1500, 1000]);
+  const intent = await c.post('/payments/intent', { orderId: d.id });
+  assert.equal(intent.body.amountPaise, 16500);
+  assert.equal(stubCalls[0].body.amount, 16500);
+});
+
+test('fees and totals sent by the client are ignored, at the draft and at payment', async () => {
+  await setTerms(pool, LIVE_TERMS);
+  const { v, i, c } = await shopFor('+919700000303', 'cg-tamper');
+  const d = (await c.post('/orders/draft', {
+    vendorId: v.id, fulfilment: 'pickup',
+    lines: [{ itemId: i.id, qty: 1, price: 1, pricePaise: 1, unit_paise: 1 }],
+    totalPaise: 100, total_paise: 100, platformFeePaise: 0, platform_fee_paise: 0,
+    deliveryFeePaise: 0, amountPaise: 100, discountPaise: 7000 })).body;
+  assert.equal(d.total_paise, 8000, '₹70 + ₹10, whatever the client claimed');
+  assert.equal((await snap(d.id)).platform_fee_paise, 1000);
+  const intent = await c.post('/payments/intent', { orderId: d.id, amountPaise: 1, amount: 1, platformFeePaise: 0 });
+  assert.equal(intent.body.amountPaise, 8000);
+  assert.equal(stubCalls[0].body.amount, 8000, 'the gateway never sees a client figure');
+});
+
+test('a forged cash-on-delivery request is refused for pickup and delivery, and creates nothing', async () => {
+  await setTerms(pool, LIVE_TERMS);
+  const { n, v, i, c } = await shopFor('+919700000304', 'cg-cod');
+  for (const extra of [{ paymentMethod: 'cod' }, { payment_method: 'CASH' }, { cod: true },
+                       { paymentMode: 'pay_at_counter' }, { payAtCounter: true }]) {
+    for (const fulfilment of ['pickup', 'delivery']) {
+      const r = await c.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: i.id, qty: 1 }], fulfilment,
+        destinationId: fulfilment === 'delivery' ? n.blockB.id : undefined, ...extra });
+      assert.equal(r.status, 400, `${fulfilment} with ${JSON.stringify(extra)}`);
+      assert.match(r.body.error, /Online payment only/);
+    }
+  }
+  assert.equal((await pool.query(`SELECT count(*)::int n FROM food_order`)).rows[0].n, 0, 'no order was created');
+
+  const d = (await c.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: i.id, qty: 1 }], fulfilment: 'pickup',
+    paymentMethod: 'upi' })).body;
+  assert.equal(d.state, 'draft', 'naming an online method is fine');
+  const cash = await c.post('/payments/intent', { orderId: d.id, paymentMethod: 'cash' });
+  assert.equal(cash.status, 400);
+  assert.equal(stubCalls.length, 0, 'no gateway order for a cash request');
+  assert.equal((await pool.query(`SELECT state FROM food_order WHERE id=$1`, [d.id])).rows[0].state, 'draft');
+});
+
+test('an unpaid pickup order cannot be prepared or handed over: only the provider confirms payment', async () => {
+  await setTerms(pool, LIVE_TERMS);
+  const { v, i, c } = await shopFor('+919700000305', 'cg-unpaid');
+  const d = (await c.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: i.id, qty: 1 }], fulfilment: 'pickup' })).body;
+  await c.post('/payments/intent', { orderId: d.id });       // checkout opened, never paid
+  const staff = await makeUser(pool, { phone: '+919700000306', name: 'Counter', roles: ['vendor_staff'], vendorId: v.id });
+  const counter = await as(staff);
+  for (const to of ['preparing', 'ready', 'delivered', 'confirmed']) {
+    const r = await counter.post(`/orders/${d.id}/transition`, { to });
+    assert.ok([403, 409].includes(r.status), `the counter cannot move an unpaid pickup to ${to} (got ${r.status})`);
+  }
+  /* "Returning from the provider" is just the customer asking: the answer
+     comes from the provider, and without a capture it stays unpaid. */
+  const st = await c.get(`/payments/status?orderId=${d.id}`);
+  assert.equal(st.body.confirmed, false);
+  assert.equal((await pool.query(`SELECT state FROM food_order WHERE id=$1`, [d.id])).rows[0].state, 'awaiting_payment');
 });

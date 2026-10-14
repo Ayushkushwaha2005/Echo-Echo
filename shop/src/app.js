@@ -58,7 +58,7 @@ function render(vendors = []) {
   root.innerHTML = `
     <div class="appframe">
       <aside class="rail">
-        <div class="rail-brand">${lockup({ height: 24 })}
+        <div class="rail-brand">${lockup({ height: 32 })}
           <span class="t-xs faint">Counter</span></div>
         <div class="card card-pad" style="margin:10px 0">
           <div class="row" style="gap:10px">${Mark(v, 36)}

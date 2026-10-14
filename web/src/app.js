@@ -403,10 +403,14 @@ const BottomNav = () => {
 function ScrWelcome() {
   const vs = needVendors();
   const open = vs?.ok ? vs.v.vendors.filter((v) => v.open_now).length : null;
-  return `<div class="screen no-nav welcome" style="display:flex;flex-direction:column">
+  /* The hero and the sign-in card, with no café grid under them (it was added
+     by commit addf347; the owner did not want it). Cafés are browsed from
+     "Browse cafés first" and the Cafés tab. The complete logo is in the header
+     directly above, so the hero does not repeat it. */
+  return `<div class="screen no-nav welcome">
+    <div class="welcome-fold">
     <div class="poster" style="border-radius:0;display:flex;flex-direction:column;justify-content:flex-end;padding:var(--s-7) var(--s-5) var(--s-6)">
       <div class="stack g5 enter">
-        ${logo({ size: 176, className: 'brand-logo hero-logo', eager: true })}
         <span class="t-label" style="color:var(--text-2)">${BRAND} · UPES Bidholi</span>
         <h1 class="t-hero">Campus food, brought to <span style="color:var(--accent-text)">where you are</span>.</h1>
         <p class="t-body" style="color:var(--text-2);max-width:38ch">Order from the cafés on campus. Another student on their way past brings it to the library, the ground or your block, or you pick it up yourself.</p>
@@ -425,10 +429,7 @@ function ScrWelcome() {
       <button class="btn btn-ghost btn-block" data-act="go" data-route="cafes">Browse cafés first</button>
       <p class="t-xs faint center">Only students with a verified university email can order here.</p>
     </div>
-    ${vs?.ok && vs.v.vendors.length ? `<div class="pad stack g3 welcome-cafes" style="padding-bottom:var(--s-6)">
-      ${Label('Cafés on campus')}
-      <div class="cafgrid">${vs.v.vendors.map(cafVM).map(CafCard).join('')}</div>
-    </div>` : ''}
+    </div>
     <div class="pad stack g5 welcome-info" style="padding-bottom:var(--s-7)">
       <section class="stack g3" aria-labelledby="how-h">
         <h2 class="t-label" id="how-h">How it works</h2>
@@ -466,7 +467,7 @@ function PriceCard() {
     ${row('Food', 'Each café\'s menu price')}
     ${f ? `${row('Platform fee', `${money(f.platformFeeFlatPaise)} per order`)}
       ${row('Campus delivery', money(f.deliveryFeePaise))}` : ''}
-    ${row('Self pickup', 'No delivery fee')}
+    ${row('Self pickup', f ? `Platform fee only, no delivery fee` : 'No delivery fee')}
     <p class="t-xs faint">You see the full total before you pay. Online payment only: UPI or card, no cash on delivery.</p>
   </section>`;
 }
@@ -846,6 +847,11 @@ function ScrHome() {
     </div>
   </div>`;
 }
+
+/* The payment's own state, as the server reports it. Paid only means the
+   provider confirmed it; there is no cash state to show. */
+const PAY_LABEL = { created: 'Payment pending', pending: 'Payment pending', paid: 'Paid online',
+  failed: 'Payment failed', cancelled: 'Payment cancelled', refunded: 'Refunded' };
 
 const ORDER_LABEL = {
   draft: 'Draft', awaiting_payment: 'Awaiting payment', confirmed: 'Order confirmed',
@@ -1431,7 +1437,7 @@ function ScrTracking() {
   const r = need(`order:${id}`, () => quad.order(id));
   if (!r) return `<div class="screen">${TopBar('Order', { back: 'orders' })}${Loading('Loading order')}</div>`;
   if (!r.ok) return `<div class="screen">${TopBar('Order', { back: 'orders' })}${Problem(r.e)}</div>`;
-  const { order: o, items, events, payment, partner, myReviews = [] } = r.v;
+  const { order: o, items, events, payment, partner, financials: fin, myReviews = [] } = r.v;
   const vs = needVendors();
   const vendorName = vs?.ok ? (vs.v.vendors.find((v) => v.id === o.vendor_id)?.name || '') : '';
   const pickup = o.fulfilment === 'pickup';
@@ -1505,8 +1511,9 @@ function ScrTracking() {
         <div class="between">${Label('Receipt')}<span class="code t-xs muted">#${esc(o.code)}</span></div>
         ${items.map((l) => `<div class="between t-sm"><span>${esc(l.name_snapshot)} × ${l.qty}</span><span class="money t-sm">${money(l.line_paise)}</span></div>`).join('')}
         <hr class="dashline" style="margin-block:6px">
-        <div class="between t-sm"><span class="muted">${pickup ? 'Self pickup' : 'Campus delivery'}</span><span class="money t-sm">${o.delivery_paise ? money(o.delivery_paise) : 'Free'}</span></div>
-        <div class="between"><span class="t-h3">Total · ${payment ? esc(payment.status === 'captured' ? 'Paid online' : payment.status) : 'Not paid'}</span><span class="money t-h2">${money(o.total_paise)}</span></div>
+        ${fin?.platform_fee_paise ? `<div class="between t-sm"><span class="muted">Platform fee</span><span class="money t-sm">${money(fin.platform_fee_paise)}</span></div>` : ''}
+        <div class="between t-sm"><span class="muted">${pickup ? 'Self pickup' : 'Campus delivery'}</span><span class="money t-sm">${pickup ? 'No delivery fee' : money(o.delivery_paise)}</span></div>
+        <div class="between"><span class="t-h3">Total · ${esc(PAY_LABEL[payment?.status] || 'Not paid')}</span><span class="money t-h2">${money(o.total_paise)}</span></div>
         <p class="t-xs faint">These are the prices at the time you ordered. A later menu change does not affect them.</p>
       </div>
 
@@ -2409,7 +2416,7 @@ const SiteHeader = () => {
   const count = cartCount();
   return `<header class="site-head"><div class="site-head-in">
     <button class="site-brand" data-act="go" data-route="${signedIn() ? 'home' : 'welcome'}" aria-label="${BRAND} home">
-      ${lockup({ height: 34 })}</button>
+      ${lockup({ height: 40 })}</button>
     <nav class="site-nav" aria-label="Main">
       <button data-act="go" data-route="home" ${at('home')}>Home</button>
       <button data-act="go" data-route="cafes" ${at('cafes', 'menu')}>Cafés</button>
@@ -2444,7 +2451,7 @@ function render(fresh = false) {
     <div class="site">
       ${SiteHeader()}
       <main class="site-main">${scr}</main>
-      <footer class="site-foot">${mark({ size: 20 })} ${BRAND} · ${esc(campusLabel())} · Campus delivery only ·
+      <footer class="site-foot">${logo({ size: 22, alt: '', className: 'brand-logo brand-logo-foot' })} ${BRAND} · ${esc(campusLabel())} · Campus delivery only ·
         <button class="foot-link" data-act="go" data-route="deliver">Deliver with ${BRAND}</button></footer>
       ${nav}
       ${Sheet()}

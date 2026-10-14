@@ -22,6 +22,7 @@ import { notifyAsync } from '../services/notify.js';
 import { assignDelivery } from '../services/delivery.js';
 import { livePolicy, quote, writeSnapshot, snapshotFor } from '../services/pricing.js';
 import { entriesForOrder, postDeliveryEarned } from '../services/ledger.js';
+import { assertOnlinePayment } from '../services/prepaid.js';
 
 /* Legal state transitions and who may perform them. An order cannot skip
    from `draft` to `delivered` however the request is shaped. */
@@ -258,6 +259,7 @@ export default async function orderRoutes(app) {
        both read from the session's database row on this request. */
     assertMayOrder(req.actor, { liveLocationRequired: await flag('live_location') });
     const b = req.body || {};
+    assertOnlinePayment(b);   // pickup and delivery alike: no cash, ever
     const draft = await tx((c) => buildDraft(c, {
       customerId: req.actor.id, vendorId: b.vendorId, lines: b.lines,
       fulfilment: b.fulfilment, destinationId: b.destinationId,
