@@ -57,6 +57,7 @@ import { postOrderCapture } from '../services/ledger.js';
 import { requireAdapter } from '../services/payment-providers.js';
 import { applyRefundOutcome } from '../services/refund-status.js';
 import { alertOwnerAsync } from '../services/alerts.js';
+import { assertOnlinePayment } from '../services/prepaid.js';
 
 const rupees = (paise) => (paise / 100).toFixed(2);
 
@@ -228,6 +229,7 @@ export default async function paymentRoutes(app) {
 
   app.post('/payments/intent', async (req) => {
     authorize(req.actor, 'order.create');
+    assertOnlinePayment(req.body);
     /* Re-checked here, not only at draft creation: verification can be
        revoked between drafting an order and paying for it, and a draft is
        not a licence to complete a purchase. */

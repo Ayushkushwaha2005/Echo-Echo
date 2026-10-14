@@ -30,9 +30,13 @@ export function mark({ size = 32, alt = '' } = {}) {
     + `${alt ? '' : ' aria-hidden="true"'} decoding="async">`;
 }
 
-/* Mark + name, for headers and sign-in cards. */
+/* The whole logo + name, for every navbar (student site header, Counter and
+   Campus Control rails). The complete artwork is shown, scaled down with
+   object-fit: contain, never the head crop and never clipped: the name next
+   to it carries the legibility at this size. */
 export function lockup({ height = 28 } = {}) {
-  return `<span class="brand-lockup" style="--brand-h:${height}px">${mark({ size: height })}`
+  return `<span class="brand-lockup" style="--brand-h:${height}px">`
+    + logo({ size: height, alt: '', className: 'brand-logo brand-logo-nav', eager: true })
     + `<span class="brand-name">${BRAND_NAME}</span></span>`;
 }
 

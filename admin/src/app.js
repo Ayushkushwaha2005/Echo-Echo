@@ -53,7 +53,7 @@ function render() {
   root.innerHTML = `
     <div class="appframe">
       <aside class="rail">
-        <div class="rail-brand">${lockup({ height: 24 })}
+        <div class="rail-brand">${lockup({ height: 32 })}
           <span class="t-xs faint">Campus Control</span></div>
         <nav class="stack">
           ${allowedNav().map(([r, l]) =>

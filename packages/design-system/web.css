@@ -494,10 +494,16 @@ textarea.input { resize: vertical; min-height: 72px; }
 
   /* Heroes are page-width banners with the same tint and type. */
   .site .poster.hero-band { border-radius: var(--r-sheet) !important; margin: var(--s-6) var(--s-6) 0; padding: var(--s-7) var(--s-7) var(--s-7); }
-  .site .welcome { display: grid !important; grid-template-columns: 1.25fr .75fr; gap: var(--s-6); padding: var(--s-7) var(--s-6) var(--s-9); align-items: center; }
-  .site .welcome > .poster { border-radius: var(--r-card) !important; }
-  .site .welcome > .welcome-cafes, .site .welcome > .welcome-info { grid-column: 1 / -1; padding: 0 !important; }
-  .site .welcome > .welcome-cta { align-self: center; padding: var(--s-6) !important; }
+  /* The hero and the sign-in card side by side, with nothing listed under
+     them: the café grid that commit addf347 added below is gone. The hero
+     keeps its natural height; stretching it to the viewport, as before
+     addf347, would leave a large empty block now that the decorative arcs
+     and grid are gone (removed by the owner-approved quieter UI). */
+  .site .welcome { padding: var(--s-7) var(--s-6) var(--s-9); }
+  .site .welcome-fold { display: grid; grid-template-columns: 1.25fr .75fr; gap: var(--s-6); align-items: center; }
+  .site .welcome-fold > .poster { border-radius: var(--r-card) !important; }
+  .site .welcome-fold > .welcome-cta { align-self: center; padding: var(--s-6) !important; }
+  .site .welcome > .welcome-info { margin-top: var(--s-7); padding: 0 !important; }
 
   /* Sheets become centred dialogs. */
   .site .sheet {
@@ -531,7 +537,7 @@ textarea.input { resize: vertical; min-height: 72px; }
 .site .item-thumb { background: var(--surface-blush); }
 
 @media (min-width: 1024px) {
-  .site .welcome > .welcome-cta {
+  .site .welcome-fold > .welcome-cta {
     background: var(--surface); border: 1px solid var(--line);
     border-radius: var(--r-card); box-shadow: var(--shadow-1);
   }
@@ -635,11 +641,17 @@ textarea.input { resize: vertical; min-height: 72px; }
 .brand-name { font-family: var(--font-display); font-weight: 700; letter-spacing: -.02em; color: var(--text); white-space: nowrap; }
 .site-brand .brand-name { font-size: 1.1rem; }
 .rail-brand .brand-name { font-size: 1rem; }
-.hero-logo { width: 132px; height: 132px; box-shadow: 0 10px 30px -14px rgba(28, 25, 23, .35); }
-@media (min-width: 720px) { .hero-logo { width: 176px; height: 176px; } }
+/* Phones: the hero, then the sign-in card. */
+.welcome-fold { display: flex; flex-direction: column; }
+/* Navbar and footer: the COMPLETE logo, scaled to fit (never the head crop,
+   never cover-cropped). The rounded corners only ever hide the artwork's
+   own cream background: measured on the original, 0 artwork pixels fall
+   outside even a 26% radius. */
+.brand-logo-nav, .brand-logo-foot { object-fit: contain; border-radius: 15%; }
+.brand-lockup .brand-logo-nav { width: var(--brand-h); height: var(--brand-h); }
+.site-foot .brand-logo-foot { display: inline-block; width: 22px; height: 22px; vertical-align: middle; margin-right: 4px; }
 .auth-brand { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .auth-brand .brand-name { font-size: 1.05rem; }
-.site-foot .brand-mark { display: inline-block; vertical-align: middle; margin-right: 4px; }
 /* The assistant's avatar is the mascot itself, not a lettered tile. */
 .ai-mark.ai-mark-logo { background: none; padding: 0; overflow: hidden; }
 .ai-mark.ai-mark-logo .brand-mark { width: 100%; height: 100%; border-radius: 8px; }
