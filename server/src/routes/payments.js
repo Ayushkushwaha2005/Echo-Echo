@@ -56,6 +56,7 @@ import { snapshotFor } from '../services/pricing.js';
 import { postOrderCapture } from '../services/ledger.js';
 import { requireAdapter } from '../services/payment-providers.js';
 import { applyRefundOutcome } from '../services/refund-status.js';
+import { alertOwnerAsync } from '../services/alerts.js';
 
 const rupees = (paise) => (paise / 100).toFixed(2);
 
@@ -71,7 +72,7 @@ const rupees = (paise) => (paise / 100).toFixed(2);
    a webhook that 500s gets retried forever, and a status poll that throws
    tells a customer their paid order is broken when it is merely flagged.
    ========================================================================== */
-async function applyOutcome(req, pay, ev, source) {
+export async function applyOutcome(req, pay, ev, source) {
   /* ---- 1. order mapping ------------------------------------------------
      The event must be about the payment we looked up. The caller found
      `pay` BY the provider order id, so this is belt-and-braces against a
@@ -138,6 +139,10 @@ async function applyOutcome(req, pay, ev, source) {
                        outcome: 'denied',
                        detail: { reason, source, order_id: pay.order_id,
                                  expected_paise: pay.amount_paise, got_paise: ev.amountPaise } });
+    alertOwnerAsync('payment_mismatch', 'A payment did not match its order',
+      [`The provider reported a payment whose ${amountOk ? 'currency' : 'amount'} differs from the order it names.`,
+       'It was refused and flagged; the order was NOT confirmed.',
+       'Campus Control > Finance shows the flagged payment. Check it in the Cashfree dashboard before any refund.']);
     return { ok: true, rejected: amountOk ? 'currency mismatch' : 'amount mismatch' };
   }
 

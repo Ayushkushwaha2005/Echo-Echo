@@ -429,6 +429,13 @@ export const PLATFORM_OWNER = {
   get configured() { return this.phoneValid || this.emailValid; },
 };
 
+/* Operations alerts (services/alerts.js): an email to the owner when money
+   or a scheduled job needs a person. Defaults to the platform owner. */
+export const ALERTS = {
+  to: (String(env('ALERT_EMAIL', '') || '').trim() || PLATFORM_OWNER.email || null),
+  cooldownHours: Number(env('ALERT_COOLDOWN_HOURS', 6)),
+};
+
 /* ---------- administrators and passkeys ----------------------------------
    PLATFORM_ADMIN_EMAILS: further administrators, by verified institutional
    email. Being listed grants `platform_admin` once the mailbox is proven.

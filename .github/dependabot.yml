@@ -1,0 +1,20 @@
+# Dependency updates. Security alerts are a repository setting (Settings >
+# Code security > Dependabot alerts); this file only schedules update PRs.
+# Nothing merges by itself: every PR still has to pass CI and be reviewed.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /server
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 5
+    groups:
+      fastify:
+        patterns: ["fastify", "@fastify/*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
