@@ -28,7 +28,7 @@ import {
 } from '../services/admin-credentials.js';
 
 const ADMIN_TTL = Number(process.env.ADMIN_SESSION_TTL_MINUTES || 240);
-const limit = (max) => ({ config: { rateLimit: { max, timeWindow: RATE_LIMITS.windowMinutes * 60_000 } } });
+const limit = (max) => ({ config: { rateLimit: { max, timeWindow: RATE_LIMITS.windowMinutes * 60_000 }, edgeLimit: true } });
 
 async function storeChallenge(purpose, userId) {
   const challenge = newChallenge();

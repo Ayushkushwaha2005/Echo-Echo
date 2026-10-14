@@ -1,5 +1,7 @@
 # Launch-readiness audit — 14 Oct 2026
 
+> Continued in `LAUNCH-READINESS-2026-10-14-FOLLOWUP.md` (same day, later).
+
 Branch `launch-audit`, cut from `main` at 8f0bf1a (the commit live on Render at the time of
 the audit, per `/api/health`). Nothing here was deployed, no production setting was
 changed, and no money moved.
@@ -38,10 +40,10 @@ None found.
 | 6 | The ₹10 platform fee was a bare line in the bill. | **Fixed**: explained in the bill; landing page shows live fees from `/pricing/current` (₹10/order, ₹15 delivery, pickup no delivery fee, no COD). |
 | 7 | Delivery offers showed the order total, not what the partner earns. | **Fixed**: offer carries `earning_paise` from the frozen order snapshot; shown as "You earn ₹X". |
 | 8 | "Deliver with ECHO ECHO" was reachable only from the signed-in profile. | **Fixed**: public `#/deliver` page (live partner policy, real joining steps, "Sign in to apply"), plus entries on landing, home and footer. |
-| 9 | `TRUST_PROXY=true` makes Fastify trust the left-most `X-Forwarded-For`. Calling the Render URL directly with a forged header gives a fresh IP per request, so per-IP limits (OTP send/verify) can be bypassed. Per-address and per-challenge limits in the database still hold. | **Open** — set a hop count that matches Vercel → Render, verified against real requests, rather than `true`. Not changed blind: a wrong count would put every student behind one IP and lock them all out. |
+| 9 | `TRUST_PROXY=true` makes Fastify trust the left-most `X-Forwarded-For`. Calling the Render URL directly with a forged header gives a fresh IP per request, so per-IP limits (OTP send/verify) can be bypassed. Per-address and per-challenge limits in the database still hold. | **Measured and mitigated in the follow-up** (`LAUNCH-READINESS-2026-10-14-FOLLOWUP.md`, F1): an edge-keyed second limit; active once the owner sets `EDGE_CLIENT_IP_HEADER`. |
 | 10 | Chai Garam items are board price + ₹10 (owner instruction, 27 Sep); Tulips items are board price. Both also pay the ₹10 platform fee. A student who knows the counter price will see the difference. | **Owner decision** — keep, disclose, or align. |
 | 11 | No `robots.txt`, generic host 404, no description/canonical/social tags. | **Fixed** (build writes `robots.txt` and a branded `404.html`; `web/index.html` has description, canonical, Open Graph). |
-| 12 | No Content-Security-Policy header. | Open — worth adding once the Cashfree SDK origins are confirmed. |
+| 12 | No Content-Security-Policy header. | **Added report-only in the follow-up** (F4); enforce after a week of reports. |
 
 ### P3 — polish
 - No dish photos; tiles show monograms. Needs real photos from the cafés (none invented).

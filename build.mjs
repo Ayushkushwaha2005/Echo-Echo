@@ -113,9 +113,17 @@ function importGraph(entry) {
 for (const surface of SURFACES) {
   const p = join(dist, surface, 'index.html');
   let html = readFileSync(p, 'utf8');
-  html = html.replace(
-    /window\.QUAD_API_BASE = window\.QUAD_API_BASE \|\| '[^']*';/,
-    `window.QUAD_API_BASE = ${JSON.stringify(API_BASE)};`);
+  /* The API base goes in a file of its own beside the page, not an inline
+     <script>: the Content-Security-Policy in vercel.json then allows only
+     scripts from this origin and never inline code. A classic script, so it
+     has run before the deferred module entry reads it. */
+  const inline = /<script>\s*\/\*[\s\S]*?\*\/\s*window\.QUAD_API_BASE = window\.QUAD_API_BASE \|\| '[^']*';\s*<\/script>/;
+  if (!inline.test(html)) { console.error(`✗ ${surface}/index.html: the API-base script block was not found`); process.exit(1); }
+  html = html.replace(inline, '<script src="./config.js"></script>');
+  writeFileSync(join(dist, surface, 'config.js'),
+    `/* Written by build.mjs. Nothing secret is ever placed here. */
+window.QUAD_API_BASE = ${JSON.stringify(API_BASE)};
+`);
   const base = `../_v/${VERSION}`;
   html = html.replaceAll('href="../packages/', `href="${base}/packages/`)
              .replace('src="./src/app.js"', `src="${base}/${surface}/src/app.js"`);

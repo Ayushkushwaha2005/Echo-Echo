@@ -325,8 +325,9 @@ test('the sign-in screen names the configured owner and nothing secret', async (
   assert.equal(r.body.method, 'password_totp');
   /* It names the method and the configured owner, and carries no material
      that could help anyone sign in. */
-  assert.equal(r.body.ownerEmail, 'owner@stu.upes.ac.in',
-    'the configured owner is named so an administrator can tell which deployment this is');
+  assert.equal(r.body.ownerEmail, 'o…@stu.upes.ac.in',
+    'a hint of the owner, so an administrator can tell which deployment this is');
+  assert.ok(!JSON.stringify(r.body).includes('owner@'), 'never the full address of the most privileged account');
   const body = JSON.stringify(r.body);
   for (const forbidden of ['secret', 'hash', 'totp_secret', 'password_hash']) {
     assert.ok(!body.toLowerCase().includes(forbidden), `the status leaked "${forbidden}"`);

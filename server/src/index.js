@@ -12,6 +12,7 @@ import { startSweeper } from './services/sweeper.js';
 import { startSettlementScheduler } from './services/settlement.js';
 import { channelStatus } from './services/notify.js';
 import { audit } from './audit.js';
+import { edgeLimitHook, edgePeer } from './edge-limit.js';
 
 import authRoutes from './routes/auth.js';
 import catalogRoutes from './routes/catalog.js';
@@ -109,6 +110,9 @@ export function build() {
 
     const allowedOrigins = HTTP.origin.split(',').map((s) => s.trim()).filter(Boolean);
 
+    /* The second, edge-keyed limit on the sign-in routes: see edge-limit.js. */
+    app.addHook('onRequest', edgeLimitHook);
+
     app.addHook('onRequest', async (req, reply) => {
       reply.header('x-request-id', req.id);
       /* Security headers. The API serves JSON only, so the CSP can be
@@ -140,7 +144,10 @@ export function build() {
          we recognise. The gateway webhook is exempt — it is authenticated
          by an HMAC signature instead, and has no cookie to abuse. */
       const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
-      const isWebhook = req.url.startsWith('/payments/webhook') || req.url.startsWith('/payouts/webhook');
+      /* The CSP report is sent by the browser itself, without an Origin, and
+         changes nothing: it only writes a log line. */
+      const isWebhook = req.url.startsWith('/payments/webhook') || req.url.startsWith('/payouts/webhook')
+        || req.url.startsWith('/csp-report');
       if (mutating && !isWebhook && req.headers.cookie?.includes(SESSION.cookieName)) {
         let source = origin;
         if (!source && req.headers.referer) {
@@ -165,7 +172,7 @@ export function build() {
        reaching a handler that dereferences a null actor and returns 500.
        Public reads are deliberate and enumerated. */
     const PUBLIC = [
-      /^\/health$/, /^\/ready$/,
+      /^\/health$/, /^\/health\/client$/, /^\/csp-report$/, /^\/ready$/,
       /^\/auth\/(status|otp\/send|otp\/verify|email\/send|email\/verify|logout|me)$/,
       /* Administrator sign-in is public in exactly the sense the student's
          email code is: it proves possession of a password AND a code from a
@@ -263,6 +270,45 @@ export function build() {
        nothing, and it is how a deploy is proven live rather than assumed. */
     const COMMIT = /^[0-9a-f]{7,40}$/.test(process.env.RENDER_GIT_COMMIT || '') ? process.env.RENDER_GIT_COMMIT : null;
     app.get('/health', async () => ({ ok: true, platform: PLATFORM.name, commit: COMMIT }));
+
+    /* Content-Security-Policy violation reports from the site (vercel.json
+       sends the policy report-only first). One log line per report, naming
+       the directive, the blocked origin and the page path: never a query
+       string, a full URL or anything from the session. */
+    app.addContentTypeParser(['application/csp-report', 'application/reports+json'], { parseAs: 'string', bodyLimit: 16_384 },
+      (req, body, done) => { try { done(null, JSON.parse(body || '{}')); } catch { done(null, {}); } });
+    app.post('/csp-report', { config: { rateLimit: { max: 60, timeWindow: 60_000 } } }, async (req, reply) => {
+      const list = Array.isArray(req.body) ? req.body.map((r) => r?.body || r) : [req.body?.['csp-report'] || req.body || {}];
+      const origin = (u) => { try { return new URL(u).origin; } catch { return String(u || '').slice(0, 40); } };
+      const path = (u) => { try { return new URL(u).pathname; } catch { return null; } };
+      for (const r of list.slice(0, 10)) {
+        req.log.warn({ csp: {
+          directive: String(r['effective-directive'] || r.effectiveDirective || r['violated-directive'] || '').slice(0, 60),
+          blocked: origin(r['blocked-uri'] || r.blockedURL),
+          page: path(r['document-uri'] || r.documentURL),
+          disposition: String(r.disposition || '').slice(0, 12),
+        } }, 'csp violation');
+      }
+      return reply.code(204).send();
+    });
+
+    /* How this request reached the API, so the proxy chain in front of a
+       deployment can be checked from outside. It names no address: only
+       whether the edge header arrived and how many forwarding hops there
+       were, which is all that setting EDGE_CLIENT_IP_HEADER depends on. */
+    app.get('/health/client', async (req) => {
+      const xff = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
+      const cf = String(req.headers['cf-connecting-ip'] || '').trim();
+      const peer = edgePeer(req);
+      return {
+        edgeHeader: HTTP.edgeClientIpHeader,
+        edgeKeySource: peer.source,
+        cfConnectingIpPresent: !!cf,
+        cfConnectingIpHopsFromRight: !!cf && xff.includes(cf) ? xff.length - 1 - xff.lastIndexOf(cf) : null,
+        forwardedForEntries: xff.length,
+        trustProxy: process.env.TRUST_PROXY === 'true',
+      };
+    });
 
     /* ready = the database answers AND every migration shipped with this
        build has been applied. A half-migrated instance is kept out of the

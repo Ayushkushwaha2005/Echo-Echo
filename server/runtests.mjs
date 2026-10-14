@@ -51,6 +51,7 @@ const FILES = [
   ['e2e', 'test/cafe-hours.test.mjs'],
   ['e2e', 'test/agent.test.mjs'],
   ['security', 'test/security.test.mjs'],
+  ['security', 'test/edge-limit.test.mjs'],
   ['enrolment', 'test/enrolment.test.mjs'],
   ['auth', 'test/admin-login.test.mjs'],
   ['auth', 'test/student-email.test.mjs'],

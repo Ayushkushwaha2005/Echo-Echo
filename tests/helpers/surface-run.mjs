@@ -21,7 +21,7 @@
 
      node tests/helpers/surface-run.mjs web
    ========================================================================== */
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -48,7 +48,9 @@ try {
    These are assertions about the ARTIFACT, not the source: the build injects
    the API base and points at an entry module, and a bundle missing either
    would load into a blank page rather than fail loudly on its own. */
-const apiBase = html.match(/window\.QUAD_API_BASE\s*=\s*(?:window\.QUAD_API_BASE\s*\|\|\s*)?'([^']*)'/)
+/* The build moves the API base into config.js beside the page. */
+const configJs = existsSync(join(distSurface, 'config.js')) ? readFileSync(join(distSurface, 'config.js'), 'utf8') : '';
+const apiBase = configJs.match(/window\.QUAD_API_BASE\s*=\s*"([^"]*)"/) || html.match(/window\.QUAD_API_BASE\s*=\s*(?:window\.QUAD_API_BASE\s*\|\|\s*)?'([^']*)'/)
              || html.match(/window\.QUAD_API_BASE\s*=\s*"([^"]*)"/);
 if (!apiBase) {
   console.error(`dist/${surface}/index.html does not set window.QUAD_API_BASE`);
