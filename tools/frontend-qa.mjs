@@ -135,7 +135,9 @@ else {
     /* Code that fetches or embeds: script sources and the tile templates. */
     for (const m of src.matchAll(/https:\/\/([a-z0-9.-]+\.[a-z]{2,})(?=[/'"`{])/g)) {
       const origin = `https://${m[1]}`;
-      if (/w3\.org|www\.openstreetmap\.org$|osmfoundation|www\.echoecho\.tech|esri\.com|s2maps\.eu|eox\.at$/.test(origin)) continue;   // links and namespaces, never fetched
+      /* www.google.com: the partner's "Walking directions to the pin" link, a
+         navigation the partner chooses; the page never fetches from it. */
+      if (/w3\.org|www\.openstreetmap\.org$|osmfoundation|www\.echoecho\.tech|esri\.com|s2maps\.eu|eox\.at$|^https:\/\/www\.google\.com$/.test(origin)) continue;   // links and namespaces, never fetched
       if (!['script-src', 'img-src', 'style-src', 'font-src', 'connect-src'].some((d) => allows(d, origin))) {
         csp.push(`${rel(f)}: ${origin} is not allowed by any fetch directive`);
       }
