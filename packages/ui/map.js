@@ -324,11 +324,14 @@ export function baseLayers(L, tiles = {}) {
  *                    delivered to). Tapping one reports exactly that point
  *                    to `onSelect(destination)`; a marker standing for two
  *                    points 12 m apart asks which one.
- *   PINK   pin       the student's own map point, wherever they tapped the
- *                    map. Reported to `onTap(lat, lng)`. It is only a point:
- *                    the map never turns it into a destination.
- *   BLUE   dot+ring  where the student is, from a live reading the SERVER
- *                    accepted, with its reported accuracy as the ring.
+ *   PINK   pin       the student's own map point: where they tapped, where
+ *                    they dragged the pin, or the map centre they pinned.
+ *                    Every move is reported to `onTap(lat, lng)`. It is
+ *                    only a point: the map never turns it into a destination.
+ *   BLUE   dot+ring  this device's own reading, with its reported accuracy
+ *                    as the ring - drawn as APPROXIMATE, whatever the server
+ *                    made of it, so the student can see where their phone
+ *                    thinks they are and correct the pin.
  *
  * This function decides nothing. The caller sends a tapped point to the
  * server (POST /campus/pin), which alone says whether it is on campus and
@@ -411,7 +414,7 @@ export async function drawPickerMap(el, data, { onTap, onSelect, ...state } = {}
   let tapped = null, liveDot = null, liveRing = null, lastLive = null;
   const PIN_LOOK = {
     checking: { colour: '#E0567A', glyph: '…', label: 'Your delivery spot (checking)' },
-    ok: { colour: '#E0567A', glyph: '📍', label: 'Your delivery spot' },
+    ok: { colour: '#E0567A', glyph: '📍', label: 'Your delivery spot. Drag to move it.' },
     refused: { colour: '#8A817C', glyph: '✕', label: 'Your delivery spot: outside the campus delivery area' },
   };
   const pinIcon = (status) => {
@@ -422,7 +425,13 @@ export async function drawPickerMap(el, data, { onTap, onSelect, ...state } = {}
   function sync({ pin: at = null, pinStatus = 'ok', selectedId = null, live = null } = {}) {
     if (at) {
       if (tapped) tapped.setLatLng([at.lat, at.lng]).setIcon(pinIcon(pinStatus));
-      else tapped = L.marker([at.lat, at.lng], { icon: pinIcon(pinStatus), zIndexOffset: 1000, keyboard: false, interactive: false }).addTo(map);
+      else {
+        /* Draggable: a phone's reading or a first tap is rarely exactly the
+           spot, and moving the pin is how the student says "here instead". */
+        tapped = L.marker([at.lat, at.lng], { icon: pinIcon(pinStatus), zIndexOffset: 1000, keyboard: false,
+                                              draggable: true, autoPan: true, title: 'Your delivery spot' }).addTo(map);
+        tapped.on('dragend', () => { const ll = tapped.getLatLng(); onTap?.(ll.lat, ll.lng); });
+      }
     } else if (tapped) {
       tapped.remove(); tapped = null;
     }
@@ -443,9 +452,9 @@ export async function drawPickerMap(el, data, { onTap, onSelect, ...state } = {}
           opacity: 0.5, fillColor: '#2563EB', fillOpacity: 0.12, interactive: false }).addTo(map);
         liveDot = L.circleMarker([live.lat, live.lng], { radius: 8, color: '#FFFFFF', weight: 3,
           fillColor: '#2563EB', fillOpacity: 1, interactive: false }).addTo(map)
-          .bindTooltip('You are here', { direction: 'bottom', offset: [0, 10], className: 'echo-map-label' });
+          .bindTooltip('Your phone', { direction: 'bottom', offset: [0, 10], className: 'echo-map-label' });
       }
-      liveDot.setTooltipContent(`You are here (±${Math.round(live.accuracy || 0)} m)`);
+      liveDot.setTooltipContent(`Your phone, roughly (±${Math.round(live.accuracy || 0)} m)`);
       recentre.style.display = '';
     } else {
       lastLive = null;
@@ -511,13 +520,31 @@ export async function drawPickerMap(el, data, { onTap, onSelect, ...state } = {}
   recentre.textContent = '◎ My location';
   recentre.setAttribute('aria-label', 'Centre the map on my location');
   recentre.style.display = 'none';
+  /* For a keyboard, a screen reader, or a thumb that cannot hit a small
+     spot: pan the map (arrow keys work once it has focus) until the
+     crosshair is on the spot, then pin it. */
+  const pinCentre = L.DomUtil.create('button', 'echo-map-recentre echo-map-pincentre');
+  pinCentre.type = 'button';
+  pinCentre.textContent = '+ Pin the centre';
+  pinCentre.setAttribute('aria-label', 'Put the delivery pin at the centre of the map');
   const box = L.DomUtil.create('div', 'echo-map-tools');
-  box.append(switcher, recentre, notice);
+  box.append(switcher, notice);
+  /* The location and pin tools sit bottom-left, by the thumb, so the top of
+     a small map is not covered by a stack of buttons. */
+  const lower = L.DomUtil.create('div', 'echo-map-tools echo-map-tools-low');
+  lower.append(recentre, pinCentre);
+  L.DomEvent.disableClickPropagation(lower);
+  const cross = L.DomUtil.create('div', 'echo-map-cross');
+  cross.setAttribute('aria-hidden', 'true');
+  el.append(cross);
   L.DomEvent.disableClickPropagation(box);
   switcher.addEventListener('click', (e) => { const b = e.target.closest('[data-base]'); if (b && !b.disabled) setBase(b.dataset.base); });
   recentre.addEventListener('click', focusLive);
+  pinCentre.addEventListener('click', () => { const c = map.getCenter(); onTap?.(c.lat, c.lng); });
   const Tools = L.Control.extend({ onAdd: () => box });
   new Tools({ position: 'topright' }).addTo(map);
+  const Lower = L.Control.extend({ onAdd: () => lower });
+  new Lower({ position: 'bottomleft' }).addTo(map);
 
   /* A tap on the map itself (not on a marker or a control) is the student's
      own point, exactly where they tapped. */
@@ -535,7 +562,9 @@ export async function drawPickerMap(el, data, { onTap, onSelect, ...state } = {}
   /* Leaflet measures the container on creation; inside a sheet that is
      still sliding in, that measurement is wrong until the next frame. */
   requestAnimationFrame(refresh);
-  return { map, sync, refresh, setBase, base: () => current, focusLive, destroy: () => map.remove(), markers: groups };
+  /* Bring a pin the student cannot see into view (a saved place, a reading). */
+  const focusPin = (at) => { if (at) map.setView([at.lat, at.lng], Math.max(map.getZoom(), 17)); };
+  return { map, sync, refresh, setBase, base: () => current, focusLive, focusPin, destroy: () => map.remove(), markers: groups };
 }
 
 /** What to tell someone when there is no partner marker. */

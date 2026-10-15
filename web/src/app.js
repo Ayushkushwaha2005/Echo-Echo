@@ -20,7 +20,8 @@ import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/dat
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
 import { campusOption } from '../../packages/ui/campus-option.js';
 import { logo, mark, lockup } from '../../brand/logo.js';
-import { mapPointChosen, mapPointAnswered, spotChosen, usableSpot, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
+import { mapPointChosen, mapPointAnswered, gpsPointPlaced, spotFromPick, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
+import { deniedHelp } from '../../packages/data/geofix.js';
 
 restoreTheme();
 
@@ -59,13 +60,15 @@ const S = {
   toast: null,
   auth: { local: '', email: '', college: '', campusId: '', resendAfter: 0, error: '' },
   /* Checkout inputs that are not part of the cart: the delivery contact
-     number and the two free-text refinements to the campus address. */
-  checkout: { phone: '', blockId: '', blockText: '', floor: '', room: '', landmark: '', instructions: '', addrLoaded: false },
-  addr: null,             // the Saved address screen's form, loaded from /me/address
+     number and the words that help a partner find the pinned spot. */
+  checkout: { phone: '', label: '', blockId: '', blockText: '', floor: '', room: '', landmark: '', instructions: '',
+              inBuilding: false, addrLoaded: false },
+  addr: null,             // the default delivery details form, loaded from /me/address
+  placeEdit: null,        // the saved-place editor: { id|null, label, landmark, ... }
   campusMap: null,        // /campus/map - the outline and the destinations a student may choose
-  pick: null,             // the last map tap the server answered: { pin, candidates }
-  gps: null,              // the last live-location answer: { candidates, note, fix } or { error }
-  liveFix: null,          // a live reading the SERVER accepted, drawn on the picker map
+  pick: null,             // the delivery pin and what the server said about it: { pin, from, candidates, ... }
+  gps: null,              // the "Use my current location" attempt: { status, message, accuracy, reason, code }
+  liveFix: null,          // this device's last reading, drawn on the picker map as approximate
   pricing: null,          // /pricing/current - what the fees are right now
   verify: {},             // mailbox-link flow on the verify screen
   campuses: null,         // /campuses
@@ -76,7 +79,7 @@ const S = {
 };
 
 const signedIn = () => !!S.me?.authenticated;
-const NEEDS_ACCOUNT = ['orders', 'tracking', 'profile', 'checkout', 'verify', 'partner', 'join', 'setup'];
+const NEEDS_ACCOUNT = ['orders', 'tracking', 'profile', 'checkout', 'verify', 'partner', 'join', 'setup', 'address', 'place'];
 
 /* ---------- campus -------------------------------------------------------
    The server stores the student's campus; this only reads it. Signed out,
@@ -306,23 +309,20 @@ const NotConfigured = (title, body) => `
 
 const LocLine = () => `
   <button class="row g1 t-sm" data-act="sheet" data-sheet="location" style="font-weight:700;color:var(--accent-text)">
-    ${I.pin}<span>${S.destination ? esc(S.destination.name) : 'Choose a campus spot'}</span>${I.chev}</button>`;
+    ${I.pin}<span>${S.destination ? esc(S.destination.name) : 'Choose your delivery spot'}</span>${I.chev}</button>`;
 
 const CafCard = (c) => `
   <button class="cafcard ${c.open ? '' : 'closed'}" data-act="menu" data-caf="${c.id}">
-    <div class="cafcard-hero" style="background:${c.heroBg}">
-      <span class="wm">${esc(c.name.toUpperCase())}</span>
-      <div class="cafmark" style="background:${c.markBg}">${esc(c.mark)}</div>
-    </div>
-    <div class="between" style="align-items:flex-start">
+    <div class="cafcard-top">
+      <div class="cafmark" style="background:${c.markBg}" aria-hidden="true">${esc(c.mark)}</div>
       <div class="grow">
         <div class="t-h2">${esc(c.name)}</div>
         <div class="t-sm caf-status ${c.open ? 'is-open' : ''}">${esc(c.statusDetail)}</div>
-        ${c.hours?.label ? `<div class="t-xs muted">${esc(c.hours.label)}</div>` : ''}
       </div>
       ${StatusPill(c.open)}
     </div>
-    <div class="row g3 t-xs muted" style="margin-top:10px;flex-wrap:wrap">
+    <div class="cafcard-meta t-xs muted">
+      ${c.hours?.label ? `<span>${esc(c.hours.label)}</span>` : ''}
       ${c.rating.empty ? '<span>No ratings yet</span>'
         : `<span class="row g1">${I.star}<b style="color:var(--text)">${c.rating.text}</b> (${c.rating.count})</span>`}
       ${c.prep_minutes ? `<span>~${c.prep_minutes} min prep</span>` : ''}
@@ -651,13 +651,14 @@ function ScrObEmailCode() {
 function ScrObLocation() {
   const a = S.auth;
   const loc = S.me?.location;
+  const back = S.locationNext || { route: 'checkout' };
   return `<div class="screen no-nav narrow">
-    ${TopBar('')}
+    ${TopBar('', { back: back.route })}
     <div class="pad stack g5 enter" style="padding-top:var(--s-3)">
       <div class="stack g2">
         <h1 class="t-display">Are you on campus?</h1>
-        <p class="t-sm muted">${BRAND} delivers on campus only, so we check your location once each
-          time you sign in.</p>
+        <p class="t-sm muted">Self-pickup orders are for students on campus, so we check your location once
+          per sign-in. Delivery does not need this: it goes to the pin you put on the campus map.</p>
       </div>
 
       ${loc?.confirmed ? `
@@ -665,18 +666,18 @@ function ScrObLocation() {
           <div class="row g2">${Ico(I.check, 20)}<span class="t-h3">You are on campus</span></div>
           <p class="t-xs muted">Checked just now${loc.accuracyM ? `, accurate to about ${Math.round(loc.accuracyM)} m` : ''}.</p>
         </div>
-        <button class="btn btn-primary btn-lg btn-block" data-act="go" data-route="home">Start ordering</button>`
+        <button class="btn btn-primary btn-lg btn-block" data-act="go" data-route="${esc(back.route)}">Continue</button>`
       : `
-        ${a.error ? `<div class="campusnote" role="alert">${Ico(I.lock, 18)}
+        ${a.error ? `<div class="campusnote is-warn" role="alert">${Ico(I.warn, 18)}
           <p class="t-xs" style="color:var(--text-2)">${esc(a.error)}</p></div>` : ''}
         <button class="btn btn-primary btn-lg btn-block" data-act="confirmLocation">
           ${a.error ? 'Try again' : 'Share my location'}</button>
         <div class="campusnote">${Ico(I.pin, 18)}
-          <p class="t-xs" style="color:var(--text-2)">Use your phone with location (GPS) switched on: the check needs
-            your position to within 100 m, which a laptop on Wi-Fi usually cannot give. We check once, and keep only
+          <p class="t-xs" style="color:var(--text-2)">Works best on your phone with Location (GPS) on, near a window
+            or outdoors: the check needs your position to within 100 m and clear of the campus edge. We keep only
             whether the check passed. ${BRAND} does not track you around campus.</p>
         </div>
-        <button class="btn btn-ghost btn-block t-sm" data-act="logout">Sign out</button>`}
+        <button class="btn btn-ghost btn-block t-sm" data-act="deliverInstead">Have it delivered instead</button>`}
     </div>
   </div>`;
 }
@@ -789,14 +790,14 @@ function ScrHome() {
   const cafs = vs?.ok ? vs.v.vendors.map(cafVM) : [];
 
   return `<div class="screen">
-    <div class="topbar">
-      <div class="grow stack">
-        <div class="t-xs muted">${greet}${signedIn() ? `, ${esc(firstName())}` : ''}</div>
-        ${campusOpen() ? LocLine() : `<span class="t-sm" style="font-weight:700">${esc(browseCampus().name)}</span>`}
+    <div class="homehead">
+      <div class="t-sm muted">${greet}${signedIn() ? `, ${esc(firstName())}` : ''}</div>
+      <div class="homehead-row">
+        <h1 class="t-display">Campus food, brought to your spot.</h1>
+        ${signedIn()
+          ? `<button class="avatar avatar-sm hide-lg" data-act="go" data-route="profile" aria-label="Profile">${esc(initials(S.me.user.name))}</button>` : ''}
       </div>
-      ${signedIn()
-        ? `<button class="avatar avatar-sm hide-lg" data-act="go" data-route="profile" aria-label="Profile">${esc(initials(S.me.user.name))}</button>`
-        : `<button class="btn btn-secondary btn-sm hide-lg" data-act="go" data-route="ob-college">Sign in</button>`}
+      ${campusOpen() ? LocLine() : `<span class="t-sm" style="font-weight:700">${esc(browseCampus().name)}</span>`}
     </div>
 
     <div class="pad stack g5 enter">
@@ -1028,11 +1029,13 @@ function ScrCart() {
 }
 
 const FulfilTile = (vendorName, cta) => S.fulfilment === 'delivery' ? `
-  <button class="tile row g3" data-act="sheet" data-sheet="location" style="width:100%;text-align:left">
+  <button class="tile row g3 desttile ${S.destination ? '' : 'is-empty'}" data-act="sheet" data-sheet="location" style="width:100%;text-align:left">
     ${Ico(I.pin, 22)}
     <div class="grow"><div class="t-label">Deliver to</div>
-    <div class="t-h3">${S.destination ? esc(S.destination.name) : 'Choose a campus spot'}</div>
-    ${S.destination?.path ? `<div class="t-xs muted">${esc(S.destination.path)}</div>` : ''}</div>
+    <div class="t-h3">${S.destination ? esc(S.destination.name) : 'Choose your spot on the campus map'}</div>
+    ${S.destination ? `<div class="t-xs muted">${esc(S.destination.spot
+      ? `Pinned on the map · ${S.destination.path}` : S.destination.path || '')}</div>`
+      : '<div class="t-xs muted">Grounds, lawns, sitting areas, outside any block</div>'}</div>
     <span class="t-xs" style="color:var(--accent-text);font-weight:700">${cta}</span>
   </button>` : `
   <div class="tile row g3">
@@ -1081,11 +1084,14 @@ const Bill = () => {
    campus's known blocks; a block that is not listed can be typed. */
 const OTHER_BLOCK = '__other';
 const addrFromSaved = (a) => ({
+  label: a?.label || '',
   blockId: a?.blockListed ? a.blockId : a?.block ? OTHER_BLOCK : '',
   blockText: a?.blockListed ? '' : (a?.block || ''),
   floor: a?.floor || '', room: a?.room || '', landmark: a?.landmark || '', instructions: a?.instructions || '',
+  inBuilding: Boolean(a?.block || a?.floor || a?.room),
 });
 const addrPayload = (st) => ({
+  label: st.label || undefined,
   blockId: st.blockId && st.blockId !== OTHER_BLOCK ? st.blockId : undefined,
   blockText: st.blockId === OTHER_BLOCK ? (st.blockText || undefined) : undefined,
   floor: st.floor || undefined, room: st.room || undefined,
@@ -1093,17 +1099,50 @@ const addrPayload = (st) => ({
 });
 const hasAddr = (st) => Object.values(addrPayload(st)).some(Boolean);
 const addrLine = (a) => [a?.block, a?.floor && `Floor ${a.floor}`, a?.room && `Room ${a.room}`].filter(Boolean).join(' · ');
-const savedAddrLine = () => {
-  const r = need('addr', () => quad.myAddress());
-  return r?.ok && r.v.address ? addrLine(r.v.address) : '';
+const savedPlacesLine = () => {
+  const r = need('places', () => quad.places());
+  const n = r?.ok ? r.v.places.length : 0;
+  return n ? r.v.places.slice(0, 3).map((p) => p.label).join(' · ') + (n > 3 ? ` +${n - 3}` : '') : '';
 };
-/* The form's values as a readable address, block id resolved to its label. */
-const addrView = (st) => ({
-  block: st.blockId === OTHER_BLOCK ? st.blockText
-    : (need('blocks', () => quad.campusBlocks())?.v?.blocks || []).find((x) => x.id === st.blockId)?.label,
-  floor: st.floor, room: st.room,
-});
 
+/* What students most often call a spot with no postal address. A chip only
+   fills the name; anything can be typed instead. */
+const PLACE_LABELS = ['Ground', 'Sitting area', 'Lawn', 'Library', 'Academic block', 'Hostel', 'Cafeteria', 'Main gate'];
+
+/* The words that help a partner find a pinned spot. Nothing here is required
+   and nothing here is a location: the pin decides where the order goes.
+   Block, floor and room appear only for a spot inside a building. */
+function SpotDetails(st, key, { intro = true } = {}) {
+  const attr = (name) => `data-${key}="${name}"`;
+  const id = (name) => `${key}-${name}`;
+  const building = st.inBuilding || st.blockId || st.floor || st.room;
+  return `
+    <div class="field">
+      <label class="t-label" for="${id('label')}">What is this spot? <span class="faint">(optional)</span></label>
+      <div class="chips chips-wrap" role="group" aria-label="Common spots">
+        ${PLACE_LABELS.map((l) => `<button type="button" class="chip" data-act="pickLabel" data-key="${key}" data-label="${esc(l)}"
+          aria-pressed="${st.label === l}">${esc(l)}</button>`).join('')}
+      </div>
+      <input class="input" id="${id('label')}" ${attr('label')} maxlength="40" autocomplete="off"
+             placeholder="Or type a name, e.g. Main ground" value="${esc(st.label || '')}">
+    </div>
+    <div class="field">
+      <label class="t-label" for="${id('landmark')}">Nearby landmark <span class="faint">(optional)</span></label>
+      <input class="input" id="${id('landmark')}" ${attr('landmark')} maxlength="120" autocomplete="off"
+             placeholder="Library ke entrance ke saamne" value="${esc(st.landmark || '')}">
+    </div>
+    <div class="field">
+      <label class="t-label" for="${id('instructions')}">Instructions for your partner <span class="faint">(optional)</span></label>
+      <textarea class="input" id="${id('instructions')}" ${attr('instructions')} maxlength="300" rows="2"
+             placeholder="Ground ke centre mein, main pathway ke paas. Call when you arrive.">${esc(st.instructions || '')}</textarea>
+    </div>
+    ${building ? AddressFields(st, key) : `<button type="button" class="btn btn-ghost btn-sm linkish" data-act="inBuilding" data-key="${key}">
+      + Inside a building? Add block, floor or room</button>`}
+    ${intro ? `<p class="t-xs faint">Only the pin decides where your order goes. These words help your partner find you;
+      a floor or room is never required.</p>` : ''}`;
+}
+
+/* Block, floor and room: for a spot inside a building only. */
 function AddressFields(st, key) {
   const b = need('blocks', () => quad.campusBlocks());
   const blocks = b?.ok ? b.v.blocks : [];
@@ -1111,7 +1150,7 @@ function AddressFields(st, key) {
   const id = (name) => `${key}-${name}`;
   return `
     <div class="field">
-      <label class="t-label" for="${id('block')}">Block</label>
+      <label class="t-label" for="${id('block')}">Block or building <span class="faint">(optional)</span></label>
       <select class="input" id="${id('block')}" ${attr('blockId')}>
         <option value="" ${!st.blockId ? 'selected' : ''}>Choose your block</option>
         ${blocks.map((x) => `<option value="${x.id}" ${st.blockId === x.id ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}
@@ -1124,55 +1163,95 @@ function AddressFields(st, key) {
     </div>` : ''}
     <div class="segrow">
       <div class="field">
-        <label class="t-label" for="${id('floor')}">Floor</label>
+        <label class="t-label" for="${id('floor')}">Floor <span class="faint">(optional)</span></label>
         <input class="input" id="${id('floor')}" ${attr('floor')} maxlength="20" placeholder="2" value="${esc(st.floor || '')}">
       </div>
       <div class="field">
-        <label class="t-label" for="${id('room')}">Room</label>
+        <label class="t-label" for="${id('room')}">Room <span class="faint">(optional)</span></label>
         <input class="input" id="${id('room')}" ${attr('room')} maxlength="20" placeholder="17" value="${esc(st.room || '')}">
       </div>
-    </div>
-    <div class="field">
-      <label class="t-label" for="${id('landmark')}">Landmark <span class="faint">(optional)</span></label>
-      <input class="input" id="${id('landmark')}" ${attr('landmark')} maxlength="120" placeholder="Next to the stationery shop" value="${esc(st.landmark || '')}">
-    </div>
-    <div class="field">
-      <label class="t-label" for="${id('instructions')}">Notes for the delivery partner <span class="faint">(optional)</span></label>
-      <input class="input" id="${id('instructions')}" ${attr('instructions')} maxlength="300" placeholder="Call when you reach the building" value="${esc(st.instructions || '')}">
-    </div>
-    <p class="t-xs faint">Your room number helps your partner find the door. It is not used to check where you are.</p>`;
+    </div>`;
 }
 
-/* Account → Saved address. */
+/* A saved place as a row: its name, its words, and what can be done with it. */
+const PlaceRow = (p, { act = 'editPlace', cta = 'Edit' } = {}) => `
+  <div class="placerow">
+    <span class="placerow-ico">${Ico(I.pin, 18)}</span>
+    <div class="grow">
+      <div class="t-h3">${esc(p.label)}</div>
+      <div class="t-xs muted">${esc([p.landmark && `near ${p.landmark}`, addrLine(p)].filter(Boolean).join(' · ') || 'Pinned on the campus map')}</div>
+    </div>
+    <button class="btn btn-ghost btn-sm" data-act="${act}" data-id="${p.id}">${cta}</button>
+  </div>`;
+
+/* Account → Saved places: pins with names, plus the default details that
+   prefill checkout (the pre-October one-row address, kept as it was). */
 function ScrAddress() {
-  const top = TopBar('Saved address', { back: 'profile' });
+  const top = TopBar('Saved places', { back: 'profile' });
+  const pl = need('places', () => quad.places());
   const r = need('addr', () => quad.myAddress());
   if (!r) return `<div class="screen">${top}${Loading('Loading your address')}</div>`;
   if (!r.ok) return `<div class="screen">${top}${Problem(r.e)}</div>`;
   if (!S.addr) S.addr = addrFromSaved(r.v.address);
   const saved = r.v.address;
   const campusName = S.me?.profile?.campus?.name || saved?.campus || 'Your campus';
+  const places = pl?.ok ? pl.v.places : [];
   return `<div class="screen">
     ${top}
     <div class="pad site-split enter">
     <div class="stack g4">
       <div class="card card-pad stack g3">
-        ${Label('Campus')}
-        <div class="t-h3">${esc(campusName)}</div>
-        <p class="t-xs muted">Your address is always on your own campus. Change campus from your profile.</p>
+        <div class="between">${Label('Your places')}<span class="t-xs faint">${esc(campusName)}</span></div>
+        ${!pl ? Loading('Loading your places') : !pl.ok ? Problem(pl.e) : places.length
+          ? `<div class="stack g1">${places.map((p) => PlaceRow(p)).join('')}</div>`
+          : `<p class="t-sm muted">No saved places yet. Save the spots you order to most: the ground, your
+              sitting area, your block. Each one keeps its exact pin on the map.</p>`}
+        <button class="btn btn-secondary btn-sm" data-act="newPlace" style="align-self:flex-start">+ Add a place</button>
       </div>
       <div class="card card-pad stack g3">
-        ${Label('How to find you')}
-        ${AddressFields(S.addr, 'addr')}
-      </div>
-      <div class="stack g2">
-        <button class="btn btn-primary btn-lg btn-block" data-act="saveAddress" ${hasAddr(S.addr) ? '' : 'disabled'}>Save address</button>
-        ${saved ? '<button class="btn btn-ghost btn-block" data-act="deleteAddress">Remove saved address</button>' : ''}
+        ${Label('Default delivery details')}
+        <p class="t-xs muted">Filled in at checkout when you have not chosen a saved place.</p>
+        ${SpotDetails(S.addr, 'addr', { intro: false })}
+        <div class="row g2">
+          <button class="btn btn-primary btn-sm" data-act="saveAddress" ${hasAddr(S.addr) ? '' : 'disabled'}>Save details</button>
+          ${saved ? '<button class="btn btn-ghost btn-sm" data-act="deleteAddress">Remove</button>' : ''}
+        </div>
       </div>
     </div>
     <aside class="stack g4">
       <div class="campusnote">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">
-        Where your food goes is always a delivery point you choose on the campus map or list. This address only tells your partner which door.</p></div>
+        Where your food goes is always the pin on the campus map, checked by our server against the campus
+        delivery area. Names, landmarks and rooms only help your partner find you.</p></div>
+    </aside>
+    </div>
+  </div>`;
+}
+
+/* Add or edit one saved place: the pin on the map, then its words. */
+function ScrPlace() {
+  const top = TopBar(S.placeEdit?.id ? 'Edit place' : 'New place', { back: 'address' });
+  if (!S.placeEdit) return `<div class="screen">${top}<div class="pad"><button class="btn btn-secondary" data-act="go" data-route="address">Back to saved places</button></div></div>`;
+  const st = S.placeEdit;
+  const ok = usablePin();
+  return `<div class="screen">
+    ${top}
+    <div class="pad site-split enter">
+    <div class="stack g4">
+      <div class="card card-pad stack g3">
+        ${Label('1 · The spot')}
+        ${PickerTools()}
+      </div>
+    </div>
+    <aside class="stack g4">
+      <div class="card card-pad stack g3">
+        ${Label('2 · Name and details')}
+        ${SpotDetails(st, 'pl', { intro: false })}
+      </div>
+      <div class="stack g2">
+        <button class="btn btn-primary btn-lg btn-block" data-act="savePlace" ${ok && st.label ? '' : 'disabled'}>
+          ${!ok ? 'Put the pin on the spot first' : !st.label ? 'Give this place a name' : 'Save place'}</button>
+        ${st.id ? '<button class="btn btn-ghost btn-block" data-act="deletePlace">Delete this place</button>' : ''}
+      </div>
     </aside>
     </div>
   </div>`;
@@ -1192,7 +1271,9 @@ function ScrCheckout() {
   const verified = S.me?.user?.studentStatus === 'approved';
   const phoneDigits = String(S.checkout.phone || (S.me?.user?.contactPhone || '').replace(/^\+91/, '')).replace(/\D/g, '');
   const needsPhone = !/^[6-9]\d{9}$/.test(phoneDigits);
-  const needsLocation = S.me?.location?.required && !S.me?.location?.confirmed;
+  /* Delivery is located by its pin, which the server checks; self pickup
+     still asks the live on-campus check when the campus requires it. */
+  const needsLocation = S.fulfilment === 'pickup' && S.me?.location?.required && !S.me?.location?.confirmed;
   return `<div class="screen">
     ${TopBar('Confirm & pay', { back: 'cart' })}
     <div class="pad site-split enter">
@@ -1204,15 +1285,11 @@ function ScrCheckout() {
       ${FulfilTile(vendorName, 'Change')}
       ${S.fulfilment === 'delivery' ? `
         <div class="card card-pad stack g3">
-          ${Label('Delivery address')}
-          ${S.destination ? `
-            <div class="stack g1">
-              <div class="t-h3">${esc(S.destination.name)}</div>
-              <div class="t-xs muted">${esc([S.me?.profile?.campus?.name, S.destination.path, S.destination.pin ? 'pinned on the map' : ''].filter(Boolean).join(' · '))}</div>
-            </div>` : `<p class="t-sm muted">Choose a campus spot above.</p>`}
-          ${AddressFields(S.checkout, 'co')}
-          <button class="btn btn-ghost btn-sm" data-act="saveAddrFromCheckout" style="align-self:flex-start"
-                  ${hasAddr(S.checkout) ? '' : 'disabled'}>Save as my address</button>
+          ${Label('Help your partner find you')}
+          ${SpotDetails(S.checkout, 'co')}
+          ${S.destination?.spot ? `<button class="btn btn-ghost btn-sm" data-act="savePlaceFromCheckout" style="align-self:flex-start"
+              ${S.checkout.label ? '' : 'disabled title="Give the spot a name first"'}>${S.destination.placeId
+                ? 'Update this saved place' : 'Save this place for next time'}</button>` : ''}
         </div>` : ''}
 
       <div class="card card-pad stack g3">
@@ -1263,6 +1340,28 @@ function ScrCheckout() {
   </div>`;
 }
 
+/* Where a delivery order is going, in the words frozen onto it: the spot's
+   name, its landmark, block/floor/room if any, and the student's note. The
+   pin itself is on the map below. Shown to the student and the partner. */
+function DestinationWords(o) {
+  const snap = o.destination_snapshot || {};
+  const a = o.delivery_address || {};
+  const name = a.label || snap.name || 'Delivery spot';
+  const lines = [
+    o.delivery_landmark && `Near ${o.delivery_landmark}`,
+    addrLine(a),
+    snap.destinationId ? (snap.path || []).join(' — ') : '',
+  ].filter(Boolean);
+  return `<div class="destwords">
+    <span class="destwords-ico">${Ico(I.pin, 18)}</span>
+    <div class="stack g1 grow">
+      <div class="t-label">Delivering to</div>
+      <div class="t-h3">${esc(name)}</div>
+      ${lines.map((l) => `<div class="t-xs muted">${esc(l)}</div>`).join('')}
+      ${o.delivery_instructions ? `<div class="t-xs">“${esc(o.delivery_instructions)}”</div>` : ''}
+    </div></div>`;
+}
+
 /* What the partner needs in front of them while carrying an order: where to
    go, what the student wrote down, who to ring, and what this delivery pays.
    The earning is the server's figure, taken from the policy pinned to the
@@ -1284,11 +1383,14 @@ function DeliveryBrief(o) {
       </div>` : ''}
       <div class="stack g1">
         <div class="t-label">Take it to</div>
-        <div class="t-h3">${esc(addr?.name || t?.v?.destination?.name || 'Loading…')}</div>
-        ${addr?.label ? `<div class="t-xs muted">${esc(addr.label)}</div>` : ''}
+        <div class="t-h3">${esc(o.delivery_address?.label || addr?.name || t?.v?.destination?.name || 'Loading…')}</div>
+        ${addr?.label && addr.label !== addr.name ? `<div class="t-xs muted">${esc(addr.label)}</div>` : ''}
         ${addrLine(o.delivery_address) ? `<div class="t-sm" style="font-weight:700">${esc(addrLine(o.delivery_address))}</div>` : ''}
         ${o.delivery_landmark ? `<div class="t-xs">Landmark: ${esc(o.delivery_landmark)}</div>` : ''}
         ${o.delivery_instructions ? `<div class="t-xs">Note: ${esc(o.delivery_instructions)}</div>` : ''}
+        ${t?.ok && t.v.destination ? `<a class="btn btn-secondary btn-sm" style="align-self:flex-start;margin-top:4px" target="_blank"
+            rel="noopener noreferrer" href="https://www.google.com/maps/dir/?api=1&travelmode=walking&destination=${
+            Number(t.v.destination.lat).toFixed(6)},${Number(t.v.destination.lng).toFixed(6)}">Walking directions to the pin</a>` : ''}
       </div>
       ${o.delivery_contact_phone ? `<div class="stack g1">
         <div class="t-label">Contact on arrival</div>
@@ -1338,8 +1440,17 @@ const drawnMaps = new WeakSet();
    (the map is toggled off or the sheet closes). */
 let picker = null;   // { host, ctl }
 
+/* The saved-place editor uses the same map and pin, but never touches the
+   order's destination. */
+const editingPlace = () => S.route === 'place';
+const applyPick = (next) => {
+  if (!next) return;
+  if (editingPlace()) { const { destination, ...rest } = next; Object.assign(S, rest); } else Object.assign(S, next);
+};
+const usablePin = () => Boolean(S.pick && !S.pick.pending && S.pick.inside && !S.pick.error);
+
 const pickerState = () => ({
-  pin: S.pick?.pin || S.destination?.pin || S.destination?.spot || null,
+  pin: S.pick?.pin || (editingPlace() ? null : S.destination?.pin || S.destination?.spot) || null,
   pinStatus: S.pick ? (S.pick.pending ? 'checking' : S.pick.error ? 'refused' : 'ok') : 'ok',
   selectedId: S.destination?.id || null,
   /* Only a reading the server accepted is ever drawn. */
@@ -1351,9 +1462,18 @@ const pickerState = () => ({
    an earlier point) and selects nothing in its place: the server says what
    is near it, and the student chooses. See picker-state.js. */
 async function onPickerTap(lat, lng) {
-  Object.assign(S, mapPointChosen(lat, lng));
-  const { pin } = S.pick;
+  applyPick(mapPointChosen(lat, lng));
   render();
+  await checkPick();
+  /* On a phone the answer is below the map: bring it into view. */
+  document.getElementById('pin-results')?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+}
+
+/* Ask the server about the pin as it is now. An answer for a pin that has
+   since moved is dropped (mapPointAnswered returns null). */
+async function checkPick() {
+  const pin = S.pick?.pin;
+  if (!pin) return;
   let answer;
   try {
     const out = await quad.campusPin(pin.lat, pin.lng);
@@ -1362,15 +1482,15 @@ async function onPickerTap(lat, lng) {
     answer = { error: explain(e) };
   }
   const next = mapPointAnswered(S, pin, answer);
-  if (!next) return;                               // a newer tap superseded this one
+  if (!next) return;
   Object.assign(S, next);
   render();
-  /* On a phone the answer is below the map: bring it into view. */
-  document.getElementById('pin-results')?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
 }
 
-/* A tap on a delivery point's own marker selects exactly that point. */
+/* A tap on a delivery point's own marker selects exactly that point; in the
+   place editor it moves the pin there instead. */
 function onPickerSelect(dest) {
+  if (editingPlace()) { onPickerTap(dest.lat, dest.lng); return; }
   Object.assign(S, destinationChosen(dest));
   render();
 }
@@ -1385,8 +1505,9 @@ async function paintPicker() {
     if (picker.host.parentElement !== slot) slot.replaceChildren(picker.host);
     picker.ctl?.sync(pickerState());
     picker.ctl?.refresh();
-    /* A live reading the server just accepted: show the student where they are. */
+    /* A fresh reading, or a saved place: show the student where the pin is. */
     if (S.liveFocus) { S.liveFocus = false; picker.ctl?.focusLive(); }
+    if (S.pinFocus) { S.pinFocus = false; picker.ctl?.focusPin(S.pick?.pin); }
     return;
   }
   const host = document.createElement('div');
@@ -1464,6 +1585,7 @@ function ScrTracking() {
         </div>
         <span class="badge ${done ? 'badge-open' : 'badge-rose'}"><i class="dot ${done ? '' : 'dot-live'}"></i>${esc(ORDER_LABEL[o.state])}</span>
       </div>
+      ${!pickup ? DestinationWords(o) : ''}
       ${!pickup && ['assigned', 'picked_up', 'ready', 'preparing', 'confirmed'].includes(o.state)
         ? MapCard(o.id) : ''}
       ${!pickup && ['assigned', 'picked_up'].includes(o.state) ? `
@@ -1641,7 +1763,7 @@ function ScrProfile() {
     [I.shield, 'Student verification', vTitle, ['approved', 'suspended'].includes(u.studentStatus) ? '' : 'data-act="go" data-route="verify"'],
     [I.pin, 'Campus', me.profile?.campus ? `${me.profile.campus.name}${me.profile.campus.available ? '' : ' · service coming soon'}` : 'Not selected', 'data-act="go" data-route="setup"'],
     [I.user, 'Name and contact number', [me.profile?.name, prettyPhone(me.profile?.contactPhone)].filter(Boolean).join(' · ') || 'Not added yet', 'data-act="go" data-route="setup"'],
-    [I.pin, 'Saved address', savedAddrLine() || 'Block, floor and room for deliveries', 'data-act="go" data-route="address"'],
+    [I.pin, 'Saved places', savedPlacesLine() || 'Pins for the spots you order to', 'data-act="go" data-route="address"'],
     [I.receipt, 'Order history', 'Everything you have ordered', 'data-act="go" data-route="orders"'],
     [I.bike, `Deliver with ${BRAND}`, partnerSub,
       p?.status === 'approved' ? 'data-act="go" data-route="partner"' : 'data-act="go" data-route="join"'],
@@ -2227,17 +2349,17 @@ function PinResults() {
   const p = S.pick;
   if (!p) return '';
   const at = `${p.pin.lat.toFixed(5)}, ${p.pin.lng.toFixed(5)}`;
-  if (p.pending) return `<p class="t-xs muted" role="status">Selected spot ${esc(at)} · checking…</p>`;
+  if (p.pending) return `<p class="t-xs muted" role="status">Checking the spot ${esc(at)}…</p>`;
   if (p.error || !p.inside) {
     return `<div class="campusnote" role="alert">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)"><b>Selected spot</b> ${
       esc(at)}<br>${esc(p.error || 'This spot is outside the campus delivery area.')}</p></div>`;
   }
-  return `<div class="card card-pad stack g1" role="status" id="spot-ok">
-      ${Label('Delivery spot selected')}
-      <div class="t-sm" style="font-weight:700">${esc(at)}</div>
-      <div class="t-xs" style="color:var(--accent-text)">Inside ${esc(S.me?.profile?.campus?.name || 'campus')} delivery area. You can deliver to this spot.</div>
+  return `<div class="spotok" role="status" id="spot-ok">
+      ${Ico(I.check, 18)}<div class="stack g1">
+      <div class="t-sm" style="font-weight:700">${esc(p.label || (p.from === 'gps' ? 'Your current location' : 'Your pinned spot'))}</div>
+      <div class="t-xs muted">${esc(at)} · inside the ${esc(S.me?.profile?.campus?.name || 'campus')} delivery area</div></div>
     </div>`
-    + (p.candidates?.length ? `<p class="t-xs faint">Or deliver to a named point near it:</p>`
+    + (p.candidates?.length && !editingPlace() ? `<p class="t-xs faint">Or deliver to a named point near it:</p>`
       + p.candidates.map((c) => DestChoice(c, `~${c.metres} m from your spot`, p.pin)).join('') : '');
 }
 
@@ -2248,28 +2370,58 @@ function PickerFoot() {
     <button class="btn btn-primary btn-block btn-lg" ${c.enabled ? `data-act="${c.act}"` : 'disabled aria-describedby="pick-reason"'}>${esc(c.label)}</button></div>`;
 }
 
-/* What the server said about the last live-location reading. Accepted, the
-   reading itself can be the delivery spot; the server re-checks it. */
-function GpsResults() {
+/* "Use my current location", in every state it can be in. The message for
+   a finished attempt is written when it finishes (gpsMessage). */
+function GpsStatus() {
   const g = S.gps;
   if (!g) return '';
-  if (g.error) return `<div class="campusnote" role="alert">${Ico(I.lock, 18)}<p class="t-xs" style="color:var(--text-2)">${esc(g.error)}</p></div>`;
-  const f = g.fix;
-  return `<div class="card card-pad stack g2" role="status">
-      ${Label('Your live location')}
-      ${f ? `<div class="t-sm" style="font-weight:700">${esc(`${Number(f.lat).toFixed(5)}, ${Number(f.lng).toFixed(5)}`)} · ±${Math.round(f.accuracy)} m</div>` : ''}
-      <div class="t-xs" style="color:var(--accent-text)">Inside the campus delivery area.</div>
-      ${f ? `<button class="btn btn-secondary btn-sm" data-act="useLiveSpot" style="align-self:flex-start">Deliver to my live location</button>` : ''}
-    </div>`
-    + (g.candidates?.length ? `<p class="t-xs faint">Or a named delivery point near you:</p>`
-      + g.candidates.map((c) => DestChoice(c, `${c.path && c.path !== c.name ? `${c.path} · ` : ''}~${c.metres} m away`)).join('') : '');
+  if (g.status === 'locating') {
+    return `<div class="gps-status" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>
+      <div class="stack g1"><div class="t-sm" style="font-weight:700">Finding your location${g.accuracy ? ` · ±${g.accuracy} m so far` : '…'}</div>
+      <div class="t-xs muted">Allow location if your browser asks. Indoors this can take up to 15 seconds.</div></div></div>`;
+  }
+  if (g.status === 'error') {
+    return `<div class="campusnote is-warn" role="alert">${Ico(I.warn, 18)}<div class="stack g2">
+      <p class="t-xs" style="color:var(--text-2)">${esc(g.message)}</p>
+      <div class="row g2"><button class="btn btn-secondary btn-sm" data-act="useGps">Try again</button></div>
+      <p class="t-xs faint">Or tap your exact spot on the map below. We check any spot you choose against the campus delivery area.</p>
+      </div></div>`;
+  }
+  return `<div class="campusnote ${g.reason ? 'is-warn' : 'is-ok'}" role="status">${Ico(g.reason ? I.warn : I.check, 18)}
+    <p class="t-xs" style="color:var(--text-2)">${esc(g.message)}</p></div>`;
 }
+
+/* What to say once a reading is in, by what the server made of it. */
+function gpsMessage(out) {
+  const acc = Math.round(out.fix?.accuracy ?? out.accuracy ?? 0);
+  switch (out.inside ? 'ok' : out.reason) {
+    case 'ok': return `Pin placed at your current location (±${acc} m). Drag it if your exact spot is a little off.`;
+    case 'low_accuracy': return `Your phone could only place you within about ${acc} m, so the pin may be off. Drag it to your exact spot, or tap where you are.`;
+    case 'accuracy_unknown': return 'Your phone did not say how accurate its reading is, so the pin may be off. Drag it to your exact spot.';
+    case 'near_boundary': return `You look close to the edge of campus, and a ±${acc} m reading cannot tell which side. Check the pin and drag it to your exact spot.`;
+    case 'outside_campus': return `Your phone places you outside the campus delivery area (±${acc} m). If you are on campus, tap your exact spot on the map.`;
+    case 'no_boundary_configured': return 'Campus delivery is not switched on yet: the campus outline has not been confirmed. Choose self pickup for now.';
+    default: return out.note || 'We could not place you on campus. Tap your exact spot on the map instead.';
+  }
+}
+
+/* The map, the location button and what the server said about the pin:
+   shared by the delivery sheet and the saved-place editor. */
+const PickerTools = () => `
+  <button class="btn btn-secondary btn-block" data-act="useGps" ${S.gps?.status === 'locating' ? 'disabled aria-busy="true"' : ''}>
+    ${Ico(I.pin, 18)} ${S.gps?.status === 'locating' ? 'Finding your location…' : 'Use my current location'}</button>
+  <div id="gps-results" class="stack g2">${GpsStatus()}</div>
+  <div class="echo-picker-slot"></div>
+  ${MapLegend()}
+  <p class="t-xs faint">Tap the map or drag the pin to the exact spot. With a keyboard: focus the map, move it with the
+    arrow keys, then press "Pin the centre".</p>
+  <div id="pin-results" class="stack g2">${PinResults()}</div>`;
 
 /* What each thing on the picker map means. */
 const MapLegend = () => `<div class="maplegend t-xs muted" aria-hidden="true">
   <span><i class="lg lg-dest"></i>Named delivery point</span>
   <span><i class="lg lg-pin"></i>Your delivery spot</span>
-  ${S.liveFix ? '<span><i class="lg lg-live"></i>You (live location)</span>' : ''}
+  ${S.liveFix ? '<span><i class="lg lg-live"></i>Your phone (approximate)</span>' : ''}
   <span><i class="lg lg-area"></i>Campus delivery area</span></div>`;
 
 function Sheet() {
@@ -2283,29 +2435,30 @@ function Sheet() {
     const r = need(`campus:${parent}:${vendorId || ''}`, () => quad.campusChildren(parent || undefined, { vendorId }));
     const nodes = r?.ok ? r.v.nodes : [];
     const deliveryOff = r?.ok && r.v.deliveryAvailable === false;
+    const pl = signedIn() ? need('places', () => quad.places()) : null;
+    const places = pl?.ok ? pl.v.places : [];
     body = `
       <div class="sheet-body stack g4">
         <div class="stack g1">
           <h2 class="t-display">Where should we bring it?</h2>
-          <p class="t-sm muted">${parent ? esc(S.sheet.parentName || '') : 'Pick a delivery point on the map or from the list. Your block and room go in your address.'}</p>
+          <p class="t-sm muted">Anywhere inside the campus delivery area: the ground, a lawn, a sitting area,
+            outside a block. Put the pin on the exact spot.</p>
         </div>
-        ${!deliveryOff ? `<div class="segrow">
-          <button class="btn btn-secondary btn-sm" data-act="useGps">${I.pin} Use my live location</button>
-          <button class="btn ${S.sheet.mode === 'map' ? 'btn-primary' : 'btn-secondary'} btn-sm" data-act="pickOnMap">Select on map</button>
-        </div>
-        <div id="gps-results" class="stack g2">${GpsResults()}</div>
-        ${S.sheet.mode === 'map' ? `<div class="stack g2">
-          <p class="t-xs faint">Tap the spot on campus where you want it. We check the spot and show the delivery points near it.</p>
-          <div class="echo-picker-slot"></div>
-          ${MapLegend()}
-          <div id="pin-results" class="stack g2">${PinResults()}</div>
-        </div>` : ''}
-        ${S.destination ? `<div class="card card-pad stack g1">
-          ${Label('Selected location')}
-          <div class="t-h3">${esc(S.destination.name)}</div>
-          <div class="t-xs muted">${esc([S.me?.profile?.campus?.name, S.destination.spot ? S.destination.path : '', S.destination.pin ? 'Pinned on the map' : ''].filter(Boolean).join(' · '))}</div>
-          ${addrLine(addrView(S.checkout)) ? `<div class="t-xs">${esc(addrLine(addrView(S.checkout)))}</div>` : ''}
-        </div>` : ''}` : ''}
+        ${!deliveryOff ? `
+          ${places.length ? `<div class="stack g2">${Label('Your places')}
+            <div class="chips chips-wrap" role="group" aria-label="Your saved places">${places.map((p) => `
+              <button type="button" class="chip chip-place" data-act="usePlace" data-id="${p.id}"
+                aria-pressed="${S.pick?.placeId === p.id || S.destination?.placeId === p.id}">${Ico(I.pin, 14)} ${esc(p.label)}</button>`).join('')}
+            </div></div>` : ''}
+          ${PickerTools()}
+          ${S.destination && !S.pick ? `<div class="card card-pad stack g1" role="status">
+            ${Label('Selected')}
+            <div class="t-h3">${esc(S.destination.name)}</div>
+            <div class="t-xs muted">${esc([S.me?.profile?.campus?.name, S.destination.spot ? S.destination.path : '', S.destination.pin ? 'Pinned on the map' : ''].filter(Boolean).join(' · '))}</div>
+          </div>` : ''}
+          <details class="named" ${parent || S.namedOpen ? 'open' : ''}>
+            <summary class="t-label">Or choose a named delivery point</summary>
+            <div class="stack g3" style="margin-top:var(--s-3)">` : ''}
         ${parent ? `<button class="btn btn-ghost btn-sm" data-act="sheetUp" style="align-self:flex-start;padding-inline:0">${I.back} All areas</button>` : ''}
         ${deliveryOff ? `<div class="campusnote">${Ico(I.clock, 18)}<div class="stack g1">
             <div class="t-h3">Campus delivery is not available yet</div>
@@ -2322,9 +2475,10 @@ function Sheet() {
               <span class="t-xs muted">${off ? 'Delivery not available' : l.deliverable ? esc(l.detail || 'Deliver here') : 'Choose a spot inside'}</span>
               ${l.estimate && !off ? `<span class="t-xs" style="font-weight:700;color:var(--accent-text)" title="Estimated from the distance between the counter and this spot. Not live tracking.">${esc(l.estimate.label)} walk</span>` : ''}</button>`;
           }).join('')}
-        </div>` : '<p class="t-sm muted">No delivery spots here yet.</p>'}
-        <div class="campusnote">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">
-          ${BRAND} delivers on campus only, so there is nowhere to type a street address. Off campus is not hidden away in a menu somewhere; the system has no way to store one.</p></div>
+        </div>` : '<p class="t-sm muted">No named delivery points here yet. Your own pin works anywhere inside the outline.</p>'}
+        ${!deliveryOff ? '</div></details>' : ''}
+        <p class="t-xs faint">${BRAND} delivers on campus only. Every pin is checked by our server against the
+          campus delivery area, so there is no way to send an order off campus.</p>
       </div>
       ${PickerFoot()}`;
   }
@@ -2404,7 +2558,7 @@ const ROUTES = {
   home: ScrHome, cafes: ScrCafes, menu: ScrMenu, cart: ScrCart, checkout: ScrCheckout,
   tracking: ScrTracking, orders: ScrOrders, profile: ScrProfile, ai: ScrAI,
   verify: ScrVerify, partner: ScrPartner, join: ScrJoin, setup: ScrSetup, address: ScrAddress,
-  deliver: ScrDeliver,
+  place: ScrPlace, deliver: ScrDeliver,
 };
 const NAVLESS = ['welcome', 'ob-college', 'ob-campus', 'ob-email', 'ob-email-code',
                  'ob-location', 'checkout', 'setup'];
@@ -2439,8 +2593,12 @@ const SiteHeader = () => {
 let shownSheet = null;
 const sheetKey = () => (S.sheet ? `${S.sheet.name}:${S.sheet.parent || ''}` : null);
 
+let lastRoute = null;
 function render(fresh = false) {
   const app = document.getElementById('app');
+  /* A new screen eases in; the same screen re-rendered after a tap does not. */
+  const settled = lastRoute === S.route;
+  lastRoute = S.route;
   const keep = fresh ? 0 : window.scrollY;
   const key = sheetKey();
   const same = key && key === shownSheet;
@@ -2448,7 +2606,7 @@ function render(fresh = false) {
   const scr = (ROUTES[S.route] || ScrHome)();
   const nav = NAVLESS.includes(S.route) ? '' : BottomNav();
   app.innerHTML = `
-    <div class="site">
+    <div class="site${settled ? ' settled' : ''}">
       ${SiteHeader()}
       <main class="site-main">${scr}</main>
       <footer class="site-foot">${logo({ size: 22, alt: '', className: 'brand-logo brand-logo-foot' })} ${BRAND} · ${esc(campusLabel())} · Campus delivery only ·
@@ -2515,13 +2673,10 @@ async function signedInNow() {
   if (profileIncomplete() && S.me.surfaces?.includes('web') && S.me.roles?.includes('student')) {
     S.setupNext = next; next = { route: 'setup', params: {} };
   }
-  /* The live-location check. Required, so it comes before any ordering
-     screen; the server enforces the same thing on every ordering call, so
-     this is the polite version of a refusal that exists either way. */
-  if (S.me.location?.required && !S.me.location?.confirmed &&
-      S.me.surfaces?.includes('web') && S.me.roles?.includes('student')) {
-    S.locationNext = next; next = { route: 'ob-location', params: {} };
-  }
+  /* No location prompt here (Oct 2026). Location is asked for only when the
+     student acts on it: "Use my current location" on the delivery map, or
+     the on-campus check before a self-pickup order. The server enforces
+     both on every ordering call, whatever this screen does. */
   S.auth = { local: '', email: '', college: '', campusId: '', resendAfter: 0, error: '' };
   if (!S.me.surfaces?.includes('web')) {
     toast('This account does not open the customer site', 'bad');
@@ -2581,15 +2736,22 @@ document.addEventListener('click', async (e) => {
       S.auth.campusId = a.id; S.auth.error = '';
       go('ob-email');
       break;
+    case 'deliverInstead':
+      S.fulfilment = 'delivery'; S.auth.error = '';
+      go(S.cart.length ? 'cart' : 'home');
+      if (S.cart.length) setSheet('location');
+      break;
     case 'confirmLocation':
       await withBusy(t, async () => {
         try {
+          if (await quad.locationPermission() === 'denied') throw new Error(deniedHelp());
+          if (document.body.contains(t)) t.textContent = 'Finding your location…';
           await quad.confirmPresence({ onReading: (f) => {
-            if (document.body.contains(t)) t.textContent = `Locating… ±${Math.round(f.accuracy)} m`;
+            if (document.body.contains(t)) t.textContent = `Finding your location… ±${Math.round(f.accuracy)} m`;
           } });
           S.auth.error = '';
           drop('me'); S.me = await quad.me();
-          const next = S.locationNext || { route: 'home', params: {} };
+          const next = S.locationNext || { route: 'checkout', params: {} };
           S.locationNext = null;
           toast('You are on campus');
           go(next.route, next.params);
@@ -2622,8 +2784,9 @@ document.addEventListener('click', async (e) => {
       });
       break;
     case 'closeSheet':
-      /* A live reading is only good while the student is standing there. */
-      if (S.sheet?.name === 'location') { S.gps = null; S.liveFix = null; }
+      /* A live reading is only good while the student is standing there, and
+         an unconfirmed pin is not a choice. */
+      if (S.sheet?.name === 'location') { S.gps = null; S.liveFix = null; S.pick = null; }
       setSheet(null); break;
     case 'sheetDrill': setSheet('location', { parent: a.id, parentName: a.name }); break;
     case 'sheetUp': setSheet('location'); break;
@@ -2634,21 +2797,81 @@ document.addEventListener('click', async (e) => {
         pin: a.pinLat ? { lat: Number(a.pinLat), lng: Number(a.pinLng) } : null }));
       render(); break;
     case 'useSpot': {
-      /* "Choose this spot": the exact point the server said is inside becomes
-         the destination, and the picker closes. The order re-validates it. */
-      const next = spotChosen(usableSpot(S), { source: 'map' });
-      if (next) { Object.assign(S, next); setSheet(null); toast('Delivery spot chosen'); } else render();
+      /* The checked pin becomes the destination and the picker closes: a
+         live-location spot only if the server was confident about that
+         reading and the pin was not moved; otherwise a map spot. The order
+         re-validates it either way. */
+      const next = spotFromPick(S.pick);
+      if (next) {
+        Object.assign(S, next);
+        S.gps = null; S.liveFix = null;
+        setSheet(null); toast('Delivery spot chosen');
+      } else render();
       break;
     }
-    case 'useLiveSpot': {
-      const f = S.gps?.fix;
-      const next = f && spotChosen({ lat: Number(f.lat), lng: Number(f.lng) }, { source: 'gps', accuracy: Number(f.accuracy) });
-      if (next) { Object.assign(S, next); setSheet(null); toast('Delivering to your live location'); } else render();
+    case 'usePlace': {
+      const p = (cache.places?.v?.places || []).find((x) => x.id === a.id);
+      if (!p) break;
+      applyPick(mapPointChosen(p.lat, p.lng, { from: 'saved', placeId: p.id, label: p.label }));
+      /* Its words come with it, for this order only. */
+      S.checkout = { ...S.checkout, ...addrFromSaved(p), addrLoaded: true };
+      S.pinFocus = true;
+      render();
+      await checkPick();
       break;
     }
-    case 'pickOnMap':
-      S.sheet = { ...S.sheet, mode: S.sheet?.mode === 'map' ? null : 'map' };
+    case 'pickLabel': {
+      const key = { co: 'checkout', addr: 'addr', pl: 'placeEdit' }[a.key];
+      if (!key || !S[key]) break;
+      S[key] = { ...S[key], label: S[key].label === a.label ? '' : a.label };
       render(); break;
+    }
+    case 'inBuilding': {
+      const key = { co: 'checkout', addr: 'addr', pl: 'placeEdit' }[a.key];
+      if (key && S[key]) { S[key] = { ...S[key], inBuilding: true }; render(); }
+      break;
+    }
+    case 'newPlace':
+      S.placeEdit = { id: null, ...addrFromSaved(null) };
+      S.pick = null; S.gps = null; S.liveFix = null;
+      go('place'); break;
+    case 'editPlace': {
+      const p = (cache.places?.v?.places || []).find((x) => x.id === a.id);
+      if (!p) break;
+      S.placeEdit = { id: p.id, ...addrFromSaved(p) };
+      S.pick = { pin: { lat: p.lat, lng: p.lng }, from: 'saved', inside: true, candidates: [] };
+      S.gps = null; S.liveFix = null; S.pinFocus = true;
+      go('place');
+      checkPick();   // the outline may have moved since it was saved
+      break;
+    }
+    case 'savePlace':
+      await withBusy(t, async () => {
+        if (!usablePin()) throw new Error('Put the pin on the spot first.');
+        const body = { ...addrPayload(S.placeEdit), lat: S.pick.pin.lat, lng: S.pick.pin.lng };
+        if (S.placeEdit.id) await quad.updatePlace(S.placeEdit.id, body); else await quad.createPlace(body);
+        drop('places'); S.placeEdit = null; S.pick = null; S.gps = null; S.liveFix = null;
+        toast('Place saved'); go('address');
+      });
+      break;
+    case 'deletePlace':
+      await withBusy(t, async () => {
+        await quad.deletePlace(S.placeEdit.id);
+        if (S.destination?.placeId === S.placeEdit.id) S.destination = { ...S.destination, placeId: null };
+        drop('places'); S.placeEdit = null; S.pick = null;
+        toast('Place deleted'); go('address');
+      });
+      break;
+    case 'savePlaceFromCheckout':
+      await withBusy(t, async () => {
+        const spot = S.destination?.spot;
+        if (!spot) throw new Error('Choose your spot on the map first.');
+        const body = { ...addrPayload(S.checkout), lat: spot.lat, lng: spot.lng };
+        const out = S.destination.placeId ? await quad.updatePlace(S.destination.placeId, body) : await quad.createPlace(body);
+        S.destination = { ...S.destination, placeId: out.place.id, name: out.place.label };
+        drop('places'); toast(`Saved as "${out.place.label}"`); render();
+      });
+      break;
     case 'saveAddress':
       await withBusy(t, async () => {
         await quad.saveAddress(addrPayload(S.addr));
@@ -2660,43 +2883,41 @@ document.addEventListener('click', async (e) => {
       await withBusy(t, async () => {
         await quad.deleteAddress();
         drop('addr'); S.addr = null; S.checkout = { ...S.checkout, ...addrFromSaved(null), addrLoaded: false };
-        toast('Saved address removed'); render();
+        toast('Default details removed'); render();
       });
       break;
-    case 'saveAddrFromCheckout':
-      await withBusy(t, async () => {
-        await quad.saveAddress(addrPayload(S.checkout));
-        drop('addr'); S.addr = null;
-        toast('Saved as your address'); render();
-      });
+    case 'useGps': {
+      /* Asked only now, because the student pressed the button. A site the
+         browser has blocked cannot be re-asked: say how to unblock it. */
+      if (S.gps?.status === 'locating') break;
+      if (await quad.locationPermission() === 'denied') {
+        S.gps = { status: 'error', code: 'denied', message: deniedHelp() }; render(); break;
+      }
+      S.gps = { status: 'locating', accuracy: null }; render();
+      let out;
+      try {
+        out = await quad.locate({ onReading: (f) => {
+          S.gps = { status: 'locating', accuracy: Math.round(f.accuracy) };
+          const box = document.getElementById('gps-results');
+          if (box) box.innerHTML = GpsStatus();
+        } });
+      } catch (e) {
+        S.gps = { status: 'error', code: e.code || null, message: explain(e) }; render(); break;
+      }
+      /* The reading is drawn as approximate whatever the server made of it;
+         the pin goes on it only if it could be on campus, never anywhere else. */
+      S.liveFix = out.fix; S.liveFocus = true;
+      const placed = gpsPointPlaced(out.fix, out);
+      /* A reading that cannot be placed also removes an earlier pin from the
+         delivery picker: the student asked where they are NOW, and a stale
+         pin beside "you are outside" would be offered as if it answered. */
+      if (placed.pick) applyPick(placed);
+      else if (!editingPlace()) S.pick = null;
+      S.gps = { status: 'done', reason: out.inside ? null : out.reason || 'unplaced', message: gpsMessage(out) };
+      render();
+      if (S.pick?.pending) await checkPick();
       break;
-    case 'useGps':
-      await withBusy(t, async () => {
-        S.gps = null; S.liveFix = null;
-        let out;
-        try {
-          out = await quad.locate({ onReading: (f) => {
-            if (document.body.contains(t)) t.textContent = `Locating… ±${Math.round(f.accuracy)} m`;
-          } });
-        } catch (e) {
-          S.gps = { error: explain(e) }; render(); return;
-        }
-        if (!out.inside) {
-          S.gps = { error: out.reason === 'outside_campus' ? 'You are outside the campus delivery area.'
-            : out.note || 'We could not place you on campus. Select the spot on the map instead.' };
-        } else {
-          /* Accepted by the server: only now is the student's position drawn. */
-          S.liveFix = out.fix;
-          /* ...and open the map on it, so they can see where that is. */
-          S.sheet = { ...S.sheet, mode: 'map' };
-          S.liveFocus = true;
-          /* A map tap that led nowhere is not left beside the live answer. */
-          if (S.pick && !S.pick.inside) S.pick = null;
-          S.gps = { candidates: out.candidates || [], note: out.note, fix: out.fix };
-        }
-        render();
-      });
-      break;
+    }
 
     case 'report':
       await withBusy(t, async () => {
@@ -2743,10 +2964,12 @@ document.addEventListener('click', async (e) => {
           /* How to find the door (frozen onto the order by the server), and
              the map pin if the spot was chosen on the map. */
           address: S.fulfilment === 'delivery' && hasAddr(S.checkout) ? addrPayload(S.checkout) : undefined,
+          /* (A saved place's pin is sent as a map spot like any other.) */
           pin: S.fulfilment === 'delivery' ? (S.destination?.pin || undefined) : undefined,
           /* Or the exact spot itself (migration 027); the server re-validates it. */
           spot: S.fulfilment === 'delivery' ? (S.destination?.spot || undefined) : undefined,
         });
+        if (S.fulfilment === 'delivery' && S.destination?.placeId) quad.placeUsed(S.destination.placeId).catch(() => {});
         const intent = await quad.paymentIntent(draft.id);
         await openGateway(intent, draft);
       });
@@ -3015,6 +3238,28 @@ document.addEventListener('submit', async (e) => {
   }
 });
 
+/* Typing a spot's name enables saving it without re-rendering the page,
+   which would take the cursor out of the field mid-word. */
+function syncSaveButtons() {
+  const sp = document.querySelector('[data-act="savePlace"]');
+  if (sp && S.placeEdit) {
+    const ok = usablePin();
+    sp.disabled = !(ok && S.placeEdit.label);
+    sp.textContent = !ok ? 'Put the pin on the spot first' : !S.placeEdit.label ? 'Give this place a name' : 'Save place';
+  }
+  const sc = document.querySelector('[data-act="savePlaceFromCheckout"]');
+  if (sc) sc.disabled = !S.checkout.label;
+  for (const c of document.querySelectorAll('[data-act="pickLabel"]')) {
+    const st = S[{ co: 'checkout', addr: 'addr', pl: 'placeEdit' }[c.dataset.key]];
+    c.setAttribute('aria-pressed', String(st?.label === c.dataset.label));
+  }
+}
+
+/* An opened disclosure stays open across re-renders. */
+document.addEventListener('toggle', (e) => {
+  if (e.target?.matches?.('details.named')) S.namedOpen = e.target.open;
+}, true);
+
 /* Typed text survives a re-render (choosing stars or a campus redraws the screen). */
 function keepSetupInputs() {
   const f = document.querySelector('[data-form=setup]');
@@ -3027,8 +3272,11 @@ document.addEventListener('input', (e) => {
   if (co) S.checkout = { ...S.checkout, [co.dataset.co]: co.value };
   const ad = e.target.closest?.('[data-addr]');
   if (ad) S.addr = { ...(S.addr || {}), [ad.dataset.addr]: ad.value };
-  /* Choosing "not listed" reveals a text field; the save buttons enable. */
-  if (co?.dataset.co === 'blockId' || ad?.dataset.addr === 'blockId') render();
+  const pe = e.target.closest?.('[data-pl]');
+  if (pe && S.placeEdit) S.placeEdit = { ...S.placeEdit, [pe.dataset.pl]: pe.value };
+  /* Choosing "not listed" reveals a text field; a name enables saving. */
+  if (co?.dataset.co === 'blockId' || ad?.dataset.addr === 'blockId' || pe?.dataset.pl === 'blockId') render();
+  else if (pe?.dataset.pl === 'label' || co?.dataset.co === 'label') syncSaveButtons();
 
   const rb = e.target.closest?.('[data-review-body]');
   if (rb) {
@@ -3169,12 +3417,11 @@ async function openGateway(intent, draft) {
      screen. Signed out, only the screens anyone may see are honoured. */
   const asked = routeFromHash();
   const wanted = asked && (signedIn() || PUBLIC_ROUTES.includes(asked.route)) ? asked : null;
+  /* The live-location check is no longer a gate on loading the site: the
+     server still refuses a self-pickup order without it, and every delivery
+     order without a pin it has placed inside the campus outline. */
   const gate = !signedIn() ? null
     : profileIncomplete() && S.me.roles?.includes('student') ? 'setup'
-    /* Reloading the page does not get you past the location check: it is
-       recorded on the session, so the answer survives the refresh and a
-       session that never passed it lands back here. */
-    : S.me.location?.required && !S.me.location?.confirmed && S.me.roles?.includes('student') ? 'ob-location'
     : null;
   if (gate) {
     if (gate === 'setup') S.setupNext = wanted; else S.locationNext = wanted;

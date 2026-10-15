@@ -8,7 +8,7 @@
    ========================================================================== */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { freshFix, GOOD_ENOUGH_M } from '../../packages/data/geofix.js';
+import { freshFix, GOOD_ENOUGH_M, deniedHelp, permissionState } from '../../packages/data/geofix.js';
 
 const T0 = 1_790_000_000_000;   // a real epoch-ms clock reading
 
@@ -36,7 +36,7 @@ function device(script) {
 }
 const run = (script, opts = {}) => {
   const d = device(script);
-  return { d, fix: freshFix({ geolocation: d.geolocation, now: () => T0, maxWaitMs: 400, ...opts }) };
+  return { d, fix: freshFix({ geolocation: d.geolocation, now: () => T0, maxWaitMs: 400, permissionWaitMs: 200, ...opts }) };
 };
 
 test('asks for a fresh, high-accuracy reading: GPS on, no cached position', async () => {
@@ -98,4 +98,51 @@ test('permission denied, no location, and no Geolocation API are refusals with a
 test('a reading without a usable accuracy never outranks one with it', async () => {
   const f = await run([{ after: 5, accuracy: NaN }, { after: 20, accuracy: 60 }]).fix;
   assert.equal(f.accuracy, 60);
+});
+
+/* ================= the October 2026 root causes =========================== */
+
+test('a slow answer to the permission prompt is not a timeout: the window opens at the first reading', async () => {
+  /* The student reads Safari's prompt for longer than the whole improvement
+     window; the first reading only arrives after that. */
+  const f = await run([{ after: 650, accuracy: 30 }], { permissionWaitMs: 2000 }).fix;
+  assert.equal(f.accuracy, 30);
+});
+
+test('iPhone\'s transient "position unavailable" while the GPS warms up does not end the attempt', async () => {
+  const f = await run([{ after: 5, error: 2 }, { after: 60, error: 2 }, { after: 120, accuracy: 18 }]).fix;
+  assert.equal(f.accuracy, 18);
+});
+
+test('a reading stamped a few seconds behind the page clock (device clock skew) is kept', async () => {
+  const f = await run([{ after: 5, accuracy: 12, stamp: T0 - 4000 }]).fix;
+  assert.equal(f.accuracy, 12, 'not discarded as "cached"');
+});
+
+test('a reading computed after we asked is fresh even when its stamp is minutes behind', async () => {
+  const real0 = Date.now();
+  const f = await run([{ after: 1600, accuracy: 15, stamp: T0 - 300_000 }],
+    { now: () => T0 + (Date.now() - real0), maxWaitMs: 2500, permissionWaitMs: 500 }).fix;
+  assert.equal(f.accuracy, 15);
+});
+
+test('an insecure page is told why, and nothing is asked of the device', async () => {
+  const { d, fix } = run([{ after: 5, accuracy: 10 }], { secure: false });
+  await assert.rejects(fix, { code: 'insecure' });
+  assert.equal(d.calls.options, null, 'watchPosition was never called');
+});
+
+test('a blocked site gets instructions for the device in hand', async () => {
+  assert.match(deniedHelp('Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1'),
+    /Settings → Privacy & Security → Location Services/);
+  assert.match(deniedHelp('Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/129.0 Mobile'), /Permissions → Location/);
+  assert.match(deniedHelp('Mozilla/5.0 (Windows NT 10.0) Chrome/129.0'), /address bar/);
+  await assert.rejects(run([{ after: 5, error: 1 }]).fix, (e) => e.code === 'denied' && /blocked/.test(e.message));
+});
+
+test('the permission state is read without prompting, and "cannot say" is not a refusal', async () => {
+  assert.equal(await permissionState({ query: async () => ({ state: 'denied' }) }), 'denied');
+  assert.equal(await permissionState({ query: async () => ({ state: 'granted' }) }), 'granted');
+  assert.equal(await permissionState({ query: async () => { throw new TypeError('geolocation'); } }), 'unknown');
+  assert.equal(await permissionState(undefined), 'unknown');
 });

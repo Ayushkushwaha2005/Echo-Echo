@@ -191,10 +191,20 @@ export function authorize(actor, action, res = {}) {
  * the same four conditions as one that went through the app.
  *
  * The fifth condition — that the destination is inside the campus boundary
- * — is enforced separately by assertDeliverable() in services/campus.js,
- * because it is a property of the order rather than of the person.
+ * — is enforced separately by assertDeliverable() / assertSpot() in
+ * services/campus.js, because it is a property of the order rather than of
+ * the person.
+ *
+ * `fulfilment`: a DELIVERY order's location requirement is its destination.
+ * buildDraft() refuses any delivery whose point the server cannot place
+ * inside the active campus boundary (and payment re-checks it), so the
+ * session's live-presence check is not ALSO demanded of it: the owner's
+ * direction (Oct 2026) is that a student whose phone cannot locate them
+ * may choose a validated map point instead. Nothing about the person is
+ * certified by that - the order records which basis it had. Pickup (and a
+ * caller that does not say) still needs the live check.
  */
-export function assertMayOrder(actor, { liveLocationRequired = false } = {}) {
+export function assertMayOrder(actor, { liveLocationRequired = false, fulfilment = null } = {}) {
   if (!actor) throw Unauthenticated('Sign in required');
   if (actor.status !== 'active') {
     throw Forbidden(`This account is ${actor.status}`,
@@ -227,11 +237,12 @@ export function assertMayOrder(actor, { liveLocationRequired = false } = {}) {
      `liveLocationRequired` is the admin-visible feature flag of the same
      name, resolved by the caller (it defaults on) and passed in rather than
      read here, so this function stays synchronous and testable. */
-  if (liveLocationRequired && !actor.campusPresenceAt) {
+  const destinationIsTheCheck = fulfilment === 'delivery';
+  if (liveLocationRequired && !destinationIsTheCheck && !actor.campusPresenceAt) {
     throw new HttpError(403, 'location_required', 'Confirm you are on campus',
       'ECHO ECHO needs to check your location before you order. Allow location access when your browser asks.');
   }
-  if (liveLocationRequired && actor.campusPresenceSiteId && actor.campusId &&
+  if (liveLocationRequired && !destinationIsTheCheck && actor.campusPresenceSiteId && actor.campusId &&
       actor.campusPresenceSiteId !== actor.campusId) {
     throw new HttpError(403, 'location_required', 'You are not on the campus in your profile',
       'The location you confirmed is on a different campus. Confirm your location again.');

@@ -152,10 +152,10 @@ test('a room number is never geographic proof', async () => {
   const { v, item } = await openOutlet();
   const body = { vendorId: v.id, lines: [{ itemId: item.id, qty: 1 }], fulfilment: 'delivery',
                  address: { blockId: b11.id, floor: '2', room: '17' } };
-  /* No on-campus check: refused, whatever the address says. */
+  /* No on-campus check and no pin: refused - an address is not a destination. */
   const r1 = await s.post('/orders/draft', body);
-  assert.equal(r1.status, 403);
-  assert.equal(r1.body.code, 'location_required');
+  assert.equal(r1.status, 400);
+  assert.match(r1.body.error, /Choose a delivery location/);
   /* On campus, but no delivery point: refused - an address is not a destination. */
   const r2 = await (await student()).post('/orders/draft', body);
   assert.equal(r2.status, 400);
@@ -283,10 +283,9 @@ test('live GPS accuracy: 10, 30 and 100 m are used; 212 m and anything over 100 
     assert.match(r.body.detail, new RegExp(`only accurate to about ${Math.round(accuracy)} m`));
     assert.match(r.body.detail, /100 m or better/);
     assert.match(r.body.detail, /phone/);
-    /* The session stays without presence, so ordering stays shut. */
+    /* The session stays without presence, so self pickup stays shut. */
     const { v, item } = await openOutlet();
-    const d = await s.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: item.id, qty: 1 }], fulfilment: 'delivery',
-      destinationId: place('Enrollment Office').id });
+    const d = await s.post('/orders/draft', { vendorId: v.id, lines: [{ itemId: item.id, qty: 1 }], fulfilment: 'pickup' });
     assert.equal(d.status, 403);
     assert.equal(d.body.code, 'location_required');
   }
@@ -625,5 +624,5 @@ test('the picker button: an inside spot is chosen as itself; outside or unchecke
   /* A live reading becomes a gps spot with its accuracy, never a named point. */
   const G = spotChosen({ lat: 30.4164, lng: 77.9665 }, { source: 'gps', accuracy: 9 });
   assert.deepEqual(G.destination.spot, { lat: 30.4164, lng: 77.9665, source: 'gps', accuracy: 9 });
-  assert.equal(pickerCta(G).label, 'Deliver to my live location');
+  assert.equal(pickerCta(G).label, 'Deliver to my current location');
 });

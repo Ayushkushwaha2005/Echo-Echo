@@ -169,9 +169,15 @@ export function pointInPolygon(lat, lng, polygon) {
 /* The confirmed boundary of one campus, or of any campus when none is named
    (used only where the caller has no campus context). */
 export async function boundary(campusId = null) {
-  return one(
+  const b = await one(
     `SELECT * FROM campus_boundary WHERE status = 'active' AND ($1::uuid IS NULL OR campus_site_id = $1)
       ORDER BY updated_at DESC LIMIT 1`, [campusId]);
+  /* An active row whose geometry is not a usable outline (hand-edited,
+     truncated, lat/lng as strings) is treated as no outline at all: every
+     caller then fails closed with "the delivery area is not confirmed",
+     rather than testing points against a shape that cannot answer. */
+  if (b && !validatePolygon(b.polygon).ok) return null;
+  return b;
 }
 
 /* Confirm a PROPOSED outline, inside the caller's transaction. The one way a
@@ -324,6 +330,23 @@ export async function assertSpot(spot, { campusId }) {
   }
   return { kind: SPOT_SOURCES[source], lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)), source,
            accuracy: accuracy === null ? null : Math.round(accuracy), boundaryName: b.name };
+}
+
+/* An order's destination asked again, at payment: the outline may have been
+   retired or redrawn, or the named point switched off, since the draft. The
+   spot is tested exactly as stored on the order (6 dp); nothing the client
+   sends now is read. */
+export async function assertOrderDestination(order, { campusId }) {
+  if (order.fulfilment !== 'delivery') return null;
+  if (order.destination_id) return assertDeliverable(order.destination_id, { campusId });
+  const lat = Number(order.spot_lat), lng = Number(order.spot_lng);
+  const b = await boundary(campusId);
+  if (!b) throw Forbidden('Campus delivery area is currently unavailable.', 'Nothing has been charged. Choose self pickup for now.');
+  if (order.spot_lat === null || !Number.isFinite(lat) || !Number.isFinite(lng) || !pointInPolygon(lat, lng, b.polygon)) {
+    throw Forbidden('This delivery spot is no longer inside the campus delivery area.',
+      'Nothing has been charged. Choose your spot on the campus map again.');
+  }
+  return { lat, lng };
 }
 
 /* Whether delivery can actually happen on a campus: a confirmed outline AND

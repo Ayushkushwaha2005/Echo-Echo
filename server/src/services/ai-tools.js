@@ -210,6 +210,7 @@ export const TOOLS = {
       customerId: actor.id, vendorId: vendor_id,
       lines: (items || []).map((i) => ({ itemId: i.item_id, qty: i.qty })),
       fulfilment, destinationId: destination_id, contactPhone: contact, placedVia: 'ai',
+      presenceVerified: !!actor.campusPresenceAt,
     }));
     return {
       order_id: draft.id,
@@ -296,6 +297,7 @@ export const TOOLS = {
         customerId: actor.id, vendorId: existing.vendor_id, lines,
         fulfilment: existing.fulfilment,
         destinationId: destination_id || existing.destination_id, placedVia: 'ai',
+        presenceVerified: !!actor.campusPresenceAt,
         /* A spot order keeps its spot, re-validated, unless a named point is given. */
         spot: !destination_id && existing.spot_lat !== null && existing.spot_lat !== undefined
           ? { lat: Number(existing.spot_lat), lng: Number(existing.spot_lng),
