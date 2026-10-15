@@ -655,3 +655,121 @@ textarea.input { resize: vertical; min-height: 72px; }
 /* The assistant's avatar is the mascot itself, not a lettered tile. */
 .ai-mark.ai-mark-logo { background: none; padding: 0; overflow: hidden; }
 .ai-mark.ai-mark-logo .brand-mark { width: 100%; height: 100%; border-radius: 8px; }
+
+/* ==========================================================================
+   OCT 2026 REFRESH - the customer site  (scoped to .site)
+   Quieter surfaces, one accent used on purpose, flat buttons, real touch
+   targets, and full-contrast text even when a cafe is closed. No glass, no
+   glow, no gradient washes. Every value still reads from tokens.css.
+   ========================================================================== */
+.site { background: var(--bg); }
+.site .bottomnav { background: var(--surface); backdrop-filter: none; }
+.site .scrim { backdrop-filter: none; background: rgba(20,14,16,.46); }
+.site .actionbar { background: var(--bg); border-top: 1px solid var(--line); }
+@media (min-width: 1024px) { .site .actionbar { border-top: 0; } }
+.site .composer { background: var(--bg); }
+
+/* Entrance motion on a NEW screen only: a re-render of the same screen
+   (after a tap) does not replay it. */
+.site.settled .enter > * { animation: none; }
+
+/* ---------- type ---------- */
+.site .t-display { font-weight: 650; letter-spacing: -.02em; }
+.site .t-h2 { font-weight: 650; }
+.site .t-label { color: var(--text-2); font-weight: 650; }
+
+/* ---------- buttons: flat, 44px+ targets ---------- */
+.site .btn { min-height: 44px; }
+.site .btn-sm { min-height: 38px; }
+.site .btn-lg { min-height: 52px; border-radius: 12px; }
+.site .btn-primary, .site .btn-ink { box-shadow: none; }
+.site .btn-primary:focus-visible, .site .btn-secondary:focus-visible { outline-offset: 3px; }
+.site .btn-secondary { border-width: 1px; border-color: var(--line-strong); }
+.site .btn-secondary:hover { border-color: var(--text-faint); color: var(--text); background: var(--surface-2); }
+.site .btn:disabled { opacity: .5; }
+.site .linkish { align-self: flex-start; padding-inline: 0; color: var(--accent-text); font-weight: 650; }
+.site .linkish:hover { background: none; text-decoration: underline; text-underline-offset: 3px; }
+
+/* ---------- inputs: 16px text so iPhone Safari does not zoom on focus ---------- */
+.site .input { font-size: 16px; padding: 12px 14px; min-height: 48px; border-width: 1px; border-color: var(--line-strong); border-radius: 12px; }
+.site textarea.input { min-height: 72px; line-height: 1.45; }
+.site .input:hover { border-color: var(--text-faint); }
+.site .field { gap: 6px; }
+
+/* ---------- surfaces ---------- */
+.site .card { border-radius: 16px; border-color: var(--line); }
+.site .card-raise { box-shadow: var(--shadow-2); border-color: var(--line); }
+.site .tile { border-radius: 14px; border-color: var(--line); transition: border-color var(--d-fast), background var(--d-fast); }
+.site button.tile:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.site .campusnote { background: var(--surface-2); border-color: var(--line); border-radius: 12px; }
+.site .campusnote.is-ok { background: var(--ok-bg); border-color: transparent; }
+.site .campusnote.is-ok .ico { color: var(--ok); }
+.site .campusnote.is-warn { background: var(--warn-bg); border-color: transparent; }
+.site .campusnote.is-warn .ico { color: var(--warn); }
+.site .empty-art { background: var(--bg-sunken); }
+
+/* ---------- chips ---------- */
+.site .chip { border-radius: 999px; padding: 8px 14px; min-height: 38px; border-color: var(--line-strong); font-weight: 600; }
+.site .chip:hover { border-color: var(--text-faint); }
+.site .chip[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+.chips-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+.site .chip-place .ico { color: var(--accent-text); }
+.site .chip-place[aria-pressed="true"] .ico { color: inherit; }
+
+/* ---------- home ---------- */
+.homehead { padding: var(--s-5) var(--s-4) var(--s-2); display: flex; flex-direction: column; gap: 6px; }
+.homehead h1 { margin: 0; }
+.homehead .homehead-row { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s-3); }
+@media (min-width: 1024px) { .homehead { padding: var(--s-8) var(--s-6) var(--s-3); } }
+
+/* ---------- cafe cards: name first, status in words, full contrast ---------- */
+.site .cafcard { padding: var(--s-4); border-radius: 16px; display: flex; flex-direction: column; gap: 10px; }
+.site .cafcard:hover { border-color: var(--line-strong); box-shadow: var(--shadow-1); }
+.site .cafcard.closed { opacity: 1; background: var(--surface-2); }
+.site .cafcard.closed .cafmark { filter: saturate(.55); }
+.site .cafcard-top { display: flex; align-items: center; gap: 12px; }
+.site .cafcard .cafmark { width: 48px; height: 48px; border-radius: 14px; font-size: 1.05rem; }
+.site .cafcard-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; padding-top: 10px; border-top: 1px dashed var(--line); }
+
+/* ---------- the delivery spot ---------- */
+.site .desttile.is-empty { border-style: dashed; border-color: var(--accent); background: var(--accent-faint); }
+.site .desttile.is-empty .ico { color: var(--accent-text); }
+.spotok { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; background: var(--ok-bg); }
+.spotok .ico { color: var(--ok); margin-top: 1px; }
+.gps-status { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line); }
+.spin { width: 18px; height: 18px; flex: none; margin-top: 2px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s !important; animation-iteration-count: infinite !important; } }
+.site details.named { border-top: 1px solid var(--line); padding-top: var(--s-3); }
+.site details.named > summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; min-height: 40px; }
+.site details.named > summary::after { content: "+"; font-size: 1.2rem; color: var(--text-muted); }
+.site details.named[open] > summary::after { content: "\2013"; }
+.site details.named > summary::-webkit-details-marker { display: none; }
+.placerow { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.placerow:last-child { border-bottom: 0; }
+.placerow-ico, .destwords-ico { width: 36px; height: 36px; flex: none; border-radius: 10px; display: grid; place-items: center; background: var(--accent-faint); }
+.destwords { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0 2px; border-top: 1px solid var(--line); }
+
+/* ---------- the picker map: tall enough to aim, controls big enough to hit ---------- */
+.site .echo-map { border-radius: 14px; border-color: var(--line-strong); }
+.site .echo-map.picker { height: min(52vh, 360px); cursor: grab; position: relative; }
+@media (min-width: 900px) { .site .echo-map.picker { height: 400px; } }
+.echo-map-bases button, .echo-map-recentre { min-height: 40px; padding: 8px 12px; font-size: 13px; }
+.echo-map-recentre { color: #1C1917; }
+.echo-map-recentre:not(.echo-map-pincentre) { color: #2563EB; }
+.echo-map-pincentre { background: #1C1917 !important; color: #fff !important; }
+.echo-map-cross { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; z-index: 450; pointer-events: none; opacity: .55; }
+.echo-map-cross::before, .echo-map-cross::after { content: ""; position: absolute; background: #1C1917; }
+.echo-map-cross::before { left: 10px; top: 0; width: 2px; height: 22px; }
+.echo-map-cross::after { top: 10px; left: 0; height: 2px; width: 22px; }
+.leaflet-marker-draggable .echo-pin { cursor: grab; }
+.leaflet-container:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.site .leaflet-control-zoom a { width: 36px; height: 36px; line-height: 36px; }
+
+/* ---------- dark ---------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .site .cafcard.closed { background: var(--surface); }
+}
+:root[data-theme="dark"] .site .cafcard.closed { background: var(--surface); }
+.echo-map-tools-low { flex-direction: row; align-items: flex-end; flex-wrap: wrap; }
+.echo-map-tools-low .echo-map-recentre { box-shadow: 0 1px 5px rgba(28,25,23,.3); }

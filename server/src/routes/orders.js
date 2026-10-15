@@ -69,7 +69,8 @@ const sha = (s) => createHash('sha256').update(s).digest('hex');
    Shared by the checkout route and the AI's create_order_draft tool, so both
    get identical, server-computed numbers.                                  */
 export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, destinationId,
-                                      contactPhone, landmark, instructions, address, pin, spot, placedVia }) {
+                                      contactPhone, landmark, instructions, address, pin, spot, placedVia,
+                                      presenceVerified = false }) {
   if (!Array.isArray(lines) || !lines.length) throw BadRequest('Your order is empty');
 
   /* ---- the delivery contact number -----------------------------------
@@ -121,6 +122,22 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
       'You can only order from cafeterias on the campus in your profile.');
   }
 
+  /* Free text the student adds to the destination: what to call the spot
+     ("Ground", "Sitting area"), a landmark, a note for the partner, and -
+     only when it is a building - block, floor and room. Validated for shape
+     only. It refines a point the server has placed inside the campus
+     boundary; it can never replace one, so there is still no way to express
+     an off-campus address, and no field here is required. */
+  const clean = (v2, max) => {
+    const t = String(v2 ?? '').trim().replace(/\s+/g, ' ');
+    return t ? t.slice(0, max) : null;
+  };
+  const described = fulfilment === 'delivery' && address
+    ? await normaliseAddress(address, v.campus_site_id) : null;
+  const landmarkText = fulfilment === 'delivery' ? clean(landmark ?? described?.landmark, 120) : null;
+  const instructionsText = fulfilment === 'delivery' ? clean(instructions ?? described?.instructions, 300) : null;
+  const spotLabel = described?.label || null;
+
   /* The complete destination, frozen onto the order. destination_id stays
      the only thing the boundary gate trusts; this snapshot is what the
      delivery partner reads at the door, and it must not change when a
@@ -133,10 +150,13 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
        against the active boundary, never trusted from the client. */
     if (spot && !destinationId) {
       const at = await assertSpot(spot, { campusId: v.campus_site_id });
+      /* What the partner reads first: the student's own name for the spot and
+         its landmark, then the exact coordinates (which the map draws). */
+      const words = [spotLabel, landmarkText && `near ${landmarkText}`].filter(Boolean).join(' · ');
       snapshot = {
         kind: at.kind, destinationId: null, campus: campus.name,
-        path: [], name: 'Delivery spot',
-        label: `Delivery spot ${at.lat.toFixed(5)}, ${at.lng.toFixed(5)}`,
+        path: [], name: spotLabel || 'Delivery spot',
+        label: words || `Delivery spot ${at.lat.toFixed(5)}, ${at.lng.toFixed(5)}`,
         lat: at.lat, lng: at.lng, source: at.source, accuracy: at.accuracy,
         pin: { lat: at.lat, lng: at.lng, source: at.source },
         frozenAt: new Date().toISOString(),
@@ -165,24 +185,21 @@ export async function buildDraft(c, { customerId, vendorId, lines, fulfilment, d
   } else if (fulfilment !== 'pickup' && fulfilment !== 'delivery') {
     throw BadRequest('Choose pickup or delivery');
   }
+  /* How this order's location was established, said plainly for support and
+     the audit: the destination is always server-validated inside the
+     boundary; whether the STUDENT was also confirmed on campus by a live
+     reading is recorded, never assumed. */
+  if (snapshot) {
+    snapshot.locationBasis = {
+      destination: snapshot.destinationId ? 'campus_point' : snapshot.source === 'gps' ? 'live_gps_spot' : 'map_pin',
+      studentPresence: presenceVerified ? 'live_location_confirmed' : 'not_confirmed',
+    };
+  }
 
-  /* Free text the student adds to the configured destination. It refines a
-     confirmed campus location; it can never replace one, so there is still
-     no way to express an off-campus address. */
-  const clean = (v2, max) => {
-    const t = String(v2 ?? '').trim().replace(/\s+/g, ' ');
-    return t ? t.slice(0, max) : null;
-  };
-  /* The student's block / floor / room, as they describe it. Validated for
-     shape only and frozen onto the order: it tells the partner which door,
-     and proves nothing about where the order may go - that was decided by
-     destination_id above. Editing the saved address later cannot reach it. */
-  const described = fulfilment === 'delivery' && address
-    ? await normaliseAddress(address, v.campus_site_id) : null;
-  const landmarkText = fulfilment === 'delivery' ? clean(landmark ?? described?.landmark, 120) : null;
-  const instructionsText = fulfilment === 'delivery' ? clean(instructions ?? described?.instructions, 300) : null;
+  /* The description, frozen onto the order: editing a saved place later
+     cannot reach it. Every field is optional - an outdoor spot has no floor. */
   const addressSnapshot = described ? {
-    campus: campus.name, block: described.block, floor: described.floor, room: described.room,
+    campus: campus.name, label: described.label, block: described.block, floor: described.floor, room: described.room,
     landmark: landmarkText, instructions: instructionsText, frozenAt: new Date().toISOString(),
   } : null;
 
@@ -257,8 +274,8 @@ export default async function orderRoutes(app) {
     /* Holding the capability is not the same as being allowed to use it.
        See assertMayOrder(): active account, approved student verification,
        both read from the session's database row on this request. */
-    assertMayOrder(req.actor, { liveLocationRequired: await flag('live_location') });
     const b = req.body || {};
+    assertMayOrder(req.actor, { liveLocationRequired: await flag('live_location'), fulfilment: b.fulfilment });
     assertOnlinePayment(b);   // pickup and delivery alike: no cash, ever
     const draft = await tx((c) => buildDraft(c, {
       customerId: req.actor.id, vendorId: b.vendorId, lines: b.lines,
@@ -266,6 +283,8 @@ export default async function orderRoutes(app) {
       contactPhone: b.contactPhone, landmark: b.landmark, instructions: b.instructions,
       address: b.address, pin: b.pin, spot: b.spot,
       placedVia: 'web',
+      /* Read from the session row, never from the request. */
+      presenceVerified: !!req.actor.campusPresenceAt,
     }));
     await audit(req, { action: 'order.draft', resource: 'order', resourceId: draft.id, outcome: 'ok' });
     return draft;

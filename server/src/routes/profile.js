@@ -5,11 +5,11 @@
    administered here too, by platform roles only.
    ========================================================================== */
 import { q, one } from '../db/index.js';
-import { authorize, BadRequest, NotFound, Forbidden, Conflict } from '../auth/rbac.js';
+import { authorize, BadRequest, NotFound, Forbidden, Conflict, HttpError } from '../auth/rbac.js';
 import { audit } from '../audit.js';
 import { assertRecentPasskey } from '../auth/passkey-policy.js';
 import { campuses, profileOf, validateName, validateMobile, shapeCampus } from '../services/profile.js';
-import { blocksFor, addressOf, saveAddress } from '../services/address.js';
+import { blocksFor, addressOf, saveAddress, placesOf, createPlace, updatePlace, deletePlace, touchPlace } from '../services/address.js';
 
 export default async function profileRoutes(app) {
   /* Public: the sign-up flow shows this before the student has chosen. */
@@ -82,6 +82,41 @@ export default async function profileRoutes(app) {
     await q(`DELETE FROM student_address WHERE user_id = $1`, [req.actor.id]);
     await audit(req, { action: 'address.delete', resource: 'user', resourceId: req.actor.id, outcome: 'ok' });
     return { address: null };
+  });
+
+  /* ---------- saved places (migration 031) ---------------------------------
+     A map pin inside the campus delivery area plus the words that help a
+     partner find it. Always the student's own, on their own campus. */
+  /* Until migration 031 is applied the table does not exist: say so plainly
+     (503) rather than fail with a 500. Checkout never depends on it. */
+  const placesReady = async (fn) => {
+    try { return await fn(); } catch (e) {
+      if (e?.code === '42P01') throw new HttpError(503, 'not_ready', 'Saved places are not available yet', 'You can still choose your spot on the map at checkout.');
+      throw e;
+    }
+  };
+  app.get('/me/places', async (req) => ({ places: await placesReady(async () => placesOf(req.actor?.id, await myCampus(req))) }));
+  app.post('/me/places', async (req) => {
+    const place = await placesReady(async () => createPlace(req.actor.id, await myCampus(req), req.body || {}));
+    await audit(req, { action: 'place.create', resource: 'saved_place', resourceId: place.id, outcome: 'ok' });
+    return { place };
+  });
+  app.put('/me/places/:id', async (req) => {
+    const place = await placesReady(async () => updatePlace(req.actor.id, await myCampus(req), req.params.id, req.body || {}));
+    await audit(req, { action: 'place.update', resource: 'saved_place', resourceId: place.id, outcome: 'ok' });
+    return { place };
+  });
+  app.delete('/me/places/:id', async (req) => {
+    await myCampus(req);
+    await placesReady(() => deletePlace(req.actor.id, req.params.id));
+    await audit(req, { action: 'place.delete', resource: 'saved_place', resourceId: req.params.id, outcome: 'ok' });
+    return { deleted: true };
+  });
+  /* Most recently used first in the picker. Records nothing else. */
+  app.post('/me/places/:id/used', async (req) => {
+    await myCampus(req);
+    await touchPlace(req.actor.id, req.params.id);
+    return { ok: true };
   });
 
   /* ---------- administration --------------------------------------------- */

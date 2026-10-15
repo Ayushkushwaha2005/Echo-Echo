@@ -11,7 +11,7 @@
    tree only as the prototype's fixtures. They are no longer the source of
    truth and must not be imported by a production surface.
    ========================================================================== */
-import { freshFix } from './geofix.js';
+import { freshFix, permissionState } from './geofix.js';
 
 /* The API base is injected by the page (see each surface's index.html, which
    the build rewrites for the target environment). It is deliberately NOT
@@ -196,6 +196,14 @@ export const quad = {
   myAddress: () => get('/me/address'),
   saveAddress: (a) => put('/me/address', a),
   deleteAddress: () => del('/me/address'),
+  /* Saved places (a pin plus words); the server re-checks every pin. */
+  places: () => get('/me/places'),
+  createPlace: (p) => post('/me/places', p),
+  updatePlace: (id, p) => put(`/me/places/${id}`, p),
+  deletePlace: (id) => del(`/me/places/${id}`),
+  placeUsed: (id) => post(`/me/places/${id}/used`),
+  /* 'granted' | 'prompt' | 'denied' | 'unknown', without prompting. */
+  locationPermission: () => permissionState(),
   campusResolve: (text) => post('/campus/resolve', { text }),
   /* Real browser geolocation: one fresh, high-accuracy reading (see
      geofix.js). The coordinate is only ever a claim; the server decides
@@ -213,11 +221,11 @@ export const quad = {
     try {
       fix = await freshFix({ onReading });
     } catch (e) {
-      throw new Error(e.code === 'unsupported'
-        ? 'This browser cannot share your location, so ordering cannot be opened.'
-        : e.code === 'denied'
-          ? 'Location permission was denied. ECHO ECHO can only take orders from students on campus, so it needs to check where you are.'
+      const err = new Error(e.code === 'unsupported'
+        ? 'This browser cannot share your location. For delivery you can still choose your spot on the map at checkout.'
         : e.message);
+      err.code = e.code;
+      throw err;
     }
     return { ...(await post('/campus/presence', fix)), fix };
   },

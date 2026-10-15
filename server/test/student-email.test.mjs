@@ -225,8 +225,9 @@ test('a verified-by-email student can order; admin decisions are never overridde
   const s = client(app, token);
   const body = { vendorId: v.id, lines: [{ itemId: i.id, qty: 1 }], fulfilment: 'delivery', destinationId: n.blockB.id };
   /* Signing in is not the same as being on campus. A brand-new session has
-     not passed the live-location check, and ordering says so first. */
-  const noLocation = await s.post('/orders/draft', body);
+     not passed the live-location check, and a self-pickup order says so
+     first (a delivery order is located by its destination instead). */
+  const noLocation = await s.post('/orders/draft', { ...body, fulfilment: 'pickup', destinationId: undefined });
   assert.equal(noLocation.status, 403);
   assert.equal(noLocation.body.code, 'location_required');
   await confirmOnCampus(token);

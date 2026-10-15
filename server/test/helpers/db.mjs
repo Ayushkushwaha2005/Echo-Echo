@@ -358,7 +358,7 @@ async function truncateOnce(pool) {
              review, order_event, order_item, payment_webhook, payment,
              delivery_offer, food_order, partner_profile, verification_case,
              asset, menu_price_history, menu_item, category, vendor,
-             campus_boundary, campus_block, student_address, campus_node, session, otp_challenge, email_challenge,
+             campus_boundary, campus_block, student_address, saved_place, campus_node, session, otp_challenge, email_challenge,
              review_report, deposit_deduction, deposit_refund_request, deposit_movement,
              partner_policy_consent, partner_deposit_policy, delivery_incident,
              user_role, app_user, feature_flag, platform_config, email_send_log, payout_webhook

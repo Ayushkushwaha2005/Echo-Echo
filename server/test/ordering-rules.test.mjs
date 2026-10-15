@@ -4,7 +4,8 @@
    Four things changed about ordering, and each is a rule the server has to
    enforce on its own, because a browser is not a place to keep a rule:
 
-     · a student must have confirmed they are physically on campus
+     · a self-pickup order needs the live on-campus check; a delivery order
+       needs a destination the server places inside the campus boundary
      · every order carries a delivery contact number
      · a delivery order carries a complete, frozen campus address
      · the platform fee is charged on every order, and the delivery partner's
@@ -51,24 +52,42 @@ const order = (extra = {}) => ({
 
 /* ========================= the live-location gate ======================== */
 
-test('a session that has not confirmed its location cannot order', async () => {
+test('a session that has not confirmed its location cannot place a self-pickup order', async () => {
   const c = await as(await student(), { onCampus: false });
-  const r = await c.post('/orders/draft', order());
+  const r = await c.post('/orders/draft', order({ fulfilment: 'pickup', destinationId: undefined }));
   assert.equal(r.status, 403);
   assert.equal(r.body.code, 'location_required');
   assert.match(r.body.error, /Confirm you are on campus/);
 });
 
+test('a delivery order is located by its destination: allowed without the live check, and recorded as such', async () => {
+  const c = await as(await student(), { onCampus: false });
+  const r = await c.post('/orders/draft', order());
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const snap = (await pool.query(`SELECT destination_snapshot s FROM food_order WHERE id = $1`, [r.body.id])).rows[0].s;
+  assert.deepEqual(snap.locationBasis, { destination: 'campus_point', studentPresence: 'not_confirmed' },
+    'nothing about the student is certified by a delivery destination');
+  /* And it cannot be used to skip the destination check: no destination, no order. */
+  const none = await c.post('/orders/draft', order({ destinationId: undefined }));
+  assert.ok(none.status >= 400 && none.status < 500, `no destination is refused (${none.status})`);
+  /* A session that DID confirm its location is recorded as having done so. */
+  const ok = await as(await student({ phone: '+919700000002' }));
+  const r2 = await ok.post('/orders/draft', order());
+  assert.equal((await pool.query(`SELECT destination_snapshot s FROM food_order WHERE id = $1`, [r2.body.id]))
+    .rows[0].s.locationBasis.studentPresence, 'live_location_confirmed');
+});
+
 test('confirming the location opens ordering, and the verdict is the server\'s', async () => {
   const u = await student();
   const c = await as(u, { onCampus: false });
-  assert.equal((await c.post('/orders/draft', order())).status, 403);
 
+  const pickup = order({ fulfilment: 'pickup', destinationId: undefined });
+  assert.equal((await c.post('/orders/draft', pickup)).status, 403);
   const fix = await c.post('/campus/presence', { lat: 30.42, lng: 77.97, accuracy: 8 });
   assert.equal(fix.status, 200, JSON.stringify(fix.body));
   assert.equal(fix.body.confirmed, true);
 
-  assert.equal((await c.post('/orders/draft', order())).status, 200, 'now it can order');
+  assert.equal((await c.post('/orders/draft', pickup)).status, 200, 'now it can order');
 });
 
 test('the location check fails closed on every way it can go wrong', async () => {
@@ -87,14 +106,15 @@ test('the location check fails closed on every way it can go wrong', async () =>
       `SELECT count(*)::int n FROM session WHERE user_id IS NOT NULL AND campus_presence_at IS NOT NULL`);
     assert.equal(after.rows[0].n, 0, `${why}: nothing may be recorded on the session`);
   }
-  assert.equal((await c.post('/orders/draft', order())).status, 403, 'still cannot order');
+  assert.equal((await c.post('/orders/draft', order({ fulfilment: 'pickup', destinationId: undefined }))).status, 403,
+    'still cannot order for pickup');
 });
 
 test('a browser cannot simply assert it is on campus', async () => {
   const c = await as(await student(), { onCampus: false });
   /* There is no field, on any ordering request, that says "I am on campus". */
   const r = await c.post('/orders/draft',
-    order({ onCampus: true, campusPresence: true, location: { confirmed: true } }));
+    order({ fulfilment: 'pickup', destinationId: undefined, onCampus: true, campusPresence: true, location: { confirmed: true } }));
   assert.equal(r.status, 403);
   assert.equal(r.body.code, 'location_required');
 });
@@ -106,7 +126,7 @@ test('a location confirmed on one campus does not unlock another', async () => {
   /* The student's profile moves to the campus that is not in service. */
   await pool.query(`UPDATE app_user SET campus_site_id = $2 WHERE id = $1`,
     [u.id, await campusId(pool, 'upes-kandholi')]);
-  const r = await c.post('/orders/draft', order());
+  const r = await c.post('/orders/draft', order({ fulfilment: 'pickup', destinationId: undefined }));
   assert.equal(r.status, 403);
   assert.ok(['location_required', 'forbidden'].includes(r.body.code), JSON.stringify(r.body));
 });

@@ -58,6 +58,7 @@ import { requireAdapter } from '../services/payment-providers.js';
 import { applyRefundOutcome } from '../services/refund-status.js';
 import { alertOwnerAsync } from '../services/alerts.js';
 import { assertOnlinePayment } from '../services/prepaid.js';
+import { assertOrderDestination } from '../services/campus.js';
 
 const rupees = (paise) => (paise / 100).toFixed(2);
 
@@ -233,16 +234,15 @@ export default async function paymentRoutes(app) {
     /* Re-checked here, not only at draft creation: verification can be
        revoked between drafting an order and paying for it, and a draft is
        not a licence to complete a purchase. */
-    assertMayOrder(req.actor, { liveLocationRequired: await flag('live_location') });
+    const order = await one(`SELECT * FROM food_order WHERE id = $1`, [req.body?.orderId]);
+    if (!order) throw NotFound('No such order');
+    if (order.customer_id !== req.actor.id) throw Forbidden('That order is not yours');
+    assertMayOrder(req.actor, { liveLocationRequired: await flag('live_location'), fulfilment: order.fulfilment });
     if (!(await flag('online_payment'))) {
       throw ProviderUnavailable('Online payment is currently disabled',
         'Ordering is unavailable until payment is re-enabled. There is no cash option.');
     }
     const adapter = requireAdapter();          // 503 with `needs` if unconfigured
-
-    const order = await one(`SELECT * FROM food_order WHERE id = $1`, [req.body?.orderId]);
-    if (!order) throw NotFound('No such order');
-    if (order.customer_id !== req.actor.id) throw Forbidden('That order is not yours');
     if (!['draft', 'awaiting_payment'].includes(order.state)) {
       throw Conflict(`This order is already ${order.state}`);
     }
@@ -261,6 +261,10 @@ export default async function paymentRoutes(app) {
       `SELECT mi.name FROM order_item oi JOIN menu_item mi ON mi.id = oi.item_id
         WHERE oi.order_id = $1 AND NOT (mi.active AND mi.available) LIMIT 1`, [order.id]);
     if (gone) throw Conflict(`${gone.name} is unavailable right now`, 'Nothing has been charged. Update your cart and try again.');
+    /* And where it is going: the spot (or named point) stored on the order is
+       tested against the campus boundary in force NOW, before any money is
+       asked for. */
+    await assertOrderDestination(order, { campusId: vendor.campus_site_id });
 
     /* The amount charged is the frozen snapshot's total, not a number
        recomputed now and not anything in the request body. If the two ever
