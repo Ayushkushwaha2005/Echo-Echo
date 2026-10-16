@@ -23,6 +23,8 @@ echo "── enforced auth (AUTH_ENABLED=true, isolated) ───────�
 AUTH_ENABLED=true PRIMARY_ADMIN_EMAIL=owner@campus.edu.in node tests/auth-enforced.mjs | tail -1
 echo "── bundle smoke (every built surface executes) ────────"
 node tests/bundle-smoke.mjs | tail -1
+echo "── asset versioning (every module preloaded) ──────────"
+node tests/asset-version.mjs | tail -1
 echo
 echo "── server (real PostgreSQL, real Fastify) ─────────────"
 # The backend is the authority for everything, so a "full regression" that

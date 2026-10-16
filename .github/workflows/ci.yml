@@ -57,6 +57,11 @@ jobs:
       - name: Every surface executes and renders
         run: node tests/bundle-smoke.mjs
 
+      # The campus map loads late; a page must still only ever run modules
+      # from its own deployment, across a deploy.
+      - name: Every page preloads its own deployment's modules
+        run: node tests/asset-version.mjs
+
       # The build must REFUSE these, so a misconfigured deployment fails in
       # CI rather than shipping a bundle that calls a developer's laptop.
       - name: An unset or insecure API base fails the build

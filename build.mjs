@@ -92,22 +92,45 @@ for (const f of listFiles(staging)) {
 const VERSION = digest.digest('hex').slice(0, 12);
 const assets = join(dist, '_v', VERSION);
 renameSync(staging, assets);
+/* Which asset version this deployment serves, outside _v/ so it is never
+   cached (vercel.json: no-cache for everything but _v/). A page that cannot
+   load one of its own modules reads it to tell a deploy that happened while
+   it was open apart from a genuine failure (packages/ui/load-module.js). */
+writeFileSync(join(dist, 'version.json'), `${JSON.stringify({ version: VERSION })}\n`);
 
-/* The static import graph of a module, as the browser will discover it one
-   level at a time. Declaring it up front with modulepreload lets every level
-   download in parallel with the entry instead of after it. Dynamic import()s
-   are left out on purpose: they are the parts that are meant to load late. */
+/* Every module a page can ever import, as the browser would discover it one
+   level at a time: the static graph AND the targets of dynamic import()s.
+   Declaring them up front with modulepreload lets every level download in
+   parallel with the entry, and it is what keeps a page whole across a
+   deploy. A deploy replaces dist/_v/ outright, so a tab opened before it
+   that only fetched the campus map on first use asked for a /_v/<old hash>/
+   file that no longer existed (404, "Failed to fetch dynamically imported
+   module"). Preloaded, the map is in the page's module map from the moment
+   the page loads, from the same deployment as the page, and the later
+   import() never touches the network. A specifier the build cannot read is a
+   module it cannot preload, so a non-literal import() fails the build. */
 function importGraph(entry) {
   const seen = new Set();
-  const visit = (file) => {
+  const visit = (file, from) => {
     if (seen.has(file)) return;
+    try { statSync(file); } catch {
+      console.error(`✗ ${relative(assets, from)} imports ${relative(assets, file)}, which is not in the build`);
+      process.exit(1);
+    }
     seen.add(file);
     const src = readFileSync(file, 'utf8');
-    for (const m of src.matchAll(/^\s*(?:import|export)\s[^'"]*?from\s*['"](\.{1,2}\/[^'"]+)['"]|^\s*import\s*['"](\.{1,2}\/[^'"]+)['"]/gm)) {
-      visit(join(dirname(file), m[1] || m[2]));
+    for (const m of src.matchAll(/^\s*(?:import|export)\s[^'"]*?from\s*['"](\.{1,2}\/[^'"]+)['"]|^\s*import\s*['"](\.{1,2}\/[^'"]+)['"]|\bimport\s*\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/gm)) {
+      visit(join(dirname(file), m[1] || m[2] || m[3]), file);
+    }
+    /* Code lines only: prose in a comment may say "import (...)". */
+    const opaque = src.split('\n').filter((l) => !/^\s*(\*|\/\*|\/\/)/.test(l)).join('\n')
+      .match(/\bimport\(\s*(?!['"]\.{1,2}\/[^'"]+['"]\s*\)|['"]node:)[^)]*\)/);
+    if (opaque) {
+      console.error(`✗ ${relative(assets, file)}: ${opaque[0]} - a dynamic import must name a relative file literally`);
+      process.exit(1);
     }
   };
-  visit(entry);
+  visit(entry, entry);
   return [...seen];
 }
 
