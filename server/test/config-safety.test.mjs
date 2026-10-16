@@ -240,3 +240,25 @@ test('render.yaml keeps production payments live and commits no secret', () => {
     }
   }
 });
+
+/* The origin allowlist is exact origins only, and the deploy's live check
+   probes exactly the same set, so an origin added to one and not the other
+   fails here rather than in a student's browser. */
+test('WEB_ORIGIN is exact https origins, and deploy.yml live-checks the same set', () => {
+  const yaml = readFileSync(join(repoRoot, 'render.yaml'), 'utf8');
+  const deploy = readFileSync(join(repoRoot, '.github', 'workflows', 'deploy.yml'), 'utf8');
+  const web = /^\s*- key: WEB_ORIGIN[ \t]*\r?\n[ \t]*value: *(\S+)/m.exec(yaml)?.[1]?.split(',') || [];
+  const site = /^\s*SITE_ORIGINS: *(\S+)/m.exec(deploy)?.[1]?.split(',') || [];
+  assert.ok(web.length >= 3, 'WEB_ORIGIN is listed in render.yaml');
+  for (const o of web) {
+    assert.match(o, /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)+$/, `${o} is a bare https origin: no wildcard, path or port`);
+    assert.equal(new URL(o).origin, o, `${o} is already in origin form`);
+  }
+  assert.equal(new Set(web).size, web.length, 'no duplicates');
+  assert.deepEqual([...site].sort(), [...web].sort(), 'deploy.yml SITE_ORIGINS == render.yaml WEB_ORIGIN');
+  /* The only vercel.app hosts are the production alias and main's alias. */
+  assert.deepEqual(web.filter((o) => o.endsWith('.vercel.app')).sort(), [
+    'https://echo-echo-git-main-ayushkushwaha2005s-projects.vercel.app',
+    'https://echo-echo-nu.vercel.app',
+  ]);
+});

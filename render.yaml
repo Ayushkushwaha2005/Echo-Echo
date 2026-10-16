@@ -79,10 +79,14 @@ services:
       # CSRF origin check in src/index.js sees exactly this value.
       # echoecho.tech is canonical. www.echoecho.tech is listed because it is
       # attached to the same Vercel project (it serves the site, or redirects
-      # to the apex); the vercel.app URL is kept for deploy checks. Nothing
-      # else: no wildcard, and every entry must be https.
+      # to the apex); the vercel.app URL is kept for deploy checks. The
+      # git-main URL is Vercel's alias for the newest deployment of main -
+      # the production build itself, behind Vercel's own sign-in - and is
+      # where the owner checks a deploy. Preview and other branch URLs are
+      # NOT listed. Nothing else: no wildcard, and every entry must be https.
+      # deploy.yml SITE_ORIGINS must name the same set (config-safety test).
       - key: WEB_ORIGIN
-        value: https://echoecho.tech,https://www.echoecho.tech,https://echo-echo-nu.vercel.app
+        value: https://echoecho.tech,https://www.echoecho.tech,https://echo-echo-nu.vercel.app,https://echo-echo-git-main-ayushkushwaha2005s-projects.vercel.app
       - key: WEBAUTHN_RP_ID
         value: echo-echo-nu.vercel.app
       - key: WEBAUTHN_ORIGINS

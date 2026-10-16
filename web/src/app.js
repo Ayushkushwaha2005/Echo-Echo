@@ -22,6 +22,7 @@ import { campusOption } from '../../packages/ui/campus-option.js';
 import { logo, mark, lockup } from '../../brand/logo.js';
 import { mapPointChosen, mapPointAnswered, gpsPointPlaced, spotFromPick, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
 import { deniedHelp } from '../../packages/data/geofix.js';
+import { loadModule } from '../../packages/ui/load-module.js';
 
 restoreTheme();
 
@@ -1519,7 +1520,7 @@ async function paintPicker() {
   const mine = picker = { host, ctl: null };
   try {
     if (!S.campusMap) S.campusMap = await quad.campusMap();
-    const { drawPickerMap } = await import('../../packages/ui/map.js');
+    const { drawPickerMap } = await loadModule(() => import('../../packages/ui/map.js'), import.meta.url);
     const ctl = await drawPickerMap(host, S.campusMap, { ...pickerState(), onTap: onPickerTap, onSelect: onPickerSelect });
     if (picker !== mine) { ctl?.destroy(); return; }   // closed while loading
     mine.ctl = ctl;
@@ -1539,7 +1540,7 @@ async function paintMaps() {
     const note = slot.parentElement?.querySelector('.echo-map-note');
     try {
       const tracking = await quad.tracking(orderId);
-      const { drawTrackingMap, partnerVisibilityNote } = await import('../../packages/ui/map.js');
+      const { drawTrackingMap, partnerVisibilityNote } = await loadModule(() => import('../../packages/ui/map.js'), import.meta.url);
       await drawTrackingMap(slot, tracking);
       if (note) {
         const why = partnerVisibilityNote(tracking.partnerVisibility);
