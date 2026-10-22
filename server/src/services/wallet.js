@@ -38,6 +38,11 @@ export const PAYOUT_DEFAULTS = {
   min_balance_paise: 10000,
   method: 'bank_or_upi',
   earning_hold_hours: 24,
+  /* A CHANGED bank account / UPI id is not paid to until it has stood this
+     long, so a stolen session cannot redirect a withdrawal on the spot. The
+     partner is told of every change (notify kind payout_destination_changed).
+     A first registration is not held: its earnings are already held above. */
+  destination_change_hold_hours: 24,
 };
 const FREQUENCIES = ['weekly', 'daily', 'on_request'];
 const METHODS = ['bank', 'upi', 'bank_or_upi'];
@@ -63,6 +68,11 @@ export function validatePayoutConfig(current, patch) {
     const n = Number(patch.earning_hold_hours);
     if (!Number.isInteger(n) || n < 0 || n > 720) throw BadRequest('earning_hold_hours must be 0–720');
     next.earning_hold_hours = n;
+  }
+  if (patch.destination_change_hold_hours !== undefined) {
+    const n = Number(patch.destination_change_hold_hours);
+    if (!Number.isInteger(n) || n < 0 || n > 168) throw BadRequest('destination_change_hold_hours must be 0–168');
+    next.destination_change_hold_hours = n;
   }
   if (patch.frequency !== undefined) {
     if (!FREQUENCIES.includes(patch.frequency)) throw BadRequest(`frequency must be one of ${FREQUENCIES.join(', ')}`);
@@ -138,6 +148,24 @@ export async function destinationFor(c, { vendorId = null, partnerId = null }) {
     [vendorId, partnerId, String(PAYOUTS.provider || '').replace('_payouts', '')])).rows[0] || null;
 }
 
+/**
+ * When a partner's payout destination REPLACED an earlier one, the time until
+ * which it may not be paid to; null when it can be paid now. Decided by the
+ * database clock, like every other window here.
+ */
+export async function destinationChangeHold(c, dest, cfg) {
+  const hours = Number(cfg?.destination_change_hold_hours ?? PAYOUT_DEFAULTS.destination_change_hold_hours);
+  if (!dest?.partner_id || !hours) return null;
+  const r = (await c.query(
+    `SELECT d.created_at + ($3 || ' hours')::interval AS until
+       FROM payout_destination d
+      WHERE d.id = $1 AND d.created_at + ($3 || ' hours')::interval > now()
+        AND EXISTS (SELECT 1 FROM payout_destination prev
+                     WHERE prev.partner_id = $2 AND prev.id <> d.id AND prev.created_at <= d.created_at)`,
+    [dest.id, dest.partner_id, String(hours)])).rows[0];
+  return r ? r.until : null;
+}
+
 const shapeDestination = (d) => d && ({
   id: d.id, instrument: d.instrument, masked: d.masked, ifsc: d.ifsc,
   holderName: d.holder_name, status: d.verification_status, verifiedAt: d.verified_at,
@@ -175,6 +203,8 @@ export async function partnerWallet(partnerId) {
       `₹${((cfg.min_withdrawal_paise - n.availablePaise) / 100).toFixed(2)} to go.`);
   }
   if (already) blockers.push(`You have already withdrawn this ${cfg.frequency === 'daily' ? 'day' : 'week'}.`);
+  const destinationHoldUntil = await destinationChangeHold(c, dest, cfg);
+  if (destinationHoldUntil) blockers.push('Your payout details changed recently; withdrawals to them open after a 24-hour security hold.');
 
   return {
     ...n,
@@ -185,6 +215,7 @@ export async function partnerWallet(partnerId) {
     blockers,
     nextEligibility: already ? nextPeriodStart(cfg.frequency) : null,
     destination: shapeDestination(dest),
+    destinationHoldUntil,
     lastPayout: last,
     history,
   };
@@ -218,6 +249,12 @@ export async function requestWithdrawal(partnerId, { idempotencyKey, actorId }) 
     if (!dest || dest.verification_status !== 'verified') {
       throw Conflict('Your payout details are not verified yet',
         'Add a bank account or UPI ID; withdrawals open once it is verified.');
+    }
+    const holdUntil = await destinationChangeHold(c, dest, cfg);
+    if (holdUntil) {
+      throw Conflict('Your payout details changed recently',
+        `For your security, withdrawals to new details open at ${new Date(holdUntil).toISOString()}. `
+        + 'If you did not make this change, contact support now.');
     }
     if (cfg.method === 'bank' && dest.instrument === 'upi') throw Conflict('Payouts are currently made to bank accounts only');
     if (cfg.method === 'upi' && dest.instrument === 'bank') throw Conflict('Payouts are currently made to UPI only');
@@ -258,6 +295,14 @@ export async function requestWithdrawal(partnerId, { idempotencyKey, actorId }) 
 export async function dispatchPayout(payoutId, { actorId = null } = {}) {
   const adapter = activeAdapter();
   if (!adapter) return { state: 'pending', note: 'no payout provider configured' };
+
+  /* A batch release must not get round the change hold a withdrawal obeys:
+     the payout stays pending, untouched, and is sent by a later release. */
+  const held = await one(
+    `SELECT d.* FROM payout p JOIN payout_destination d ON d.id = p.destination_id
+      WHERE p.id = $1 AND p.state = 'pending'`, [payoutId]);
+  const holdUntil = held && await destinationChangeHold({ query: q }, held, await payoutConfig());
+  if (holdUntil) return { state: 'pending', note: `payout details changed; held until ${new Date(holdUntil).toISOString()}` };
 
   const claimed = await one(
     `UPDATE payout p SET state='processing', method=$2

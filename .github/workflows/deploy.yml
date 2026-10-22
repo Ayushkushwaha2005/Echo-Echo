@@ -57,6 +57,13 @@ jobs:
         id: sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # Migrations go first, by hand, with the owner's approval. A commit that
+      # ships one production does not have yet is stopped HERE, naming the
+      # file, instead of going live against an old schema (15 Oct 2026: 031
+      # shipped unapplied and /ready stayed red for six days).
+      - name: Production already has every migration this commit ships
+        run: node tools/migration-gate.mjs "${SITE}/api"
+
       - name: Deploy that commit to Render and wait until it is live
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}

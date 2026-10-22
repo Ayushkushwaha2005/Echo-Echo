@@ -36,6 +36,7 @@ import adminResetRoutes from './routes/admin-reset.js';
 import trackingRoutes from './routes/tracking.js';
 import adminAccessRoutes from './routes/admin-access.js';
 import geodataRoutes from './routes/geodata.js';
+import adminOpsRoutes from './routes/admin-ops.js';
 
 const boot = assertBootable();
 if (!boot.ok) {
@@ -323,7 +324,10 @@ export function build() {
         const shipped = (await readdir(new URL('./db/', import.meta.url))).filter((f) => /^\d+.*\.sql$/.test(f)).sort();
         const state = await migrationState();
         const pending = shipped.filter((f) => !(state.applied || []).includes(f));
-        checks.migrations = { ok: pending.length === 0, applied: state.count || 0, pending };
+        /* latest lets a deploy refuse a commit whose migrations the database
+           does not have yet, before the new code is running against it. */
+        checks.migrations = { ok: pending.length === 0, applied: state.count || 0,
+                              latest: (state.applied || []).at(-1) || null, pending };
         /* Development seed rows must never be in production. */
         const seeded = await pool.query(`SELECT count(*)::int AS n FROM campus_node WHERE source = 'unverified_seed'`)
           .then((r) => r.rows[0].n).catch(() => 0);
@@ -358,6 +362,7 @@ export function build() {
     await app.register(passkeyRoutes);
     await app.register(adminAccessRoutes);
     await app.register(geodataRoutes);
+    await app.register(adminOpsRoutes);
 
     return app;
   })();
