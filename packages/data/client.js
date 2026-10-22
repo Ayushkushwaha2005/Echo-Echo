@@ -155,6 +155,27 @@ export const quad = {
 
   readiness: () => get('/admin/readiness'),
 
+  /* ---------- Campus Control operations (server-paged, server-checked) ---- */
+  adminOrders: (opts) => get('/admin/orders' + qs(opts)),
+  orderTimeline: (id) => get(`/admin/orders/${id}/timeline`),
+  adminPayments: (opts) => get('/admin/payments' + qs(opts)),
+  adminWebhooks: (days) => get('/admin/webhooks' + qs({ days })),
+  reliability: () => get('/admin/reliability'),
+  /* A CSV export. Fetched (not linked) so a refusal or a bad range shows as
+     the server's message instead of a downloaded error page. */
+  async downloadReport(kind, from, to) {
+    let res;
+    try {
+      res = await fetch(`${API_BASE}/admin/reports/${encodeURIComponent(kind)}${qs({ from, to })}`, { credentials: 'include' });
+    } catch { throw new Offline(); }
+    if (!res.ok) {
+      let json = null; try { json = await res.json(); } catch { /* not JSON */ }
+      throw new ApiError(res.status, json || { error: hostError(res.status) });
+    }
+    const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') || '')?.[1] || `echoecho-${kind}.csv`;
+    return { blob: await res.blob(), name };
+  },
+
   /* ---------- field geodata --------------------------------------------- */
   previewPoints: (campusId, body) => post(`/admin/campuses/${campusId}/points/preview`, body),
   importPoints: (campusId, body) => post(`/admin/campuses/${campusId}/points/import`, body),
@@ -428,8 +449,13 @@ export const quad = {
 
 /* Money formatting in one place, from integer paise. No surface divides by
    100 on its own, and no float ever holds a price. */
-export const rupees = (paise) =>
-  paise == null ? '—' : `₹${(paise / 100).toFixed(paise % 100 ? 2 : 0)}`;
+/* Indian grouping (₹1,23,456.50); whole rupees drop the paise. */
+export const rupees = (paise) => {
+  if (paise == null) return '—';
+  const n = Number(paise);
+  const digits = n % 100 ? 2 : 0;
+  return `${n < 0 ? '−' : ''}₹${(Math.abs(n) / 100).toLocaleString('en-IN', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+};
 
 /* The single place "no ratings" is decided, so no surface can invent a 4.8. */
 export const ratingLabel = (rating) =>

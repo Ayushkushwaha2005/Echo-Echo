@@ -21,6 +21,7 @@ import { audit } from '../audit.js';
 import { notifyAsync } from '../services/notify.js';
 import { livePolicy, depositBalance, partnerRating } from './trust.js';
 import { readiness } from '../services/readiness.js';
+import { destinationChangeHold, payoutConfig } from '../services/wallet.js';
 
 export default async function adminRoutes(app) {
   app.get('/admin/users', async (req) => {
@@ -182,6 +183,16 @@ export default async function adminRoutes(app) {
       p.consented = !!(policy && await one(
         `SELECT 1 FROM partner_policy_consent WHERE user_id = $1 AND policy_id = $2`, [p.user_id, policy.id]));
       p.rating = await partnerRating(p.user_id);
+      /* Payout readiness, masked: the full number is held only by Cashfree. */
+      const dest = await one(`SELECT id, partner_id, instrument, masked, verification_status, created_at
+                                FROM payout_destination WHERE partner_id = $1 AND active
+                               ORDER BY created_at DESC LIMIT 1`, [p.user_id]);
+      p.payout_destination = dest && { instrument: dest.instrument, masked: dest.masked,
+        status: dest.verification_status, holdUntil: await destinationChangeHold({ query: q }, dest, await payoutConfig()) };
+      p.last_payout = await one(`SELECT state, amount_paise, created_at FROM payout WHERE partner_id = $1
+                                  ORDER BY created_at DESC LIMIT 1`, [p.user_id]);
+      p.active_orders = (await one(`SELECT count(*)::int AS n FROM food_order WHERE partner_id = $1
+                                      AND state IN ('assigned','picked_up')`, [p.user_id])).n;
     }
     return { partners: rows, policy: policy && { id: policy.id, amountPaise: policy.amount_paise } };
   });

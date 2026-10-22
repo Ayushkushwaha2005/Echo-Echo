@@ -20,7 +20,8 @@ import { lockup } from '../../brand/logo.js';
 const root = document.getElementById('app');
 restoreTheme();
 
-const S = { route: 'overview', vendorId: null, userId: null, caseId: null, parentId: null };
+const S = { route: 'overview', vendorId: null, userId: null, caseId: null, parentId: null,
+            orderFilter: {}, orderPage: 1, payFilter: {}, payPage: 1 };
 
 /* Roles that can be signed in with an enrolment code. platform_owner is
    absent on purpose: an admin must not be able to mint their way into the
@@ -34,7 +35,8 @@ const NAV = [
   ['orders', 'Orders'], ['users', 'Users'], ['verification', 'Verification'],
   ['partners', 'Partners'], ['trust', 'Incidents & deposits'], ['reviews', 'Reviews'],
   ['locations', 'Locations'], ['support', 'Support'],
-  ['finance', 'Finance'], ['admins', 'Administrators'], ['platform', 'Platform'], ['audit', 'Audit'],
+  ['payments', 'Payments'], ['finance', 'Settlements & finance'], ['reports', 'Reports'],
+  ['reliability', 'Reliability'], ['admins', 'Administrators'], ['platform', 'Platform'], ['audit', 'Audit'],
 ];
 
 /* Which permission opens each page. Hiding is a courtesy: every panel's API
@@ -45,6 +47,7 @@ const NAV_PERM = {
   partners: ['partners.view'], trust: ['delivery.incidents', 'deposits.view'], reviews: ['reviews.view'],
   locations: ['locations.view', 'boundary.view', 'campuses.view'], support: ['support.view'],
   finance: ['finance.view'], admins: ['admins.view'], platform: ['platform.view'], audit: ['audit.view'],
+  payments: ['finance.view'], reports: ['orders.view', 'finance.view'], reliability: ['platform.view'],
 };
 const allowedNav = () => NAV.filter(([r]) => !NAV_PERM[r] || session.can(...NAV_PERM[r]));
 
@@ -85,6 +88,7 @@ function render() {
       </main>
     </div>`;
   root.addEventListener('click', onClick);
+  root.addEventListener('submit', onFormSubmit);
   route();
 }
 
@@ -109,6 +113,7 @@ const SCREENS = {
   trust: scrTrust, reviews: scrReviews, admins: scrAdmins,
   locations: scrLocations, support: scrSupport, finance: scrFinance,
   platform: scrPlatform, audit: scrAudit,
+  payments: scrPayments, reliability: scrReliability, reports: scrReports,
 };
 
 /* The current page is marked with aria-current / aria-pressed, which is what
@@ -133,15 +138,20 @@ async function scrOverview() {
      behind it; the rest show as not available to them rather than failing. */
   const when_ = (ok, fn) => (ok ? fn() : Promise.resolve(null));
   await panel(view(), async () => {
-    const [vendors, orders, cases, partners, flags] = await Promise.all([
+    const [vendors, orders, cases, partners, flags, money, rel] = await Promise.all([
       when_(session.can('cafeterias.manage'), async () => (await quad.vendors({ includeArchived: 'true' })).vendors)
         .then((v) => v ?? (session.can('cafeterias.view') ? quad.vendors().then((x) => x.vendors) : null)),
       when_(session.can('orders.view'), async () => (await quad.orders({ scope: 'all' })).orders),
       when_(session.can('students.view'), async () => (await quad.verificationQueue('pending')).cases),
       when_(session.can('partners.view'), async () => (await quad.partners('pending')).partners),
       when_(session.can('platform.view'), () => quad.flags()),
+      when_(session.can('finance.view'), async () => ({
+        today: await quad.financeSummary({ from: startOfToday() }), all: await quad.financeSummary() })),
+      /* A reliability failure must not blank the overview: it is shown as
+         unavailable instead. */
+      when_(session.can('platform.view'), () => quad.reliability().catch(() => null)),
     ]);
-    return { vendors, orders, cases, partners, flags };
+    return { vendors, orders, cases, partners, flags, money, rel };
   }, (d) => {
     const live = (d.orders || []).filter((o) =>
       ['confirmed', 'preparing', 'ready', 'assigned', 'picked_up'].includes(o.state));
@@ -158,6 +168,27 @@ async function scrOverview() {
               d.cases.length ? 'within a 24-hour SLA' : 'nothing waiting') : kpi('ID reviews waiting', '—', na)}
         ${d.partners ? kpi('Partner applications', d.partners.length, '') : kpi('Partner applications', '—', na)}
       </div>
+      ${d.money ? `
+        <section class="card card-pad" style="margin-top:18px">
+          <div class="between"><h2 class="t-label">Money</h2>
+            <button type="button" class="btn btn-ghost btn-sm" data-route="finance">Open settlements</button></div>
+          <div class="grid-kpi" style="margin-top:10px">
+            ${kpi('GMV today', rupees(d.money.today.gmvPaise), `${d.money.today.orders} order(s)`)}
+            ${kpi('Platform fees today', rupees(d.money.today.platformFeesPaise), 'owner earnings, gross')}
+            ${kpi('ECHO ECHO revenue', rupees(d.money.all.quadNetRevenuePaise), 'all time, net of refunds and gateway fees')}
+            ${kpi('Owed to cafés', rupees(d.money.all.cafeteriaPayablePaise), 'payable now')}
+            ${kpi('Owed to partners', rupees(d.money.all.deliveryPayablePaise), 'earned, not yet paid')}
+            ${kpi('Payouts in flight', d.money.all.payoutsInFlight.count, rupees(d.money.all.payoutsInFlight.amountPaise))}
+          </div>
+        </section>` : ''}
+      ${d.rel && (!d.rel.ok || d.rel.summary.warnings) ? `
+        <section class="card card-pad" style="margin-top:18px">
+          <div class="between"><h2 class="t-label">Alerts</h2>
+            <button type="button" class="btn btn-ghost btn-sm" data-route="reliability">Open reliability</button></div>
+          ${d.rel.checks.filter((c) => !c.ok).map((c) => `
+            <div class="rowmuted"><span class="badge ${c.severity === 'error' ? 'badge-danger' : 'badge-warn'}">${
+              c.severity === 'error' ? 'error' : 'warning'}</span> ${esc(c.label)}: ${esc(c.detail)}</div>`).join('')}
+        </section>` : ''}
       ${missing.length ? `
         <section class="card card-pad" style="margin-top:18px">
           <h2 class="t-label">Not configured on this server</h2>
@@ -513,22 +544,6 @@ async function paintMenu() {
 /* ========================================================================
    ORDERS · USERS · VERIFICATION · PARTNERS
    ======================================================================== */
-async function scrOrders() {
-  setTitle('Orders', 'Every order on the platform.');
-  head().innerHTML = '';
-  await panel(view(), () => quad.orders({ scope: 'all' }), (d) => {
-    if (!d.orders.length) return EmptyState('No orders yet.', '');
-    return table(['Code', 'Cafeteria', 'Items', 'State', 'Total', 'When', ''],
-      d.orders.map((o) => [
-        esc(o.code), esc(o.vendor_name),
-        (o.items || []).map((i) => `${i.qty}× ${esc(i.name)}`).join(', '),
-        `<span class="badge badge-ink">${esc(ORDER_LABEL[o.state] || o.state)}</span>`,
-        rupees(o.total_paise), when(o.created_at),
-        `<button class="btn btn-ghost btn-sm" data-act="inspectOrder" data-id="${o.id}">Inspect</button>`,
-      ]));
-  }, { label: 'Loading orders' });
-}
-
 async function scrUsers() {
   setTitle('Users', 'Search, inspect, assign roles, suspend.');
   head().innerHTML = `
@@ -667,7 +682,7 @@ async function paintPartners(status) {
       ${d.policy ? `<p class="t-sm muted" style="margin-bottom:12px">Current policy: security deposit
         <b>${d.policy.amountPaise ? rupees(d.policy.amountPaise) : 'not required'}</b>.
         Approval needs a photo that clearly shows the applicant, acceptance of this policy, and the deposit recorded.</p>` : ''}
-      ${table(['Photo', 'Name', 'Student', 'Policy', 'Deposit', 'Rating', 'Status', ''],
+      ${table(['Photo', 'Name', 'Student', 'Policy', 'Deposit', 'Rating', 'Payouts', 'Status', ''],
       d.partners.map((p) => [
         p.has_photo
           ? `<a href="${quad.adminPartnerPhotoUrl(p.user_id)}" target="_blank" rel="noopener" title="Open full photo">
@@ -681,8 +696,14 @@ async function paintPartners(status) {
           : '<span class="badge badge-warn">Not accepted</span>',
         `${rupees(p.deposit_paise)}${p.deposit_required_paise ? ` <span class="t-xs faint">of ${rupees(p.deposit_required_paise)}</span>` : ''}`,
         p.rating?.count ? `★ ${Number(p.rating.average).toFixed(1)} (${p.rating.count})` : '<span class="t-xs faint">No ratings</span>',
+        p.payout_destination
+          ? `<span class="badge ${p.payout_destination.status === 'verified' ? 'badge-open' : p.payout_destination.status === 'failed' ? 'badge-danger' : 'badge-warn'}">${
+              esc(p.payout_destination.status)}</span> <span class="t-xs">${esc(p.payout_destination.masked || '')}</span>
+             ${p.payout_destination.holdUntil ? '<div class="t-xs faint">changed recently · on 24 h hold</div>' : ''}
+             ${p.last_payout ? `<div class="t-xs faint">last: ${esc(p.last_payout.state)} ${rupees(p.last_payout.amount_paise)}</div>` : ''}`
+          : '<span class="badge badge-closed">no bank or UPI yet</span>',
         `<span class="badge badge-ink">${esc(p.status)}${p.online ? ' · online' : ''}</span>
-         <div class="t-xs faint">${p.deliveries} deliveries</div>`,
+         <div class="t-xs faint">${p.deliveries} deliveries${p.active_orders ? ` · ${p.active_orders} active` : ''}</div>`,
         `<div class="row" style="gap:6px;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" data-act="recordDeposit" data-id="${p.user_id}" data-name="${esc(p.name || '')}">Record deposit</button>
           ${p.status === 'pending'
@@ -1151,6 +1172,228 @@ async function paintAudit(action) {
 }
 
 /* ========================================================================
+   SHARED: filter bars and pagers
+
+   Filtering and paging happen on the server; the URL-less app keeps the
+   current filter in S so Back/refresh within a screen keeps the reader's
+   place. An empty result says whether it is "nothing matched" or "nothing
+   exists", because those mean different things to an operator.
+   ======================================================================== */
+const optionList = (values, selected, anyLabel, labels = {}) =>
+  `<option value="">${esc(anyLabel)}</option>` + values.map((v) =>
+    `<option value="${esc(v)}" ${v === selected ? 'selected' : ''}>${esc(labels[v] || v.replace(/_/g, ' '))}</option>`).join('');
+
+const pager = (d, act) => {
+  const first = d.total ? (d.page - 1) * d.pageSize + 1 : 0;
+  const last = Math.min(d.total, d.page * d.pageSize);
+  return `<nav class="pager" aria-label="Pages">
+    <span class="t-xs faint">${first}–${last} of ${d.total}</span>
+    <button type="button" class="btn btn-ghost btn-sm" data-act="${act}" data-page="${d.page - 1}"
+            ${d.page <= 1 ? 'disabled' : ''}>Previous</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-act="${act}" data-page="${d.page + 1}"
+            ${last >= d.total ? 'disabled' : ''}>Next</button>
+  </nav>`;
+};
+
+const formValues = (form) => Object.fromEntries([...new FormData(form)].filter(([, v]) => v !== ''));
+const payBadge = (s) => `<span class="badge ${s === 'paid' ? 'badge-open' : s === 'failed' ? 'badge-danger'
+  : s === 'refunded' ? 'badge-warn' : 'badge-closed'}">${esc(s || 'none')}</span>`;
+
+/* ========================================================================
+   ORDERS — server-side search, filters and pages; a timeline per order
+   ======================================================================== */
+const ORDER_STATES = ['awaiting_payment', 'confirmed', 'preparing', 'ready', 'assigned',
+  'picked_up', 'delivered', 'cancelled', 'refunded'];
+
+async function scrOrders() {
+  setTitle('Orders', 'Every order, searched and filtered on the server. Open one for its full timeline.');
+  head().innerHTML = '';
+  const f = S.orderFilter;
+  view().innerHTML = `
+    <form class="filterbar" data-form="orders" aria-label="Filter orders">
+      <input class="input" name="q" placeholder="Order code, student or café" value="${esc(f.q || '')}" aria-label="Search orders">
+      <select class="input" name="state" aria-label="Order state">${optionList(ORDER_STATES, f.state, 'Any state', ORDER_LABEL)}</select>
+      <select class="input" name="fulfilment" aria-label="Fulfilment">${optionList(['pickup', 'delivery'], f.fulfilment, 'Pickup or delivery')}</select>
+      <select class="input" name="payment" aria-label="Payment state">${optionList(['paid', 'pending', 'created', 'failed', 'refunded', 'cancelled'], f.payment, 'Any payment')}</select>
+      <label class="t-xs faint">From <input class="input" type="date" name="from" value="${esc(f.from || '')}"></label>
+      <label class="t-xs faint">To <input class="input" type="date" name="to" value="${esc(f.to || '')}"></label>
+      <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-act="ordersReset">Clear</button>
+    </form>
+    <div id="orders-list"></div>`;
+  await paintOrders();
+}
+
+async function paintOrders() {
+  await panel(document.getElementById('orders-list'),
+    () => quad.adminOrders({ ...S.orderFilter, page: S.orderPage, pageSize: 25 }), (d) => {
+      if (!d.orders.length) {
+        return Object.keys(S.orderFilter).length
+          ? EmptyState('No order matches these filters.', 'Clear a filter to widen the search.')
+          : EmptyState('No orders yet.', 'Orders appear here the moment a student starts checkout.');
+      }
+      return table(['Code', 'When', 'Cafeteria', 'Student', 'Type', 'State', 'Payment', 'Total', 'Platform fee', ''],
+        d.orders.map((o) => [
+          `<b style="white-space:nowrap">${esc(o.code)}</b>`, when(o.created_at), esc(o.vendor_name), esc(o.customer_name || '—'),
+          esc(o.fulfilment), `<span class="badge badge-ink">${esc(ORDER_LABEL[o.state] || o.state)}</span>`,
+          payBadge(o.payment_status), `<span class="num">${rupees(o.total_paise)}</span>`,
+          `<span class="num">${o.platform_fee_paise == null ? '—' : rupees(o.platform_fee_paise)}</span>`,
+          `<button type="button" class="btn btn-ghost btn-sm" data-act="orderTimeline" data-id="${o.id}">Timeline</button>
+           <button type="button" class="btn btn-ghost btn-sm" data-act="inspectOrder" data-id="${o.id}">Items</button>`,
+        ])) + pager(d, 'ordersPage');
+    }, { label: 'Loading orders' });
+}
+
+const TIMELINE_KIND = { state: 'Status', payment: 'Payment', refund: 'Refund', webhook: 'Gateway webhook', audit: 'Audit' };
+
+/* ========================================================================
+   PAYMENTS — what Cashfree was asked, what it said, and what was refused
+   ======================================================================== */
+async function scrPayments() {
+  setTitle('Payments', 'Cashfree references, refunds and webhook history. A payment is confirmed server-to-server, never by the browser.');
+  head().innerHTML = '';
+  const f = S.payFilter;
+  view().innerHTML = `
+    <form class="filterbar" data-form="payments" aria-label="Filter payments">
+      <input class="input" name="q" placeholder="Order code or Cashfree id" value="${esc(f.q || '')}" aria-label="Search payments">
+      <select class="input" name="status" aria-label="Payment status">${optionList(['paid', 'pending', 'created', 'failed', 'refunded', 'cancelled'], f.status, 'Any status')}</select>
+      <label class="t-xs faint"><input type="checkbox" name="unreconciled" value="true" ${f.unreconciled ? 'checked' : ''}> Not yet reconciled</label>
+      <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-act="paymentsReset">Clear</button>
+    </form>
+    <div id="pay-list"></div>
+    <div id="hook-list" style="margin-top:18px"></div>`;
+  await Promise.all([paintPayments(), paintWebhooks()]);
+}
+
+async function paintPayments() {
+  await panel(document.getElementById('pay-list'),
+    () => quad.adminPayments({ ...S.payFilter, page: S.payPage, pageSize: 25 }), (d) => {
+      if (!d.payments.length) {
+        return Object.keys(S.payFilter).length ? EmptyState('No payment matches these filters.', '')
+          : EmptyState('No payments yet.', 'The first checkout creates one.');
+      }
+      return table(['Order', 'When', 'Status', 'Amount', 'Refunded', 'Cashfree order', 'Cashfree payment', 'Reconciled'],
+        d.payments.map((p) => [
+          `<b style="white-space:nowrap">${esc(p.order_code)}</b>`, when(p.created_at),
+          payBadge(p.status) + (p.flagged_reason ? ` <span class="badge badge-danger" title="${esc(p.flagged_reason)}">flagged</span>` : ''),
+          `<span class="num">${rupees(p.amount_paise)}</span>`,
+          `<span class="num">${p.refunded_paise ? rupees(p.refunded_paise) : '—'}</span>`,
+          `<code class="t-xs">${esc(p.provider_order_id || '—')}</code>`,
+          `<code class="t-xs">${esc(p.provider_payment_id || '—')}</code>`,
+          p.reconciled_at ? when(p.reconciled_at) : (p.status === 'paid' ? '<span class="badge badge-warn">awaiting settlement</span>' : '—'),
+        ])) + pager(d, 'paymentsPage');
+    }, { label: 'Loading payments' });
+}
+
+async function paintWebhooks() {
+  await panel(document.getElementById('hook-list'), () => quad.adminWebhooks(7), (d) => `
+    <section class="card card-pad">
+      <h2 class="t-label">Webhooks</h2>
+      <div class="grid-kpi" style="margin-top:10px">
+        ${kpi('Payment events', d.health.payments.events, `${d.health.payments.duplicates} duplicates ignored · 30 days`)}
+        ${kpi('Payout events', d.health.payouts.events, `${d.health.payouts.duplicates} duplicates ignored · 30 days`)}
+        ${kpi('Refused', d.refused.length, d.refused.length ? 'bad signature or stale · 7 days' : 'none in 7 days')}
+      </div>
+      ${d.refused.length ? `<h3 class="t-label" style="margin-top:14px">Refused deliveries</h3>
+        ${table(['When', 'Endpoint', 'Reason'], d.refused.map((r) => [when(r.at), esc(r.action), esc(r.reason || '—')]))}` : ''}
+      <h3 class="t-label" style="margin-top:14px">Recent payment events</h3>
+      ${d.payments.length ? table(['Received', 'Event', 'Event id', 'Duplicates'],
+        d.payments.slice(0, 25).map((w) => [when(w.received_at), esc(w.event_type || '—'),
+          `<code class="t-xs">${esc(String(w.event_id).slice(0, 24))}</code>`, String(w.duplicate_count)]))
+        : '<p class="t-sm muted">No payment events in the last 7 days.</p>'}
+      <p class="t-xs faint" style="margin-top:8px">Payloads are kept on the server for audit and are not shown here.</p>
+    </section>`, { label: 'Loading webhook history' });
+}
+
+/* ========================================================================
+   RELIABILITY — what needs a person, and what to do about it
+   ======================================================================== */
+async function scrReliability() {
+  setTitle('Reliability', 'Readiness, ledger invariants, stuck money and failed jobs, each with its next step.');
+  head().innerHTML = `<button type="button" class="btn btn-secondary btn-sm" data-act="reliabilityRefresh">Check again</button>`;
+  await panel(view(), () => quad.reliability(), (d) => `
+    <section class="card card-pad">
+      <div class="between" style="flex-wrap:wrap;gap:8px">
+        <h2 class="t-label">${d.ok ? 'Nothing needs attention' : 'Needs attention'}</h2>
+        <span class="t-sm">${d.summary.errors} error(s) · ${d.summary.warnings} warning(s) · ${d.summary.checks} checks
+          ${d.commit ? ` · build <code class="t-xs">${esc(d.commit.slice(0, 12))}</code>` : ''}</span>
+      </div>
+      ${table(['Status', 'Check', 'Observed', 'What to do'], d.checks.map((c) => [
+        `<span class="badge ${c.ok ? 'badge-open' : c.severity === 'error' ? 'badge-danger' : 'badge-warn'}">${c.ok ? 'ok' : c.severity === 'error' ? 'error' : 'warning'}</span>`,
+        esc(c.label), `<span class="t-xs">${esc(c.detail)}</span>`, c.action ? `<span class="t-xs">${esc(c.action)}</span>` : '']))}
+    </section>
+    ${d.recentBatches.length ? `<section class="card card-pad" style="margin-top:18px">
+      <h2 class="t-label">Recent settlement runs</h2>
+      ${table(['Kind', 'Period', 'State', 'Built'], d.recentBatches.map((b) => [esc(b.kind), esc(b.period_key || 'manual'), esc(b.state), when(b.created_at)]))}
+    </section>` : ''}
+    <p class="t-xs faint" style="margin-top:10px">
+      The scheduled keep-warm job checks /health and /ready from outside every 10 minutes;
+      its failures arrive by GitHub email with the cause in the run summary.
+    </p>`, { label: 'Running checks' });
+}
+
+/* ========================================================================
+   REPORTS — server-built CSV, permission-checked and audited
+   ======================================================================== */
+const REPORT_KINDS = [
+  ['orders', 'Orders', 'orders.view', 'Every order with fulfilment, state, payment state, fees and total.'],
+  ['payments', 'Payments', 'finance.view', 'Cashfree order and payment ids, amounts, refunds and settlement ids.'],
+  ['payouts', 'Payouts', 'finance.view', 'Café and partner transfers with masked destinations and UTRs.'],
+  ['ledger', 'Ledger', 'finance.view', 'Every double-entry line: debit and credit per account and party.'],
+];
+
+async function scrReports() {
+  setTitle('Reports', 'Exports for accounts and operations. Each export is recorded in the audit log.');
+  head().innerHTML = '';
+  const kinds = REPORT_KINDS.filter(([, , perm]) => session.can(perm));
+  const today = new Date();
+  const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const monthStart = iso(new Date(today.getFullYear(), today.getMonth(), 1));
+  view().innerHTML = kinds.length ? `
+    <section class="card card-pad">
+      <form class="stack" data-form="report" aria-label="Export a report" style="max-width:520px">
+        <label class="field"><span class="t-label">Report</span>
+          <select class="input" name="kind">${kinds.map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join('')}</select></label>
+        <div class="row" style="gap:12px;flex-wrap:wrap">
+          <label class="field"><span class="t-label">From</span><input class="input" type="date" name="from" value="${monthStart}" required></label>
+          <label class="field"><span class="t-label">To</span><input class="input" type="date" name="to" value="${iso(today)}" required></label>
+        </div>
+        <div><button type="submit" class="btn btn-primary btn-sm">Download CSV</button></div>
+        <p class="t-xs faint">At most 366 days per export. Amounts are in rupees with two decimals.
+          Bank accounts appear masked; full numbers are held only by Cashfree.</p>
+      </form>
+    </section>
+    <section class="card card-pad" style="margin-top:18px">
+      ${table(['Report', 'Contents'], kinds.map(([, l, , d]) => [esc(l), esc(d)]))}
+    </section>`
+    : EmptyState('No reports are available to you.', 'Exports need the orders.view or finance.view permission.');
+}
+
+async function downloadReport(form) {
+  const btn = form.querySelector('button[type=submit]');
+  const v = formValues(form);
+  await act(btn, async () => {
+    const { blob, name } = await quad.downloadReport(v.kind, v.from, v.to);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, { ok: 'Report downloaded' });
+}
+
+/* Every filter form on these screens submits here (Enter or Apply). */
+function onFormSubmit(e) {
+  const form = e.target.closest('form[data-form]');
+  if (!form || form.closest('.modalwrap')) return;
+  e.preventDefault();
+  if (form.dataset.form === 'orders') { S.orderFilter = formValues(form); S.orderPage = 1; paintOrders(); }
+  else if (form.dataset.form === 'payments') { S.payFilter = formValues(form); S.payPage = 1; paintPayments(); }
+  else if (form.dataset.form === 'report') downloadReport(form);
+}
+
+/* ========================================================================
    MODAL
    ======================================================================== */
 /* The dialog lives on <body>, outside #app, so it needs its own listener —
@@ -1227,6 +1470,32 @@ const select = (name, label, options) => `
   <select class="input" name="${name}">${options.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></label>`;
 
 const ACTIONS = {
+  ordersPage: (t) => { S.orderPage = Number(t.dataset.page) || 1; return paintOrders(); },
+  ordersReset: () => { S.orderFilter = {}; S.orderPage = 1; return scrOrders(); },
+  paymentsPage: (t) => { S.payPage = Number(t.dataset.page) || 1; return paintPayments(); },
+  paymentsReset: () => { S.payFilter = {}; S.payPage = 1; return scrPayments(); },
+  reliabilityRefresh: () => scrReliability(),
+  orderTimeline: async (t) => {
+    const d = await quad.orderTimeline(t.dataset.id).catch((e) => { toast(e.message, 'bad'); return null; });
+    if (!d) return;
+    const f = d.financials;
+    modal(`Order ${d.order.code}`, `
+      <div class="rowmuted">${esc(d.order.vendor_name)} · ${esc(d.order.fulfilment)} · ${esc(ORDER_LABEL[d.order.state] || d.order.state)}</div>
+      ${f ? `<div class="sunken" style="margin-top:10px">
+        <div class="kot-line"><span>Food</span><span class="money">${rupees(f.food_subtotal_paise)}</span></div>
+        <div class="kot-line"><span>Delivery fee</span><span class="money">${rupees(f.delivery_fee_paise)}</span></div>
+        <div class="kot-line"><span>Platform fee</span><span class="money">${rupees(f.platform_fee_paise)}</span></div>
+        <div class="kot-line"><b>Customer paid</b><b class="money">${rupees(d.order.total_paise)}</b></div>
+        <div class="kot-line"><span>Gateway fee</span><span class="money">${f.gateway_fee_paise ? rupees(f.gateway_fee_paise) : 'from the settlement report'}</span></div>
+      </div>` : '<p class="t-sm muted">No financial snapshot is recorded for this order (one is written when its payment is confirmed).</p>'}
+      <h3 class="t-label" style="margin-top:12px">Timeline</h3>
+      <ol class="timeline">${d.timeline.map((e) => `<li>
+        <span class="t-xs faint">${esc(new Date(e.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}</span>
+        <span class="chip chip-soft">${esc(TIMELINE_KIND[e.kind] || e.kind)}</span>
+        ${esc(e.label)}${e.amountPaise ? ` · ${rupees(e.amountPaise)}` : ''}${e.by ? ` · ${esc(e.by)}` : ''}${
+          e.outcome && e.outcome !== 'ok' ? ` · <b>${esc(e.outcome)}</b>` : ''}${e.duplicates ? ` · ${e.duplicates} duplicate(s) ignored` : ''}${
+          e.note ? `<div class="t-xs faint">${esc(e.note)}</div>` : ''}</li>`).join('') || '<li class="t-sm muted">Nothing recorded.</li>'}</ol>`, DONE);
+  },
   theme: () => toggleTheme(),
 
   /* ---- incidents, deductions, deposits ---- */

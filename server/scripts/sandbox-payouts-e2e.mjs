@@ -155,6 +155,13 @@ try {
   const good = await P3.c.put('/partner/payout-method', { instrument: 'bank', accountNumber: '00011020001772', ifsc: 'HDFC0000001', holderName: 'Sandbox Rider' });
   await ensureVerified(good, 'Cashfree sandbox test account: success');
   const r3 = await P3.c.post(`/partner/withdrawals/${w3.body.id}/retry`);
+  /* Changed details are held (destination_change_hold_hours): the retry is
+     created but NOT sent until the hold has passed. */
+  record('retry to CHANGED details waits out the security hold; nothing is sent', r3.body?.state === 'pending', r3.body?.state);
+  await pool.query(`UPDATE payout_destination SET created_at = now() - interval '25 hours'
+                     WHERE partner_id = $1 AND active`, [P3.u.id]);
+  const { dispatchPayout } = await import('../src/services/wallet.js');
+  if (r3.body?.id) await dispatchPayout(r3.body.id);
   const fr3 = r3.body?.id ? await settleFinal(r3.body.id) : { state: `none (${r3.status})` };
   record('retry pays under a new transfer id, exactly once', fr3.state === 'paid' && r3.body.id !== w3.body.id
          && await bal('delivery_payable', `AND partner_id='${P3.u.id}'`) === 0, fr3.state);

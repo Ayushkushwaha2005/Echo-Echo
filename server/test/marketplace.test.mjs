@@ -315,6 +315,54 @@ test('bank payout details go to Cashfree only; Quad keeps a masked hint and the 
   assert.ok(!dump.includes(ACCOUNT), 'the full account number is never stored');
 });
 
+test('a CHANGED payout destination is held 24 h and the partner is told; a first one is not held', async () => {
+  await setPayoutConfig({ earning_hold_hours: 0, min_withdrawal_paise: 1000 });
+  await setTerms(pool, TERMS_115);
+  const partner = await newPartner();
+  const ps = await as(partner);
+  const first = await ps.put('/partner/payout-method', { instrument: 'bank', accountNumber: ACCOUNT,
+                                                         ifsc: 'HDFC0001234', holderName: 'Ravi Kumar' });
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.equal(first.body.holdUntil, null, 'onboarding is not slowed down');
+  assert.equal((await pool.query(`SELECT 1 FROM notification WHERE user_id=$1 AND kind='payout_destination_changed'`, [partner.id])).rowCount, 0);
+
+  const changed = await ps.put('/partner/payout-method', { instrument: 'upi', vpa: 'ravi.k@okhdfc', holderName: 'Ravi Kumar' });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.ok(changed.body.holdUntil, 'a change is held');
+  /* The notification is fire-and-forget after the response: wait for it. */
+  let told = [];
+  for (let i = 0; i < 40 && told.length < 2; i++) {
+    told = (await pool.query(`SELECT channel, body FROM notification WHERE user_id=$1 AND kind='payout_destination_changed'`, [partner.id])).rows;
+    if (told.length < 2) await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.deepEqual(told.map((n) => n.channel).sort(), ['email', 'inapp'], 'told on a second channel');
+  assert.match(told[0].body, /ra\*\*\*@okhdfc instead of XXXX9012/, 'masked details only');
+  assert.ok(!JSON.stringify(told).includes(ACCOUNT));
+
+  const a = await paidOrder(); await deliver(a.orderId, partner, a.cs);
+  const w = await ps.post('/partner/withdrawals', { idempotencyKey: 'wd-hold-0001' });
+  assert.equal(w.status, 409);
+  assert.match(w.body.error, /changed recently/);
+  assert.ok((await ps.get('/partner/wallet')).body.destinationHoldUntil);
+
+  /* A batch payout to the same new details is not sent either: it waits. */
+  const { dispatchPayout } = await import('../src/services/wallet.js');
+  const dest = (await pool.query(`SELECT id FROM payout_destination WHERE partner_id=$1 AND active`, [partner.id])).rows[0];
+  const p = (await pool.query(`INSERT INTO payout (partner_id, amount_paise, destination_id) VALUES ($1, 1000, $2) RETURNING id`,
+                              [partner.id, dest.id])).rows[0];
+  const d = await dispatchPayout(p.id);
+  assert.equal(d.state, 'pending');
+  assert.match(d.note, /held until/);
+  assert.equal(calls.filter((c) => c.url === '/payout/transfers').length, 0, 'nothing was sent');
+  await pool.query(`DELETE FROM payout WHERE id=$1`, [p.id]);
+
+  /* After the hold, the same request pays. */
+  await pool.query(`UPDATE payout_destination SET created_at = now() - interval '25 hours' WHERE id=$1`, [dest.id]);
+  const later = await ps.post('/partner/withdrawals', { idempotencyKey: 'wd-hold-0002' });
+  assert.equal(later.status, 200, JSON.stringify(later.body));
+  assert.equal(later.body.state, 'paid');
+});
+
 test('UPI details left pending by Cashfree do not enable withdrawal', async () => {
   beneficiaryStatus = 'INITIATED';
   await setPayoutConfig({ earning_hold_hours: 0, min_withdrawal_paise: 500 });

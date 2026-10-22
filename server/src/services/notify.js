@@ -84,6 +84,7 @@ export const KINDS = {
   deposit_deduction_decided:  { channels: ['inapp', 'email'], title: 'Security deposit: decision recorded' },
   deposit_refunded:     { channels: ['inapp', 'email'], title: 'Security deposit returned' },
   support_reply:        { channels: ['inapp', 'sms'], title: 'Support replied to your case' },
+  payout_destination_changed: { channels: ['inapp', 'email'], title: 'Your payout details were changed' },
 };
 
 /**

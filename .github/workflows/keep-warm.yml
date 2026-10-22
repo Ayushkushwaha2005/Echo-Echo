@@ -1,15 +1,27 @@
 # ===========================================================================
-# ECHO ECHO — keep the free Render instance from sleeping.
+# ECHO ECHO — keep the free Render instance from sleeping, and say so when
+# production is not able to serve.
 #
 # Render's free plan stops an instance after 15 minutes with no inbound
 # traffic; the next visitor then waits for a cold start (measured at ~13 s).
-# This asks /health every 10 minutes. /health does not touch the database,
-# so it keeps the API process warm WITHOUT keeping Neon's compute awake.
 #
-# Honest limits: GitHub runs scheduled jobs late under load (sometimes by
-# more than 15 minutes), so this reduces cold starts, it does not remove
-# them. One free service running all month is ~744 h, inside Render's 750 h.
-# The dependable fix is a paid instance, which is a spending decision.
+# tools/keep-warm.mjs asks two separate questions:
+#   liveness   /health/  the process runs (does not touch the database)
+#   readiness  /ready/   the database answers, every shipped migration is
+#                        applied, no development data is in production
+# It retries only transient failures (cold start, timeout, a database blip),
+# a bounded number of times; a redirect, a 4xx or a pending migration fails
+# at once with the next action in the run summary. Nothing is made green.
+#
+# The target is the CANONICAL host. Until 21 Oct 2026 this job asked the
+# apex domain, which answers 308; curl -f counted that as success, so the
+# API was never actually pinged (see server/test/keep-warm.test.mjs).
+#
+# Honest limits: GitHub runs scheduled jobs late under load (measured every
+# few hours on 2026-10-14), so this reduces cold starts, it does not remove
+# them, and it is a coarse signal, not uptime monitoring. A failed run emails
+# whoever last edited this schedule. The dependable fix for cold starts is a
+# paid instance, which is a spending decision.
 # ===========================================================================
 name: keep-warm
 on:
@@ -18,20 +30,22 @@ on:
   workflow_dispatch: {}
 permissions:
   contents: read
+# A late scheduled run must not queue behind (or race) the previous one.
+concurrency:
+  group: keep-warm
+  cancel-in-progress: false
 jobs:
   ping:
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    # 2 probes x (4 attempts x 60 s timeout + 50 s of backoff) at worst.
+    timeout-minutes: 12
     steps:
-      - name: GET /health through the production site
-        run: curl -fsS -m 90 -o /dev/null -w 'health %{http_code} in %{time_total}s\n' https://echoecho.tech/api/health/
-      # Readiness, too: the database answers and every migration is applied.
-      # A failed run emails whoever last edited this schedule. A coarse signal
-      # (GitHub runs this every few hours in practice, measured 2026-10-14),
-      # not uptime monitoring: see docs/LAUNCH-READINESS-2026-10-14-FOLLOWUP.md.
-      - name: GET /ready through the production site
-        run: |
-          set -euo pipefail
-          body=$(curl -fsS -m 90 https://www.echoecho.tech/api/ready/)
-          echo "$body" | grep -q '"ready":true' || { echo "::error title=Not ready::/ready did not report ready"; exit 1; }
-          echo "ready"
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/keep-warm.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Liveness and readiness of production
+        run: node tools/keep-warm.mjs https://www.echoecho.tech/api

@@ -23,7 +23,8 @@ import { adapterFor } from '../services/payment-providers.js';
 import { detectOperationalDifferences, webhookHealth } from '../services/reconciliation.js';
 import { settle } from '../services/payouts.js';
 import { partnerWallet, requestWithdrawal, retryPayout, payoutConfig, validatePayoutConfig,
-         applyTransferOutcome, syncInFlightPayouts } from '../services/wallet.js';
+         applyTransferOutcome, syncInFlightPayouts, destinationChangeHold } from '../services/wallet.js';
+import { notifyAsync } from '../services/notify.js';
 
 /* Limits per partner, not per IP: a campus shares a handful of NAT IPs. */
 const perActor = (req) => (req.actor?.id ? `actor:${req.actor.id}` : req.ip);
@@ -142,10 +143,21 @@ export default async function walletRoutes(app) {
     if (inflight) throw Conflict('A withdrawal is in progress', 'Change your payout details after it completes.');
     const contact = await one(`SELECT coalesce(phone, contact_phone) AS phone, email FROM app_user WHERE id=$1`,
                               [req.actor.id]);
+    const previous = await one(`SELECT masked FROM payout_destination WHERE partner_id=$1 AND active`, [req.actor.id]);
     const d = await registerDestination({ partnerId: req.actor.id, body: req.body, actorId: req.actor.id, contact });
     await audit(req, { action: 'payout.destination.partner', resource: 'payout_destination', resourceId: d.id,
-                       outcome: 'ok', detail: { instrument: d.instrument, status: d.verification_status } });
-    return { destination: shapeDest(d) };
+                       outcome: 'ok', detail: { instrument: d.instrument, status: d.verification_status,
+                                                replaced: previous ? previous.masked : null } });
+    /* Every CHANGE is told to the partner on a second channel, with masked
+       details only, so a change they did not make is noticed within the hold. */
+    let holdUntil = null;
+    if (previous) {
+      holdUntil = await destinationChangeHold({ query: q }, d, await payoutConfig());
+      notifyAsync(req.actor.id, 'payout_destination_changed', {
+        body: `Payouts now go to ${d.masked} instead of ${previous.masked}. If you did not make this change, contact support immediately.`,
+        data: { destinationId: d.id, holdUntil } });
+    }
+    return { destination: shapeDest(d), holdUntil };
   });
 
   app.post('/partner/withdrawals', { config: { rateLimit: { max: 10, timeWindow: '1 hour', keyGenerator: perActor, hook: 'preHandler' } } }, async (req) => {
