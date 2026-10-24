@@ -54,6 +54,7 @@ const FILES = [
   ['e2e', 'test/campus-address.test.mjs'],
   ['e2e', 'test/delivery-anywhere.test.mjs'],
   ['e2e', 'test/cafe-hours.test.mjs'],
+  ['e2e', 'test/tulips-name.test.mjs'],
   ['e2e', 'test/agent.test.mjs'],
   ['security', 'test/security.test.mjs'],
   ['security', 'test/edge-limit.test.mjs'],
