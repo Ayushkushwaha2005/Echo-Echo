@@ -210,7 +210,9 @@ export const cashfree = {
           customer_phone: customer.phone,
           ...(customer.name ? { customer_name: customer.name } : {}),
         },
-        order_note: `Quad order ${order.code}`,
+        /* What the customer reads on Cashfree's checkout and receipt: the
+           order code and the café it is from. */
+        order_note: orderNote(order.code, ctx.vendorName),
         /* Carried back on the webhook and the status pull. Used only as a
            cross-check against our own mapping — never as the mapping. */
         order_tags: { quad_order_id: order.id, quad_order_code: order.code },
@@ -778,4 +780,13 @@ export function requireAdapter() {
       'credentials. No order can be placed until then, and there is no cash option.');
   }
   return a;
+}
+
+/* Cashfree's order_note: plain text, at most 200 characters. The café name is
+   reduced to letters, digits and simple punctuation, so one accented
+   character can never get an order refused ("Café Frisco" -> "Cafe Frisco"). */
+export function orderNote(code, vendorName) {
+  const cafe = String(vendorName || '').normalize('NFKD').replace(/\p{M}/gu, '')
+    .replace(/[^A-Za-z0-9 &'.-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  return cafe ? `ECHO ECHO order ${code} from ${cafe}` : `ECHO ECHO order ${code}`;
 }

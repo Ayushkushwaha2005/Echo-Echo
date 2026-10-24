@@ -214,6 +214,9 @@ test('the server creates a Cashfree order with ITS OWN amount and leaks no secre
   assert.ok(call.apiVersion, 'an x-api-version is pinned');
   assert.equal(call.idempotencyKey, call.body.order_id,
     "the payment attempt's own id is the provider idempotency key");
+  const code = (await pool.query(`SELECT code FROM food_order WHERE id=$1`, [draft.id])).rows[0].code;
+  assert.equal(call.body.order_note, `ECHO ECHO order ${code} from Frisco`,
+    'the customer sees the order code and the café on the Cashfree checkout');
 
   /* The Cashfree order id IS our payment id: one provider order per attempt,
      which is what keeps the webhook lookup unambiguous. */
