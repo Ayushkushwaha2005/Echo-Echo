@@ -336,7 +336,8 @@ export default async function paymentRoutes(app) {
                                  WHERE vendor_id=$1 AND status='active'`, [order.vendor_id]);
           if (sv) splits = [{ providerVendorId: sv.provider_vendor_id, amountPaise: snap.cafeteria_payable_paise }];
         }
-        gw = await adapter.createOrder({ paymentId: pay.id, order, amountPaise, customer, splits });
+        gw = await adapter.createOrder({ paymentId: pay.id, order, amountPaise, customer, splits,
+                                         vendorName: vendor.name });
         for (const x of splits) {
           await q(`INSERT INTO payment_split (payment_id, vendor_id, provider_vendor_id, amount_paise)
                    VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,

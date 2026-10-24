@@ -31,3 +31,7 @@ campus-field/
 public-key/
 *.pem
 API.txt
+
+# Supplied counter photos of payment QRs: they show a merchant UPI id.
+# Kept locally (sha256 recorded in docs/QR-CAFE-READINESS.md), not published.
+brand/qr/supplied/

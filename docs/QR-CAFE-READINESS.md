@@ -1,8 +1,9 @@
 # Café QR — readiness and verification procedure
 
-Status (2026-10-22): **waiting for the owner's café QR image.** Nothing has been
-invented or substituted: no QR has been generated for the café, and no URL has
-been guessed.
+Status (2026-10-24): **the Tulips counter QR was supplied and inspected** — a
+static PhonePe UPI QR; it is not used for checkout (see the section at the end).
+Nothing has been invented or substituted: no QR has been generated for the café,
+and no URL has been guessed.
 
 ## What the image must be checked for, in order
 
@@ -46,8 +47,48 @@ decodes at 600/300/150/100 px — `usable_as_menu_qr: true`. A copy with the
 border cropped away is refused (quiet zone 1). A synthetic `upi://pay` QR is
 classified `upi_payment` and refused as a menu QR.
 
+## Tulips counter QR — supplied 24 Oct 2026, inspected
+
+| | |
+|---|---|
+| Supplied file | `WhatsApp Image 2026-10-24 at 7.39.08 PM.jpeg` (960 × 1280, a phone photo of the counter sticker) |
+| Kept as | `brand/qr/supplied/tulips-phonepe-counter-2026-10-24.jpeg`, byte-identical copy, **not in Git** (`.gitignore`: it shows a merchant UPI id and this repository is public) |
+| sha256 | `9ec798687319b30f366366b051813d58a7f185a2102acd9af9ba880092df609b` (original and copy) |
+| Decoder | OpenCV 4.10 `QRCodeDetector` via `tools/qr-verify.py`; 37 modules (version 5); decodes at 600 and 300 px |
+| Kind | **`upi_payment`** — a static PhonePe merchant QR: `upi://pay?pa=Q44•••248@ybl&pn=PhonePeMerchant&mc=0000&mode=02&purpose=00` |
+| Amount / reference | none (no `am`, no `tr`): the payer types any amount, nothing ties a payment to an order |
+| Payee name in the QR | the generic **`PhonePeMerchant`**, not "Tulips"; `mc=0000` is no merchant category |
+| Verdict | `usable_as_menu_qr: false` (not a site link). Quiet zone reads 0 because it is a photo, not artwork; irrelevant, since it will not be printed by ECHO ECHO |
+
+**What it proves and what it does not.** It shows that the counter sticker
+collects to a PhonePe merchant id (`…@ybl`, PhonePe on Yes Bank). It does **not**
+show that the id belongs to Tulips: the QR names no business, and the sticker
+gives only the PhonePe brand and the id. Nothing reachable from this
+environment can tell the account holder of a third party's UPI id without
+an account product that is not active here (Cashfree Payouts beneficiary
+validation, or the Verification Suite). Only these establish it:
+
+1. the Tulips owner opens PhonePe Business → Profile and confirms the business
+   name, the settlement bank account and that `Q44•••248@ybl` is theirs; or
+2. once Cashfree Payouts is activated, the café's settlement account is added in
+   Campus Control (Cafés → Settlement account), and Cashfree's own beneficiary
+   validation returns the registered name, which must read as the Tulips owner
+   or business.
+
+**Decision: the QR is not connected to checkout.** A static UPI QR carries no
+order id, amount or callback: a customer scanning it cannot be matched to an
+order, no webhook confirms it, it cannot be refunded through ECHO ECHO, and the
+₹10 platform fee and ₹15 delivery fee could not be collected. ECHO ECHO orders
+stay online-prepaid through the server-created Cashfree order and are confirmed
+only by a signed webhook or a server-side status pull. Tulips is paid its share
+(`cafeteria_payable`) by settlement to its **verified** account — see
+`docs/TULIPS-PAYMENTS-2026-10-24.md`. The sticker stays what it is: the café's
+own counter QR for walk-in sales, outside the app.
+
 ## Pending
 
-- [ ] Owner supplies the café QR image.
-- [ ] Steps 1–4 above (Claude can do these as soon as the file arrives).
-- [ ] Step 5 printed-copy test on an iPhone and an Android phone (owner or café staff).
+- [x] Owner supplies the café QR image (24 Oct 2026).
+- [x] Steps 1–2 above: decoded, classified, original preserved, sha256 recorded.
+- [ ] Payee identity of `Q44•••248@ybl` — the Tulips owner, as above.
+- [ ] Step 5 (print test) — not applicable: this is the café's own sticker and
+      ECHO ECHO does not print or display it.
