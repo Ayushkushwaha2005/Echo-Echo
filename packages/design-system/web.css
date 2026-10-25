@@ -451,13 +451,9 @@ textarea.input { resize: vertical; min-height: 72px; }
   text-decoration: underline; text-underline-offset: 2px;
 }
 
-/* The landing page's "how it works" steps and the price / partner pair. */
-.stepgrid { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-3); }
-.infogrid { display: grid; gap: var(--s-3); align-items: start; }
-@media (min-width: 720px) {
-  .stepgrid { grid-template-columns: repeat(3, 1fr); }
-  .infogrid { grid-template-columns: 1fr 1fr; gap: var(--s-4); }
-}
+/* The landing page's one link below the fold: icon, words, chevron. */
+.partner-tile { display: flex; align-items: center; gap: var(--s-3); width: 100%; text-align: left; }
+.partner-tile > svg:last-child { flex: none; color: var(--text-muted); }
 
 /* Layout helpers used by the customer screens. Single column on phones. */
 .cafgrid, .menugrid, .livegrid { display: grid; gap: var(--s-3); }
@@ -652,9 +648,23 @@ textarea.input { resize: vertical; min-height: 72px; }
 .site-foot .brand-logo-foot { display: inline-block; width: 22px; height: 22px; vertical-align: middle; margin-right: 4px; }
 .auth-brand { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .auth-brand .brand-name { font-size: 1.05rem; }
-/* The assistant's avatar is the mascot itself, not a lettered tile. */
-.ai-mark.ai-mark-logo { background: none; padding: 0; overflow: hidden; }
-.ai-mark.ai-mark-logo .brand-mark { width: 100%; height: 100%; border-radius: 8px; }
+/* The assistant's avatar is the mascot itself, not a lettered tile. Its
+   artwork has the cream ground of the original, so on the cream page it
+   needs an edge to read as a picture: a hairline, and corners rounded only
+   as far as that ground goes (a circle would cut into the burger and tea). */
+.ai-mark.ai-mark-logo { background: var(--surface); padding: 0; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 9px; }
+.ai-mark.ai-mark-logo .brand-mark { display: block; width: 100%; height: 100%; object-fit: contain; }
+
+/* Ask ECHO ECHO: the page title with the mascot beside it, the one-line
+   explainer under it, then the conversation in body text. Suggested
+   prompts are choices, set at 500 so they do not outweigh the answers. */
+.site .ask-head { align-items: center; gap: var(--s-3); }
+.site .ask-head p { margin: 2px 0 0; line-height: var(--lh-meta); }
+.site .ask-note { margin-top: auto; }
+.site .quick button { font-weight: var(--w-medium); color: var(--text-2); }
+.site .quick button:hover { color: var(--accent-text); }
+.site .quick button.primary { font-weight: var(--w-semibold); color: var(--text-on-rose); }
+.site .composer textarea::placeholder { color: var(--text-muted); }
 
 /* ==========================================================================
    OCT 2026 REFRESH - the customer site  (scoped to .site)
@@ -730,6 +740,41 @@ textarea.input { resize: vertical; min-height: 72px; }
 .site .cafcard-top { display: flex; align-items: center; gap: 12px; }
 .site .cafcard .cafmark { width: 48px; height: 48px; border-radius: 14px; font-size: 1.05rem; }
 .site .cafcard-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; padding-top: 10px; border-top: 1px dashed var(--line); }
+/* A café's status and facts (StatusPill, CafFacts in app.js). Told apart by
+   weight and colour rather than boxes: the status is stated (600, with a
+   green or red dot; "Closed" in red), the next opening is plain readable text (500), the
+   hours and prep time are facts (500, secondary ink), and "No ratings yet"
+   is a footnote (400, muted). */
+.site .caf-status { font-size: var(--t-sm); font-weight: var(--w-medium); color: var(--text-2); margin-top: 2px; }
+.site .caf-status.is-open { color: var(--ok); font-weight: var(--w-semibold); }
+.site .status {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  font-size: var(--t-xs); font-weight: var(--w-semibold); line-height: var(--lh-meta);
+}
+/* The green measures 4.2:1 on a café's green header tint, so "Open" is set
+   in ink and the live dot carries the green. */
+.site .status-open { color: var(--text); }
+.site .status-open .dot { background: var(--ok); }
+.site .status-closed { color: var(--danger); }
+.site .caffacts { display: flex; flex-direction: column; gap: 4px; font-size: var(--t-xs); line-height: var(--lh-meta); }
+.site .caffacts-hours { color: var(--text-2); font-weight: var(--w-medium); }
+.site .caffacts-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s-4); }
+.site .caffact { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; color: var(--text-2); font-weight: var(--w-medium); }
+.site .caffact svg { color: var(--warn); }
+.site .caffact b { color: var(--text); font-weight: var(--w-semibold); }
+.site .caffact-quiet { color: var(--text-muted); font-weight: var(--w-regular); }
+.site .cafhero-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: var(--s-4) 0 6px; font-size: var(--t-sm); font-weight: var(--w-medium); color: var(--text-2); }
+.site .cafhero-status .status { font-size: var(--t-sm); }
+
+/* A dish's prep time and rating: one line, broken only at a middot. */
+.site .meta-line { display: block; line-height: var(--lh-meta); }
+.site .meta-sep { color: var(--text-muted); }
+.site .meta-line > span:not(.meta-sep) { white-space: nowrap; }
+.site .item-meta { font-size: var(--t-xs); color: var(--text-2); font-weight: var(--w-medium); margin-top: 2px; }
+/* "Unavailable" on a dish: stated in the muted grey, not boxed in a pill. */
+.site .status-off { white-space: nowrap; font-size: var(--t-xs); font-weight: var(--w-medium); color: var(--text-muted); }
+/* "Closed" / "Sold out" under a dish photo: a label, not a button. */
+.site .item-add-off { border-color: var(--line-strong); color: var(--text-muted); font-weight: var(--w-medium); box-shadow: none; }
 
 /* ---------- cafe and dish photos ----------
    A photo fills a fixed-ratio frame (object-fit: cover), so nothing shifts
