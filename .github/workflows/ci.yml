@@ -62,6 +62,11 @@ jobs:
       - name: Every page preloads its own deployment's modules
         run: node tests/asset-version.mjs
 
+      # Photo URLs are resolved at runtime, so the static QA cannot see them.
+      # This renders the café and dish frames from dist/ and checks each file.
+      - name: Every café and dish photo the site renders ships with it
+        run: node tests/media-paths.mjs
+
       # The build must REFUSE these, so a misconfigured deployment fails in
       # CI rather than shipping a bundle that calls a developer's laptop.
       - name: An unset or insecure API base fails the build
