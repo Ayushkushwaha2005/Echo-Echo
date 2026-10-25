@@ -43,8 +43,8 @@ export const I = {
 export const Label = (t) => `<div class="t-label">${esc(t)}</div>`;
 export const VegMark = (veg) => `<span class="vmark ${veg ? '' : 'nonveg'}" role="img" aria-label="${veg ? 'Vegetarian' : 'Non-vegetarian'}"></span>`;
 export const StatusPill = (open) => open
-  ? `<span class="badge badge-open"><i class="dot dot-live"></i>Open</span>`
-  : `<span class="status-off"><i class="dot"></i>Closed</span>`;
+  ? `<span class="status status-open"><i class="dot dot-live"></i>Open</span>`
+  : `<span class="status status-closed"><i class="dot"></i>Closed</span>`;
 export const Mark = (v, size = 52) => `<div class="cafmark" style="background:${v.markBg};width:${size}px;height:${size}px;border-radius:${Math.round(size * 0.29)}px;font-size:${size > 44 ? '1.25rem' : '.82rem'}">${esc(v.mark)}</div>`;
 
 export const Brand = (sub) => `
