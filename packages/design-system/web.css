@@ -451,11 +451,9 @@ textarea.input { resize: vertical; min-height: 72px; }
   text-decoration: underline; text-underline-offset: 2px;
 }
 
-/* The landing page's "how it works" steps and the price / partner pair. */
-.stepgrid { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-3); }
+/* The landing page's price / partner pair. */
 .infogrid { display: grid; gap: var(--s-3); align-items: start; }
 @media (min-width: 720px) {
-  .stepgrid { grid-template-columns: repeat(3, 1fr); }
   .infogrid { grid-template-columns: 1fr 1fr; gap: var(--s-4); }
 }
 
@@ -730,6 +728,21 @@ textarea.input { resize: vertical; min-height: 72px; }
 .site .cafcard-top { display: flex; align-items: center; gap: 12px; }
 .site .cafcard .cafmark { width: 48px; height: 48px; border-radius: 14px; font-size: 1.05rem; }
 .site .cafcard-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; padding-top: 10px; border-top: 1px dashed var(--line); }
+/* Status and metadata read as one line of supporting text: a closed café or
+   an unavailable dish is stated in the muted grey, not boxed in a pill, and
+   hours, rating and prep time are joined by middots (metaLine in app.js). */
+.site .meta-line, .site .cafcard-meta.meta-line { display: block; line-height: var(--lh-meta); }
+.site .meta-line .row { display: inline-flex; vertical-align: bottom; }
+.site .meta-sep { color: var(--text-muted); }
+/* Each piece stays whole; the line only breaks at a middot. */
+.site .meta-line > span:not(.meta-sep) { white-space: nowrap; }
+.site .status-off {
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  font-size: var(--t-xs); font-weight: var(--w-medium); color: var(--text-muted);
+}
+.site .status-off .dot { width: 5px; height: 5px; }
+/* "Closed" / "Sold out" under a dish photo: a label, not a button. */
+.site .item-add-off { border-color: var(--line-strong); color: var(--text-muted); font-weight: var(--w-medium); box-shadow: none; }
 
 /* ---------- cafe and dish photos ----------
    A photo fills a fixed-ratio frame (object-fit: cover), so nothing shifts

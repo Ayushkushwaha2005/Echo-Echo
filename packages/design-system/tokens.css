@@ -105,7 +105,7 @@
   --t-body:    0.9375rem;   /* 15px */
   --t-sm:      0.875rem;    /* 14px: nav, chips, buttons in a row */
   --t-xs:      0.8125rem;   /* 13px: hours, status, ratings, notes */
-  --t-2xs:     0.75rem;     /* 12px: badges and tab labels only */
+  --t-2xs:     0.75rem;     /* 12px: badges, tab labels, a dish's rating line */
   --t-label:   0.8125rem;   /* sentence-case section labels */
 
   /* Four weights. 700 is kept for page titles and totals; headings inside a

@@ -324,13 +324,17 @@ const CafCard = (c) => `
       </div>
       ${StatusPill(c.open)}
     </div>
-    <div class="cafcard-meta t-xs muted">
-      ${c.hours?.label ? `<span>${esc(c.hours.label)}</span>` : ''}
-      ${c.rating.empty ? '<span>No ratings yet</span>'
-        : `<span class="row g1">${I.star}<b style="color:var(--text)">${c.rating.text}</b> (${c.rating.count})</span>`}
-      ${c.prep_minutes ? `<span>~${c.prep_minutes} min prep</span>` : ''}
-    </div>
+    <div class="cafcard-meta meta-line t-xs muted">${metaLine([
+      c.hours?.label && `<span>${esc(c.hours.label)}</span>`,
+      c.rating.empty ? '<span>No ratings yet</span>'
+        : `<span class="row g1">${I.star}<b style="color:var(--text)">${c.rating.text}</b> (${c.rating.count})</span>`,
+      c.prep_minutes && `<span>~${c.prep_minutes} min prep</span>`,
+    ])}</div>
   </button>`;
+
+/* Status, hours, rating and prep time as one line of text. The middot is
+   held to the word before it, so a line that wraps never starts with one. */
+const metaLine = (parts) => parts.filter(Boolean).join('<span class="meta-sep" aria-hidden="true">&nbsp;· </span>');
 
 const ItemRow = (m, vendor) => {
   const inCart = S.cart.filter((l) => l.itemId === m.id).reduce((a, l) => a + l.qty, 0);
@@ -340,20 +344,20 @@ const ItemRow = (m, vendor) => {
   <div class="item ${available ? '' : 'unavailable'}">
     <div class="grow item-main">
       <div class="row g2" style="margin-bottom:3px">${m.veg === null || m.veg === undefined ? '' : VegMark(m.veg)}
-        ${!available ? '<span class="badge badge-closed">Unavailable</span>' : ''}
+        ${!available ? '<span class="status-off">Unavailable</span>' : ''}
       </div>
       <div class="t-h3">${esc(m.name)}</div>
       <div class="money t-body" style="margin:2px 0 4px">${money(m.price_paise)}</div>
       ${m.description ? `<div class="t-xs muted">${esc(m.description)}</div>` : ''}
-      <div class="t-xs faint">${m.prep_minutes ? `${m.prep_minutes} min · ` : ''}${rating.empty ? 'No ratings yet' : `★ ${rating.text} (${rating.count})`}</div>
+      <div class="t-2xs muted">${m.prep_minutes ? `${m.prep_minutes} min · ` : ''}${rating.empty ? 'No ratings yet' : `★ ${rating.text} (${rating.count})`}</div>
       ${!available ? `<div class="t-xs" style="color:var(--warn);margin-top:6px">The counter has marked this out of stock.</div>` : ''}
     </div>
     <div class="item-thumbwrap">
       ${DishTile(m)}
       ${!available
-        ? `<span class="item-add" style="border-color:var(--line-strong);color:var(--text-muted)">Sold out</span>`
+        ? `<span class="item-add item-add-off">Sold out</span>`
         : !vendor.open
-          ? `<span class="item-add" style="border-color:var(--line-strong);color:var(--text-muted)">Closed</span>`
+          ? `<span class="item-add item-add-off">Closed</span>`
           : inCart
             ? `<div class="qty" style="position:absolute;bottom:-10px;left:50%;transform:translateX(-50%)"><button data-act="step" data-item="${m.id}" data-d="-1" aria-label="Remove one">−</button><span>${inCart}</span><button data-act="step" data-item="${m.id}" data-d="1" aria-label="Add one">+</button></div>`
             : `<button class="item-add" data-act="add" data-item="${m.id}">Add</button>`}
@@ -434,14 +438,6 @@ function ScrWelcome() {
     </div>
     </div>
     <div class="pad stack g5 welcome-info" style="padding-bottom:var(--s-7)">
-      <section class="stack g3" aria-labelledby="how-h">
-        <h2 class="t-label" id="how-h">How it works</h2>
-        <ol class="stepgrid">
-          ${HOW.map(([icon, t, d], i) => `<li class="tile stack g2">
-            <div class="row g2">${Ico(icon, 20)}<span class="t-xs muted">Step ${i + 1}</span></div>
-            <div class="t-h3">${esc(t)}</div><p class="t-xs muted">${esc(d)}</p></li>`).join('')}
-        </ol>
-      </section>
       <div class="infogrid">
         ${PriceCard()}
         <button class="tile stack g2" data-act="go" data-route="deliver" style="width:100%;text-align:left">
@@ -452,13 +448,6 @@ function ScrWelcome() {
     </div>
   </div>`;
 }
-
-/* The landing page's three steps: what the product does, in its own order. */
-const HOW = [
-  [I.store, 'Pick a campus café', 'Browse the menus, see which cafés are open right now, and add what you want.'],
-  [I.pin, 'Choose where on campus', 'A delivery spot on campus, or self pickup from the counter. Deliveries stay inside UPES Bidholi.'],
-  [I.lock, 'Pay online, collect with a code', 'Another verified student brings your order. You hand them your code to receive it.'],
-];
 
 /* What an order costs, from the server's live pricing policy. Nothing here
    is a number of this page's own: until the server answers, it says less. */
@@ -944,11 +933,11 @@ function ScrMenu() {
           <div class="t-xs" style="color:var(--text-2)">${esc(c.kind || 'Campus outlet')}</div>
         </div>
       </div>
-      <div class="row g2 t-xs" style="margin-top:var(--s-4);flex-wrap:wrap;color:var(--text-2)">
-        ${StatusPill(c.open)}<span>${esc(c.statusDetail)}</span>
-        ${c.rating.empty ? '<span>No ratings yet</span>' : `<span class="row g1">${I.star}<b>${c.rating.text}</b></span>`}
-        ${c.prep_minutes ? `<span>~${c.prep_minutes} min</span>` : ''}
-      </div>
+      <div class="meta-line t-xs" style="margin-top:var(--s-4);color:var(--text-2)">${metaLine([
+        StatusPill(c.open), `<span>${esc(c.statusDetail)}</span>`,
+        c.rating.empty ? '<span>No ratings yet</span>' : `<span class="row g1">${I.star}<b>${c.rating.text}</b></span>`,
+        c.prep_minutes && `<span>~${c.prep_minutes} min</span>`,
+      ])}</div>
       </div>
       </div>
     </div>

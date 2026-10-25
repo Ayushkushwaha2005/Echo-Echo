@@ -54,6 +54,7 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: var(--w-bold)
 .t-body { font-size: var(--t-body); }
 .t-sm { font-size: var(--t-sm); }
 .t-xs { font-size: var(--t-xs); line-height: var(--lh-meta); }
+.t-2xs { font-size: var(--t-2xs); line-height: var(--lh-meta); }
 .muted { color: var(--text-muted); }
 /* The faint grey measures 3.7:1 on the page, short of the 4.5:1 small text
    needs, so text set in it reads at the muted grey. The token stays for
@@ -345,7 +346,7 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: var(--w-bold)
   position: relative; overflow: hidden;
 }
 .cafcard:hover { border-color: var(--line-strong); }
-.caf-status { color: var(--text-muted); font-weight: var(--w-semibold); margin-top: 2px; }
+.caf-status { color: var(--text-muted); font-weight: var(--w-medium); margin-top: 2px; }
 .caf-status.is-open { color: var(--ok); }
 .cafcard:active { transform: scale(.99); }
 .cafcard.closed { opacity: .68; }
