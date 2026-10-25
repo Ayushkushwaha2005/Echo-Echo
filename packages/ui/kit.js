@@ -172,7 +172,7 @@ export const PhotoField = (item) => `
           : (item ? item.glyph : '📷')}
       </span>
       <span class="grow">
-        <span class="t-sm" style="font-weight:700">${item && item.photo ? 'Replace photo' : 'Upload photo'}</span>
+        <span class="t-sm t-strong">${item && item.photo ? 'Replace photo' : 'Upload photo'}</span>
         <span class="t-xs muted" style="display:block">PNG, JPEG or WebP · up to 2.5 MB</span>
       </span>
       <span class="btn btn-secondary btn-sm">Choose</span>

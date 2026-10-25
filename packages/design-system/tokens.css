@@ -85,27 +85,42 @@
   --shadow-press: inset 0 2px 4px rgba(74,44,50,.10);
 
   /* ======================= TYPOGRAPHY =================================== */
-  --font-display: "Bricolage Grotesque", "Trebuchet MS", Georgia, serif;
+  /* One family does the work: Manrope, from the hero to the smallest label.
+     Headings differ from body copy by size and weight, not by a second face.
+     The display alias stays so every heading rule keeps reading one token.
+     The brand face is the ECHO ECHO wordmark beside the logo, and only that. */
   --font-ui: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-ui);
+  --font-brand: "Bricolage Grotesque", "Trebuchet MS", system-ui, sans-serif;
   --font-mono: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  /* An editorial scale: one confident display size, quiet section labels,
-     and body copy that is set to be read. Contrast comes from size and
-     family, not from making everything heavy. */
+  /* Five text sizes carry the interface (12, 13, 14, 15, 16 px) and three
+     carry headings. Whole pixels, so neighbouring steps are told apart
+     rather than 12.2 / 12.5 / 12.8 px reading as the same size. */
   --t-hero:    clamp(2.1rem, 7.5vw, 3.1rem);
   --t-display: clamp(1.55rem, 4.6vw, 2rem);
-  --t-h1:      1.42rem;
-  --t-h2:      1.14rem;
-  --t-h3:      1rem;
-  --t-body:    0.96rem;
-  --t-sm:      0.87rem;
-  --t-xs:      0.78rem;
-  --t-label:   0.8rem;    /* sentence-case section labels */
+  --t-h1:      1.5rem;      /* 24px: the title of a page */
+  --t-h2:      1.125rem;    /* 18px: a café name, a card title */
+  --t-h3:      1rem;        /* 16px: a dish name, a row title */
+  --t-body:    0.9375rem;   /* 15px */
+  --t-sm:      0.875rem;    /* 14px: nav, chips, buttons in a row */
+  --t-xs:      0.8125rem;   /* 13px: hours, status, ratings, notes */
+  --t-2xs:     0.75rem;     /* 12px: badges and tab labels only */
+  --t-label:   0.8125rem;   /* sentence-case section labels */
 
-  --lh-tight: 1.1;
+  /* Four weights. 700 is kept for page titles and totals; headings inside a
+     page are 600, so they never compete with the title above them. */
+  --w-regular:  400;
+  --w-medium:   500;
+  --w-semibold: 600;
+  --w-bold:     700;
+
+  --lh-tight: 1.08;
   --lh-snug:  1.28;
   --lh-body:  1.6;
-  --ls-tight: -0.018em;
+  --lh-meta:  1.45;         /* small text: a tighter measure reads better */
+  --ls-tight: -0.024em;     /* Manrope opens up at display sizes */
+  --ls-head:  -0.012em;
   --ls-label: 0;
 
   /* ======================= SPACE (4pt) ================================== */

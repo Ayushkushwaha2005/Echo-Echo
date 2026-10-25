@@ -310,7 +310,7 @@ const NotConfigured = (title, body) => `
     <p class="t-xs" style="color:var(--text-2)">${esc(body)}</p></div></div>`;
 
 const LocLine = () => `
-  <button class="row g1 t-sm" data-act="sheet" data-sheet="location" style="font-weight:700;color:var(--accent-text)">
+  <button class="row g1 t-sm" data-act="sheet" data-sheet="location" style="font-weight:var(--w-semibold);color:var(--accent-text)">
     ${I.pin}<span>${S.destination ? esc(S.destination.name) : 'Choose your delivery spot'}</span>${I.chev}</button>`;
 
 const CafCard = (c) => `
@@ -351,9 +351,9 @@ const ItemRow = (m, vendor) => {
     <div class="item-thumbwrap">
       ${DishTile(m)}
       ${!available
-        ? `<span class="item-add" style="border-color:var(--line-strong);color:var(--text-faint)">Sold out</span>`
+        ? `<span class="item-add" style="border-color:var(--line-strong);color:var(--text-muted)">Sold out</span>`
         : !vendor.open
-          ? `<span class="item-add" style="border-color:var(--line-strong);color:var(--text-faint)">Closed</span>`
+          ? `<span class="item-add" style="border-color:var(--line-strong);color:var(--text-muted)">Closed</span>`
           : inCart
             ? `<div class="qty" style="position:absolute;bottom:-10px;left:50%;transform:translateX(-50%)"><button data-act="step" data-item="${m.id}" data-d="-1" aria-label="Remove one">−</button><span>${inCart}</span><button data-act="step" data-item="${m.id}" data-d="1" aria-label="Add one">+</button></div>`
             : `<button class="item-add" data-act="add" data-item="${m.id}">Add</button>`}
@@ -368,7 +368,7 @@ const CartSummary = () => S.cart.length ? `
     <div class="between">${Label('Your cart')}<span class="t-xs muted">${esc(S.cart[0].vendorName)}</span></div>
     ${S.cart.map((l, i) => `
       <div class="row g3">
-        <div class="grow"><div class="t-sm" style="font-weight:700">${esc(l.name)}</div>
+        <div class="grow"><div class="t-sm t-strong">${esc(l.name)}</div>
           <div class="t-xs muted">${money(l.pricePaise)} each</div></div>
         <div class="qty"><button data-act="bump" data-i="${i}" data-d="-1" aria-label="Remove one">−</button><span>${l.qty}</span><button data-act="bump" data-i="${i}" data-d="1" aria-label="Add one">+</button></div>
       </div>`).join('')}
@@ -385,7 +385,7 @@ const CartSummary = () => S.cart.length ? `
 const CartBar = () => `<div class="actionbar cart-mobile">
     <button class="cartbar" data-act="go" data-route="cart" style="width:100%;text-align:left">
       <span class="badge" style="background:var(--accent);color:var(--text-on-rose)">${cartCount()}</span>
-      <div class="grow"><div class="t-sm" style="font-weight:700">View cart</div>
+      <div class="grow"><div class="t-sm t-strong">View cart</div>
       <div class="t-xs" style="opacity:.7">${esc(S.cart[0]?.vendorName || '')}</div></div>
       <span class="money">${money(cartSubtotal())}</span>${I.chev}
     </button>
@@ -500,7 +500,7 @@ function ScrDeliver() {
         <div class="card" style="overflow:hidden">
           ${PERKS.map(([icon, t, d]) => `
             <div class="adminrow">${Ico(icon, 20)}
-              <div class="grow"><div class="t-sm" style="font-weight:700">${esc(t)}</div>
+              <div class="grow"><div class="t-sm t-strong">${esc(t)}</div>
               <div class="t-xs muted">${esc(d)}</div></div></div>`).join('')}
         </div>
         ${policy ? `<details class="card card-pad">
@@ -734,7 +734,7 @@ function ScrSetup() {
       <div class="card card-pad stack g3">
         ${step(1, 'Student email', p.studentEmailVerified || p.verifiedByAdmin)}
         ${p.studentEmailVerified
-          ? `<div class="row g2"><span class="t-sm" style="font-weight:700;word-break:break-all">${esc(p.studentEmail)}</span>
+          ? `<div class="row g2"><span class="t-sm" style="font-weight:var(--w-semibold);word-break:break-all">${esc(p.studentEmail)}</span>
                <span class="badge badge-open">${I.check} Verified</span></div>`
           : p.verifiedByAdmin
             ? `<p class="t-sm muted">Your student status was verified by campus admin.</p>`
@@ -800,7 +800,7 @@ function ScrHome() {
         ${signedIn()
           ? `<button class="avatar avatar-sm hide-lg" data-act="go" data-route="profile" aria-label="Profile">${esc(initials(S.me.user.name))}</button>` : ''}
       </div>
-      ${campusOpen() ? LocLine() : `<span class="t-sm" style="font-weight:700">${esc(browseCampus().name)}</span>`}
+      ${campusOpen() ? LocLine() : `<span class="t-sm t-strong">${esc(browseCampus().name)}</span>`}
     </div>
 
     <div class="pad stack g5 enter">
@@ -811,7 +811,7 @@ function ScrHome() {
 
       <div class="stack g3">
         ${browseCampus() && !browseCampus().available ? ComingSoon(browseCampus()) : `
-        <div class="between">${Label(`Cafés · ${browseCampus()?.name || 'Campus'}`)}<button class="t-xs" data-act="go" data-route="cafes" style="color:var(--accent-text);font-weight:700">See all</button></div>
+        <div class="between">${Label(`Cafés · ${browseCampus()?.name || 'Campus'}`)}<button class="t-xs" data-act="go" data-route="cafes" style="color:var(--accent-text);font-weight:var(--w-semibold)">See all</button></div>
         ${!vs ? Loading('Loading cafés') : !vs.ok ? Problem(vs.e)
           : cafs.length ? `<div class="cafgrid">${cafs.map(CafCard).join('')}</div>`
           : `<div class="empty"><div class="empty-art">${Ico(I.store, 34)}</div><div class="t-h2">No cafés yet.</div>
@@ -831,7 +831,7 @@ function ScrHome() {
             const c = cafs.find((x) => x.id === o.vendor_id) || cafVM({ id: o.vendor_id, name: o.vendor_name });
             return `<button class="tile row g3" data-act="menu" data-caf="${o.vendor_id}" style="width:100%;text-align:left">
               <div class="cafmark" style="width:38px;height:38px;border-radius:11px;font-size:.85rem;background:${c.markBg}">${esc(c.mark)}</div>
-              <div class="grow"><div class="t-sm" style="font-weight:700">${esc((o.items || []).map((i) => `${i.qty}× ${i.name}`).join(', '))}</div>
+              <div class="grow"><div class="t-sm t-strong">${esc((o.items || []).map((i) => `${i.qty}× ${i.name}`).join(', '))}</div>
               <div class="t-xs muted">${esc(o.vendor_name)} · ${when(o.created_at)}</div></div>
               <span class="money t-sm">${money(o.total_paise)}</span>
             </button>`; }).join('')}
@@ -944,7 +944,7 @@ function ScrMenu() {
           <div class="t-xs" style="color:var(--text-2)">${esc(c.kind || 'Campus outlet')}</div>
         </div>
       </div>
-      <div class="row g3 t-xs" style="margin-top:var(--s-4);flex-wrap:wrap;color:var(--text-2)">
+      <div class="row g2 t-xs" style="margin-top:var(--s-4);flex-wrap:wrap;color:var(--text-2)">
         ${StatusPill(c.open)}<span>${esc(c.statusDetail)}</span>
         ${c.rating.empty ? '<span>No ratings yet</span>' : `<span class="row g1">${I.star}<b>${c.rating.text}</b></span>`}
         ${c.prep_minutes ? `<span>~${c.prep_minutes} min</span>` : ''}
@@ -1049,7 +1049,7 @@ const FulfilTile = (vendorName, cta) => S.fulfilment === 'delivery' ? `
     ${S.destination ? `<div class="t-xs muted">${esc(S.destination.spot
       ? `Pinned on the map · ${S.destination.path}` : S.destination.path || '')}</div>`
       : '<div class="t-xs muted">Grounds, lawns, sitting areas, outside any block</div>'}</div>
-    <span class="t-xs" style="color:var(--accent-text);font-weight:700">${cta}</span>
+    <span class="t-xs" style="color:var(--accent-text);font-weight:var(--w-semibold)">${cta}</span>
   </button>` : `
   <div class="tile row g3">
     ${Ico(I.bag, 22)}
@@ -1398,7 +1398,7 @@ function DeliveryBrief(o) {
         <div class="t-label">Take it to</div>
         <div class="t-h3">${esc(o.delivery_address?.label || addr?.name || t?.v?.destination?.name || 'Loading…')}</div>
         ${addr?.label && addr.label !== addr.name ? `<div class="t-xs muted">${esc(addr.label)}</div>` : ''}
-        ${addrLine(o.delivery_address) ? `<div class="t-sm" style="font-weight:700">${esc(addrLine(o.delivery_address))}</div>` : ''}
+        ${addrLine(o.delivery_address) ? `<div class="t-sm t-strong">${esc(addrLine(o.delivery_address))}</div>` : ''}
         ${o.delivery_landmark ? `<div class="t-xs">Landmark: ${esc(o.delivery_landmark)}</div>` : ''}
         ${o.delivery_instructions ? `<div class="t-xs">Note: ${esc(o.delivery_instructions)}</div>` : ''}
         ${t?.ok && t.v.destination ? `<a class="btn btn-secondary btn-sm" style="align-self:flex-start;margin-top:4px" target="_blank"
@@ -1732,10 +1732,10 @@ function ScrOrders() {
                const c = cafVM({ id: o.vendor_id, name: o.vendor_name });
                return `<button class="tile row g3" data-act="track" data-id="${o.id}" style="width:100%;text-align:left">
                  <div class="cafmark" style="width:38px;height:38px;border-radius:11px;font-size:.85rem;background:${c.markBg}">${esc(c.mark)}</div>
-                 <div class="grow"><div class="t-sm" style="font-weight:700">${esc((o.items || []).map((i) => `${i.qty}× ${i.name}`).join(', '))}</div>
+                 <div class="grow"><div class="t-sm t-strong">${esc((o.items || []).map((i) => `${i.qty}× ${i.name}`).join(', '))}</div>
                  <div class="t-xs muted">${esc(o.vendor_name)} · ${when(o.created_at)} · ${o.fulfilment === 'pickup' ? 'Picked up' : 'Delivery'}</div>
                  ${o.state === 'delivered' && (!o.reviewed_vendor || (o.fulfilment === 'delivery' && o.partner_id && !o.reviewed_delivery))
-                   ? `<div class="t-xs" style="color:var(--accent-text);font-weight:700;margin-top:2px">${I.star} Rate ${[!o.reviewed_vendor && 'the food', o.fulfilment === 'delivery' && o.partner_id && !o.reviewed_delivery && 'the delivery'].filter(Boolean).join(' and ')}</div>` : ''}</div>
+                   ? `<div class="t-xs" style="color:var(--accent-text);font-weight:var(--w-semibold);margin-top:2px">${I.star} Rate ${[!o.reviewed_vendor && 'the food', o.fulfilment === 'delivery' && o.partner_id && !o.reviewed_delivery && 'the delivery'].filter(Boolean).join(' and ')}</div>` : ''}</div>
                  <div class="stack" style="align-items:flex-end"><span class="money t-sm">${money(o.total_paise)}</span>
                  <span class="badge ${o.state === 'delivered' ? 'badge-open' : ['cancelled', 'refunded'].includes(o.state) ? 'badge-danger' : 'badge-ink'}" style="margin-top:3px">${esc(ORDER_LABEL[o.state] || o.state)}</span></div>
                </button>`; }).join('')}
@@ -1803,7 +1803,7 @@ function ScrProfile() {
           ${rows.map(([g, t, s, attrs]) => `
             <button class="adminrow" ${attrs} style="width:100%;text-align:left">
               ${Ico(g, 20)}
-              <div class="grow"><div class="t-sm" style="font-weight:700">${esc(t)}</div>${s ? `<div class="t-xs muted">${esc(s)}</div>` : ''}</div>
+              <div class="grow"><div class="t-sm t-strong">${esc(t)}</div>${s ? `<div class="t-xs muted">${esc(s)}</div>` : ''}</div>
               ${attrs ? I.chev : ''}</button>`).join('')}
         </div>
       </div>
@@ -1822,7 +1822,7 @@ function NotificationsCard() {
   return `<div class="stack g2">
     ${Label('Notifications')}
     <div class="card card-pad stack g2">
-      ${list.length ? list.slice(0, 6).map((n) => `<div><div class="t-sm" style="font-weight:700">${esc(n.title)}</div>
+      ${list.length ? list.slice(0, 6).map((n) => `<div><div class="t-sm t-strong">${esc(n.title)}</div>
         <div class="t-xs muted">${esc(n.body || '')} · ${when(n.created_at)}</div></div>`).join('')
         : '<p class="t-sm muted">Nothing yet.</p>'}
       ${!channels?.sms?.configured ? '<p class="t-xs faint">Updates about your orders appear here.</p>' : ''}
@@ -1951,7 +1951,7 @@ function JoinApplication(me, cta = 'Apply to deliver') {
     <div class="stack g2">
       ${Label('2 · Partner policy and security deposit')}
       <div class="sunken stack g2" style="padding:var(--s-3);max-height:220px;overflow:auto">
-        <div class="between"><span class="t-sm" style="font-weight:700">Security deposit</span>
+        <div class="between"><span class="t-sm t-strong">Security deposit</span>
           <span class="money t-sm">${deposit ? money(deposit) : 'None required'}</span></div>
         <div class="between"><span class="t-xs muted">Time to dispute a proposed deduction</span>
           <span class="t-xs">${Math.round(policy.disputeWindowHours / 24)} days</span></div>
@@ -2022,7 +2022,7 @@ function ScrJoin() {
   const step = (n, label, done, current) => `
     <div class="row g3">
       <span class="avatar avatar-sm" style="width:26px;height:26px;font-size:.72rem;${done ? 'background:var(--accent);color:var(--text-on-rose)' : current ? '' : 'opacity:.5'}">${done ? I.check : n}</span>
-      <span class="t-sm" style="${done || current ? 'font-weight:700' : 'color:var(--text-muted)'}">${esc(label)}</span>
+      <span class="t-sm" style="${done || current ? 'font-weight:var(--w-semibold)' : 'color:var(--text-muted)'}">${esc(label)}</span>
     </div>`;
   const verified = student === 'approved';
   const applied = ['pending', 'approved', 'rejected', 'suspended'].includes(status);
@@ -2039,7 +2039,7 @@ function ScrJoin() {
         <div class="card" style="overflow:hidden">
           ${PERKS.map(([icon, t, d]) => `
             <div class="adminrow">${Ico(icon, 20)}
-              <div class="grow"><div class="t-sm" style="font-weight:700">${esc(t)}</div>
+              <div class="grow"><div class="t-sm t-strong">${esc(t)}</div>
               <div class="t-xs muted">${esc(d)}</div></div></div>`).join('')}
         </div>
       </div>
@@ -2095,7 +2095,7 @@ function ScrPartner() {
       <div class="between" style="margin-bottom:var(--s-5)">
         <div class="row g2">
           <button class="backbtn" data-act="go" data-route="profile" aria-label="Back">${I.back}</button>
-          <div><div class="t-sm" style="font-weight:700">${esc(firstName())}</div><div class="t-xs" style="opacity:.6">Verified partner · ${rating.rating?.count ? `★ ${Number(rating.rating.average).toFixed(1)} (${rating.rating.count})` : 'No ratings yet'}</div></div></div>
+          <div><div class="t-sm t-strong">${esc(firstName())}</div><div class="t-xs" style="opacity:.6">Verified partner · ${rating.rating?.count ? `★ ${Number(rating.rating.average).toFixed(1)} (${rating.rating.count})` : 'No ratings yet'}</div></div></div>
         <span class="badge ${online ? 'badge-open' : ''}" style="${online ? '' : 'background:rgba(255,255,255,.14);color:var(--text-on-ink)'}"><i class="dot ${online ? 'dot-live' : ''}"></i>${online ? 'Online' : 'Offline'}</span>
       </div>
       <button class="gobtn ${online ? 'online' : ''}" data-act="toggleOnline" data-v="${online ? '0' : '1'}">
@@ -2118,7 +2118,7 @@ function ScrPartner() {
         ${carrying ? '<p class="t-sm muted">Finish your current delivery to receive new offers.</p>' : ''}
         ${carrying ? '' : offers.offers.length ? offers.offers.map((o) => `
           <div class="tile row g3">
-            <div class="grow"><div class="t-sm" style="font-weight:700">${esc(o.vendor_name)}</div>
+            <div class="grow"><div class="t-sm t-strong">${esc(o.vendor_name)}</div>
             <div class="t-xs muted">${esc(o.destination || 'Pickup')} · order ${money(o.total_paise)}</div>
             ${o.earning_paise ? `<span class="badge badge-open" style="margin-top:4px">You earn ${money(o.earning_paise)}</span>` : ''}</div>
             <button class="btn btn-primary btn-sm" data-act="acceptOffer" data-id="${o.id}">Accept</button>
@@ -2132,7 +2132,7 @@ function ScrPartner() {
         ${mine.orders.length ? mine.orders.map((o) => `
           <div class="tile row g3">
             <span class="code t-xs muted" style="min-width:64px">#${esc(o.code)}</span>
-            <div class="grow"><div class="t-sm" style="font-weight:700">${esc(o.vendor_name)}</div>
+            <div class="grow"><div class="t-sm t-strong">${esc(o.vendor_name)}</div>
             <div class="t-xs muted">${esc(ORDER_LABEL[o.state] || o.state)}</div></div>
             <div class="stack g1" style="align-items:flex-end">
             ${o.state === 'assigned'
@@ -2351,7 +2351,7 @@ const DestChoice = (c, sub, pin = null) => `
   <button class="tile row g3" data-act="setDest" data-id="${c.id}" data-name="${esc(c.name)}"
           ${pin ? `data-pin-lat="${pin.lat}" data-pin-lng="${pin.lng}"` : ''} style="width:100%;text-align:left"
           ${S.destination?.id === c.id ? 'aria-pressed="true"' : ''}>
-    ${placeGlyph()}<div class="grow"><div class="t-sm" style="font-weight:700">${esc(c.name)}</div>
+    ${placeGlyph()}<div class="grow"><div class="t-sm t-strong">${esc(c.name)}</div>
     <div class="t-xs muted">${esc(sub)}</div></div>
     ${S.destination?.id === c.id ? Ico(I.check, 18) : ''}</button>`;
 
@@ -2369,7 +2369,7 @@ function PinResults() {
   }
   return `<div class="spotok" role="status" id="spot-ok">
       ${Ico(I.check, 18)}<div class="stack g1">
-      <div class="t-sm" style="font-weight:700">${esc(p.label || (p.from === 'gps' ? 'Your current location' : 'Your pinned spot'))}</div>
+      <div class="t-sm t-strong">${esc(p.label || (p.from === 'gps' ? 'Your current location' : 'Your pinned spot'))}</div>
       <div class="t-xs muted">${esc(at)} · inside the ${esc(S.me?.profile?.campus?.name || 'campus')} delivery area</div></div>
     </div>`
     + (p.candidates?.length && !editingPlace() ? `<p class="t-xs faint">Or deliver to a named point near it:</p>`
@@ -2390,7 +2390,7 @@ function GpsStatus() {
   if (!g) return '';
   if (g.status === 'locating') {
     return `<div class="gps-status" role="status" aria-live="polite"><span class="spin" aria-hidden="true"></span>
-      <div class="stack g1"><div class="t-sm" style="font-weight:700">Finding your location${g.accuracy ? ` · ±${g.accuracy} m so far` : '…'}</div>
+      <div class="stack g1"><div class="t-sm t-strong">Finding your location${g.accuracy ? ` · ±${g.accuracy} m so far` : '…'}</div>
       <div class="t-xs muted">Allow location if your browser asks. Indoors this can take up to 15 seconds.</div></div></div>`;
   }
   if (g.status === 'error') {
@@ -2486,7 +2486,7 @@ function Sheet() {
               <span class="glyph">${placeGlyph()}</span>
               <span class="t-h3">${esc(l.name)}</span>
               <span class="t-xs muted">${off ? 'Delivery not available' : l.deliverable ? esc(l.detail || 'Deliver here') : 'Choose a spot inside'}</span>
-              ${l.estimate && !off ? `<span class="t-xs" style="font-weight:700;color:var(--accent-text)" title="Estimated from the distance between the counter and this spot. Not live tracking.">${esc(l.estimate.label)} walk</span>` : ''}</button>`;
+              ${l.estimate && !off ? `<span class="t-xs" style="font-weight:var(--w-semibold);color:var(--accent-text)" title="Estimated from the distance between the counter and this spot. Not live tracking.">${esc(l.estimate.label)} walk</span>` : ''}</button>`;
           }).join('')}
         </div>` : '<p class="t-sm muted">No named delivery points here yet. Your own pin works anywhere inside the outline.</p>'}
         ${!deliveryOff ? '</div></details>' : ''}
