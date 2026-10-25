@@ -20,6 +20,7 @@ import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/dat
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
 import { campusOption } from '../../packages/ui/campus-option.js';
 import { logo, mark, lockup } from '../../brand/logo.js';
+import { cafePhoto, dishPhoto, DISH_CREDITS } from '../../packages/media/photos.js';
 import { mapPointChosen, mapPointAnswered, gpsPointPlaced, spotFromPick, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
 import { deniedHelp } from '../../packages/data/geofix.js';
 import { loadModule } from '../../packages/ui/load-module.js';
@@ -228,13 +229,58 @@ function cafVM(v) {
            statusDetail: rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : statusLine, rating: ratingLabel(v.rating) };
 }
 
-/* Dishes carry no photos yet, so the tile shows the dish's monogram in the
-   display face — the same treatment the cafeteria marks use. */
+/* Images that failed to load this session. render() rebuilds the DOM, so a
+   broken photo is remembered and the next render draws the fallback (the
+   monogram or the café mark, which always sits underneath) straight away. */
+const failedImg = new Set();
+const imgOk = (src) => src && !failedImg.has(src);
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !img.hasAttribute('data-fallback')) return;
+  failedImg.add(img.getAttribute('src'));
+  (img.closest('picture') || img).remove();
+}, true);
+
+/* A dish's photo: the counter's own upload when there is one, otherwise a
+   stock photo matched to the name (marked illustrative), otherwise none. */
+function dishImage(m) {
+  if (m.photo_asset) {
+    const src = quad.assetUrl(m.photo_asset);
+    return imgOk(src) ? { src, alt: m.name, illustrative: false } : null;
+  }
+  const p = dishPhoto(m.name);
+  return p && imgOk(p.src) ? { src: p.src, alt: `Illustrative photo: ${p.alt}`, illustrative: true } : null;
+}
+
+/* The dish's monogram in the display face — the same treatment the
+   cafeteria marks use. It stays under the photo, so a photo that fails to
+   load leaves the tile exactly as it was before photos existed. */
 const dishMono = (name) => {
   const words = String(name || '?').split(/\s+/).filter(Boolean);
   return (words.length > 1 ? words[0][0] + words[1][0] : words[0].slice(0, 2)).toUpperCase();
 };
-const DishTile = (i) => `<div class="item-thumb"><span class="dish-mono">${esc(dishMono(i.name))}</span></div>`;
+const DishTile = (i) => {
+  const ph = dishImage(i);
+  return `<div class="item-thumb${ph ? ' has-photo' : ''}"><span class="dish-mono"${ph ? ' aria-hidden="true"' : ''}>${esc(dishMono(i.name))}</span>${ph
+    ? `<img class="thumb-photo" src="${esc(ph.src)}" alt="${esc(ph.alt)}" width="84" height="84" loading="lazy" decoding="async" data-fallback>` : ''}</div>`;
+};
+
+/* The café's own photograph in a frame of aspect `slot`, over its tint and
+   mark (what shows if the photo cannot load). `vw` is how much of the
+   viewport the frame spans at each breakpoint, for the browser's pick. */
+const CafPhoto = (c, { slot = 16 / 9, sizes = [100, 50, 33], eager = false, cls = 'cafphoto' } = {}) => {
+  const p = cafePhoto(c.slug, slot);
+  const img = p && imgOk(p.src) ? p : null;
+  const sz = sizes.map((v) => Math.round(v * (img?.scale || 1)));
+  return `<div class="${cls}" style="background:${c.heroBg}">
+    <span class="cafmark" style="background:${c.markBg}" aria-hidden="true">${esc(c.mark)}</span>
+    ${img ? `<picture>
+      <source type="${img.type}" srcset="${img.srcset}" sizes="(max-width: 719px) ${sz[0]}vw, (max-width: 1023px) ${sz[1]}vw, ${sz[2]}vw">
+      <img src="${img.src}" alt="${esc(img.alt)}" width="${img.width}" height="${img.height}" style="object-position:${img.position}"
+        decoding="async" ${eager ? 'fetchpriority="high"' : 'loading="lazy"'} data-fallback></picture>` : ''}
+  </div>`;
+};
+const hasCafPhoto = (c) => !!cafePhoto(c.slug);
 
 /* The seed menus have no categories, and categories cannot be created over
    the API, so sections are derived from each dish's own tags. Display only. */
@@ -313,9 +359,10 @@ const LocLine = () => `
     ${I.pin}<span>${S.destination ? esc(S.destination.name) : 'Choose your delivery spot'}</span>${I.chev}</button>`;
 
 const CafCard = (c) => `
-  <button class="cafcard ${c.open ? '' : 'closed'}" data-act="menu" data-caf="${c.id}">
+  <button class="cafcard ${c.open ? '' : 'closed'}${hasCafPhoto(c) ? ' has-photo' : ''}" data-act="menu" data-caf="${c.id}">
+    ${hasCafPhoto(c) ? CafPhoto(c) : ''}
     <div class="cafcard-top">
-      <div class="cafmark" style="background:${c.markBg}" aria-hidden="true">${esc(c.mark)}</div>
+      ${hasCafPhoto(c) ? '' : `<div class="cafmark" style="background:${c.markBg}" aria-hidden="true">${esc(c.mark)}</div>`}
       <div class="grow">
         <div class="t-h2">${esc(c.name)}</div>
         <div class="t-sm caf-status ${c.open ? 'is-open' : ''}">${esc(c.statusDetail)}</div>
@@ -922,17 +969,23 @@ function ScrMenu() {
   const items = r.v.items || [];
   const cats = [...new Set(items.map(sectionFor))];
   const count = cartCount();
+  const photo = hasCafPhoto(c);
+  const stockPhotos = items.some((m) => dishImage(m)?.illustrative);
   return `<div class="screen">
     <!-- The hero tint follows the theme (it is dark in dark mode), so its
-         text does too. -->
-    <div class="poster hero-band" style="border-radius:0;background:${c.heroBg};color:var(--text);padding:var(--s-4) var(--s-4) var(--s-5)">
+         text does too. The café's photo sits beside the words, never under
+         them, so the name and status keep full contrast. -->
+    <div class="poster hero-band${photo ? ' has-photo' : ''}" style="border-radius:0;background:${c.heroBg};color:var(--text);padding:var(--s-4) var(--s-4) var(--s-5)">
       <div class="row g3" style="margin-bottom:var(--s-4)">
         <button class="backbtn" data-act="go" data-route="cafes" aria-label="Back">${I.back}</button>
       </div>
+      <div class="cafhero">
+      ${photo ? CafPhoto(c, { slot: 2, sizes: [100, 100, 45], eager: true, cls: 'cafphoto cafhero-photo' }) : ''}
+      <div class="cafhero-text">
       <div class="row g3">
-        <div class="cafmark" style="background:${c.markBg}">${esc(c.mark)}</div>
+        ${photo ? '' : `<div class="cafmark" style="background:${c.markBg}">${esc(c.mark)}</div>`}
         <div class="grow">
-          <div class="t-h1">${esc(c.name)}</div>
+          <h1 class="t-h1">${esc(c.name)}</h1>
           <div class="t-xs" style="color:var(--text-2)">${esc(c.kind || 'Campus outlet')}</div>
         </div>
       </div>
@@ -940,6 +993,8 @@ function ScrMenu() {
         ${StatusPill(c.open)}<span>${esc(c.statusDetail)}</span>
         ${c.rating.empty ? '<span>No ratings yet</span>' : `<span class="row g1">${I.star}<b>${c.rating.text}</b></span>`}
         ${c.prep_minutes ? `<span>~${c.prep_minutes} min</span>` : ''}
+      </div>
+      </div>
       </div>
     </div>
 
@@ -952,6 +1007,8 @@ function ScrMenu() {
       ${!c.open ? `<div class="campusnote">${Ico(I.clock, 18)}<p class="t-xs" style="color:var(--text-2)">${esc(c.name)}: ${esc(c.statusLine)}. You can look through the menu, but not order.</p></div>` : ''}
       ${c.hours?.week ? `<div class="card card-pad stack g1" aria-label="Opening hours">${Label('Hours')}
         ${c.hours.week.map((d) => `<div class="between t-xs"><span>${esc(d.day)}</span><span class="${d.open ? '' : 'muted'}">${esc(d.open ? d.hours : 'Closed')}</span></div>`).join('')}</div>` : ''}
+      ${stockPhotos ? `<p class="t-xs faint photo-note">Dish photos are illustrative, not taken at ${esc(c.name)}.
+        <button class="foot-link" data-act="sheet" data-sheet="photos">Photo credits</button></p>` : ''}
       ${items.length ? cats.map((cat, i) => `
         <div class="stack g1" id="cat-${i}">
           ${Label(cat)}
@@ -2535,6 +2592,23 @@ function Sheet() {
     <div class="sheet-foot stack g2">
       <button class="btn btn-primary btn-block btn-lg" data-act="replaceCart">Clear cart and add</button>
       <button class="btn btn-ghost btn-block" data-act="closeSheet">Keep my cart</button>
+    </div>`;
+  }
+
+  if (n === 'photos') {
+    const LICENCE = { cc0: 'CC0', pdm: 'Public domain', by: 'CC BY', 'by-sa': 'CC BY-SA' };
+    body = `<div class="sheet-body stack g4">
+      <div class="stack g1"><h2 class="t-h1">Photo credits</h2>
+        <p class="t-sm muted">The café photos are our own, taken at each kiosk on campus. Dish photos are openly
+          licensed pictures that show what each dish is; they were not taken at the café. When a café adds a
+          photo of its own dish, that photo replaces the illustration.</p></div>
+      <ul class="credits">
+        ${Object.values(DISH_CREDITS).map((p) => `<li class="t-xs">
+          <a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a>
+          by ${esc(p.creator)} ·
+          <a href="${esc(p.licenseUrl)}" target="_blank" rel="noopener noreferrer license">${esc(LICENCE[p.license] || p.license.toUpperCase())} ${esc(p.version || '')}</a>
+          · cropped and resized</li>`).join('')}
+      </ul>
     </div>`;
   }
 

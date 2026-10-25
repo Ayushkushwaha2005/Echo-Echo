@@ -43,6 +43,7 @@ const FILES = [
   ['unit', 'test/picker-flow.test.mjs'],
   ['unit', 'test/load-module.test.mjs'],
   ['unit', 'test/keep-warm.test.mjs'],
+  ['unit', 'test/menu-photos.test.mjs'],
   ['integration', 'test/integration.test.mjs'],
   ['api', 'test/api.test.mjs'],
   ['api', 'test/menu.test.mjs'],

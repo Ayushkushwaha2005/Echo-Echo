@@ -138,6 +138,10 @@ else {
       /* www.google.com: the partner's "Walking directions to the pin" link, a
          navigation the partner chooses; the page never fetches from it. */
       if (/w3\.org|www\.openstreetmap\.org$|osmfoundation|www\.echoecho\.tech|esri\.com|s2maps\.eu|eox\.at$|^https:\/\/www\.google\.com$/.test(origin)) continue;   // links and namespaces, never fetched
+      /* The dish photos' attribution links (packages/media/photos.js): the
+         source page and the licence, opened only when a student taps them.
+         The photos themselves are served from our own origin. */
+      if (/^https:\/\/(www\.flickr\.com|creativecommons\.org|www\.rawpixel\.com|wordpress\.org)$/.test(origin)) continue;
       if (!['script-src', 'img-src', 'style-src', 'font-src', 'connect-src'].some((d) => allows(d, origin))) {
         csp.push(`${rel(f)}: ${origin} is not allowed by any fetch directive`);
       }
