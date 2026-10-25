@@ -817,15 +817,20 @@
  },
  {
   "key": "wrap-egg",
-  "alt": "kathi rolls on a plate",
+  "alt": "egg parathas topped with ketchup at a Kolkata roll stall",
   "meat": true,
-  "title": "Chicken Kathi Roll",
-  "creator": "Andy_Mitchell_UK",
+  "title": "Egg Roll 1414",
+  "creator": "Biswarup Ganguly",
   "license": "by-sa",
-  "version": "2.0",
-  "licenseUrl": "https://creativecommons.org/licenses/by-sa/2.0/",
-  "url": "https://www.flickr.com/photos/19229064@N00/5646735923",
-  "src": "https://live.staticflickr.com/5307/5646735923_492ce3c2c7_b.jpg"
+  "version": "3.0",
+  "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0/",
+  "url": "https://commons.wikimedia.org/wiki/File:Egg_Roll_1414.JPG",
+  "src": "https://upload.wikimedia.org/wikipedia/commons/0/0c/Egg_Roll_1414.JPG",
+  "focus": [
+   0.31,
+   0.71
+  ],
+  "zoom": 0.24
  },
  {
   "key": "pasta-gnocchi",

@@ -20,7 +20,8 @@ import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/dat
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
 import { campusOption } from '../../packages/ui/campus-option.js';
 import { logo, mark, lockup } from '../../brand/logo.js';
-import { cafePhoto, dishPhoto, DISH_CREDITS } from '../../packages/media/photos.js';
+import { DISH_CREDITS } from '../../packages/media/photos.js';
+import { onImageError, dishImage as dishImageFor, DishTile as DishTileFor, CafPhoto, hasCafPhoto } from '../../packages/ui/photo-tiles.js';
 import { mapPointChosen, mapPointAnswered, gpsPointPlaced, spotFromPick, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
 import { deniedHelp } from '../../packages/data/geofix.js';
 import { loadModule } from '../../packages/ui/load-module.js';
@@ -229,58 +230,12 @@ function cafVM(v) {
            statusDetail: rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : statusLine, rating: ratingLabel(v.rating) };
 }
 
-/* Images that failed to load this session. render() rebuilds the DOM, so a
-   broken photo is remembered and the next render draws the fallback (the
-   monogram or the café mark, which always sits underneath) straight away. */
-const failedImg = new Set();
-const imgOk = (src) => src && !failedImg.has(src);
-document.addEventListener('error', (e) => {
-  const img = e.target;
-  if (!(img instanceof HTMLImageElement) || !img.hasAttribute('data-fallback')) return;
-  failedImg.add(img.getAttribute('src'));
-  (img.closest('picture') || img).remove();
-}, true);
-
-/* A dish's photo: the counter's own upload when there is one, otherwise a
-   stock photo matched to the name (marked illustrative), otherwise none. */
-function dishImage(m) {
-  if (m.photo_asset) {
-    const src = quad.assetUrl(m.photo_asset);
-    return imgOk(src) ? { src, alt: m.name, illustrative: false } : null;
-  }
-  const p = dishPhoto(m.name);
-  return p && imgOk(p.src) ? { src: p.src, alt: `Illustrative photo: ${p.alt}`, illustrative: true } : null;
-}
-
-/* The dish's monogram in the display face — the same treatment the
-   cafeteria marks use. It stays under the photo, so a photo that fails to
-   load leaves the tile exactly as it was before photos existed. */
-const dishMono = (name) => {
-  const words = String(name || '?').split(/\s+/).filter(Boolean);
-  return (words.length > 1 ? words[0][0] + words[1][0] : words[0].slice(0, 2)).toUpperCase();
-};
-const DishTile = (i) => {
-  const ph = dishImage(i);
-  return `<div class="item-thumb${ph ? ' has-photo' : ''}"><span class="dish-mono"${ph ? ' aria-hidden="true"' : ''}>${esc(dishMono(i.name))}</span>${ph
-    ? `<img class="thumb-photo" src="${esc(ph.src)}" alt="${esc(ph.alt)}" width="84" height="84" loading="lazy" decoding="async" data-fallback>` : ''}</div>`;
-};
-
-/* The café's own photograph in a frame of aspect `slot`, over its tint and
-   mark (what shows if the photo cannot load). `vw` is how much of the
-   viewport the frame spans at each breakpoint, for the browser's pick. */
-const CafPhoto = (c, { slot = 16 / 9, sizes = [100, 50, 33], eager = false, cls = 'cafphoto' } = {}) => {
-  const p = cafePhoto(c.slug, slot);
-  const img = p && imgOk(p.src) ? p : null;
-  const sz = sizes.map((v) => Math.round(v * (img?.scale || 1)));
-  return `<div class="${cls}" style="background:${c.heroBg}">
-    <span class="cafmark" style="background:${c.markBg}" aria-hidden="true">${esc(c.mark)}</span>
-    ${img ? `<picture>
-      <source type="${img.type}" srcset="${img.srcset}" sizes="(max-width: 719px) ${sz[0]}vw, (max-width: 1023px) ${sz[1]}vw, ${sz[2]}vw">
-      <img src="${img.src}" alt="${esc(img.alt)}" width="${img.width}" height="${img.height}" style="object-position:${img.position}"
-        decoding="async" ${eager ? 'fetchpriority="high"' : 'loading="lazy"'} data-fallback></picture>` : ''}
-  </div>`;
-};
-const hasCafPhoto = (c) => !!cafePhoto(c.slug);
+/* Café and dish photo frames (packages/ui/photo-tiles.js). A photo that
+   fails to load is dropped and its fallback mark or monogram shows. */
+document.addEventListener('error', onImageError, true);
+const assetUrl = (id) => quad.assetUrl(id);
+const dishImage = (m) => dishImageFor(m, assetUrl);
+const DishTile = (i) => DishTileFor(i, assetUrl);
 
 /* The seed menus have no categories, and categories cannot be created over
    the API, so sections are derived from each dish's own tags. Display only. */

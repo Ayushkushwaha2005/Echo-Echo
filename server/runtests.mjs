@@ -44,6 +44,7 @@ const FILES = [
   ['unit', 'test/load-module.test.mjs'],
   ['unit', 'test/keep-warm.test.mjs'],
   ['unit', 'test/menu-photos.test.mjs'],
+  ['unit', 'test/photo-tiles.test.mjs'],
   ['integration', 'test/integration.test.mjs'],
   ['api', 'test/api.test.mjs'],
   ['api', 'test/menu.test.mjs'],

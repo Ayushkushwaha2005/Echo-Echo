@@ -17,38 +17,11 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { cafePhoto, dishPhoto, dishPhotoKey, DISH_PHOTOS, DISH_CREDITS } from '../../packages/media/photos.js';
+import { LIVE_MENU } from './fixtures/live-menu.mjs';
 
 const MEDIA = fileURLToPath(new URL('../../packages/media/', import.meta.url));
 const fileOf = (url) => fileURLToPath(url);
 
-/* [name, veg] for every dish, exactly as GET /vendors/:id/menu returned it. */
-const LIVE_MENU = [
-  /* Chai Garam, 67 dishes */
-  ["Cold Coffee", true], ["Cold Mocha Coffee", true], ["Extra Strong Cold Coffee", true], ["Adrak Chai", true],
-  ["Chai Garam Special", true], ["Elaichi Chai", true], ["Haldi Chai", true], ["Kali Mirch Chai", true],
-  ["Kulhad Tea", true], ["Mini Kulhad", true], ["Tulsi Chai", true], ["Adrak Elaichi", true],
-  ["Adrak Tulsi", true], ["Dalchini Adrak", true], ["Gur Elaichi", true], ["Kulhad Double Flavour", true],
-  ["Saunf Elaichi", true], ["Black Darjeeling", true], ["Black Darjeeling with Lemon Honey", true], ["Chamomile", true],
-  ["Green Tea", true], ["Green Tea with Lemon Honey", true], ["Jasmine Green Tea", true], ["Cheese Corn Pasta", true],
-  ["Chicken Mix Pasta", false], ["Chicken Pasta", false], ["Chicken Tandoori Pasta", false], ["Mix Sauce Pasta", true],
-  ["Pink Pasta", true], ["Punjabi Pasta", true], ["Tandoori Sauce Pasta", true], ["Veg Corn Pasta", true],
-  ["Veg Pasta (White/Red)", true], ["Chicken Wrap", false], ["Egg Wrap", false], ["Paneer Wrap", true],
-  ["Tandoori Chicken Wrap", false], ["Tandoori Veg Wrap", true], ["Veg Corn Wrap", true], ["Veg Wrap", true],
-  ["Chicken Maggi", false], ["Chilli Garlic Maggi", true], ["Plain Maggi", true], ["Tandoori Maggi", true],
-  ["Veg Maggi", true], ["American Corn Sandwich", true], ["Cheese Garlic Sandwich", true], ["Chicken Sandwich", false],
-  ["Paneer Sandwich", true], ["Paneer Twister", true], ["Peanut Butter Sandwich", true], ["Tandoori Paneer Sandwich", true],
-  ["Tandoori Sandwich", null], ["Tomato Cheese Sandwich", true], ["Veg Sandwich", true], ["Corn Chaat", true],
-  ["Hot and Sour Soup", true], ["Masala Oats", true], ["Sweet Corn Soup", true], ["Thick Tomato Soup", true],
-  ["Veg Oats", true], ["Cheese Fries", true], ["Chicken Nuggets (5 pcs)", false], ["Classic Fries", true],
-  ["Peri Peri Fries", true], ["Veg Fingers (5 pcs)", true], ["Veg Nuggets (5 pcs)", true],
-  /* Tulips, 24 dishes */
-  ["Blueberry Lassi", null], ["Cold Coffee", null], ["Hazelnut Coffee", null], ["Lemon Ice Tea", null],
-  ["Nimbupani Masala", null], ["Peach Ice Tea", null], ["Choco Vanilla Softy", null], ["Chocolate Softy", null],
-  ["Vanilla Softy", null], ["Chocolate Sundae", null], ["Mango Sundae", null], ["Strawberry Sundae", null],
-  ["Blue Lagoon Slush", null], ["Mojito Green Slush", null], ["Chicken Salami Salad Hot Dog", false], ["Chicken Seekh Kebab Hot Dog", false],
-  ["Chilly Paneer Hot Dog", true], ["Pasta Bun Hot Dog", true], ["Batata Vada Sandwich", true], ["Cheese Salad Sandwich", true],
-  ["Chicken Afghani Spread Sandwich", false], ["Chicken Ham n Cheese Sandwich", false], ["Chicken Keema Rice Bowl", false], ["Rajma Masala Rice Bowl", true],
-];
 const MEAT_WORDS = /\b(chicken|egg|keema|mutton|fish|ham|salami|prawn|seekh)\b/i;
 const isVeg = ([name, veg]) => veg !== false && !MEAT_WORDS.test(name);
 
@@ -70,6 +43,21 @@ test('a vegetarian dish never shows meat', () => {
   const wrong = LIVE_MENU.filter(isVeg)
     .map(([name]) => [name, dishPhotoKey(name)])
     .filter(([, key]) => DISH_PHOTOS[key].meat);
+  assert.deepEqual(wrong, []);
+});
+
+test("a dish's photo never shows a different meat than the dish names", () => {
+  /* Egg Wrap once showed a photo titled "Chicken Kathi Roll": no veg rule
+     catches that, because the dish is not veg. The source title says what
+     is in the picture, so a meat it names must be one the dish names too. */
+  const MEATS = /\b(chicken|egg|keema|mutton|lamb|beef|pork|fish|ham|salami|bacon|sausage|prawn|shrimp|crab|turkey|chorizo|seekh)\b/gi;
+  const wrong = [];
+  for (const [name] of LIVE_MENU) {
+    const key = dishPhotoKey(name);
+    const dish = new Set((name.match(MEATS) || []).map((m) => m.toLowerCase()));
+    const shown = (DISH_CREDITS[key].title.match(MEATS) || []).map((m) => m.toLowerCase());
+    for (const m of shown) if (!dish.has(m)) wrong.push(`${name} -> ${key} ("${DISH_CREDITS[key].title}")`);
+  }
   assert.deepEqual(wrong, []);
 });
 
