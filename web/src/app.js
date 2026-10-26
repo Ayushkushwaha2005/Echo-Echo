@@ -161,8 +161,10 @@ function go(route, params = {}, { history: mode = 'push' } = {}) {
   }
   clearInterval(poll); poll = null;
   /* Open/closed and availability change during the day; show today's, not
-     whatever was true when the tab was first opened. */
-  if (['home', 'cafes', 'welcome'].includes(route)) drop('vendors');
+     whatever was true when the tab was first opened. A list fetched in the
+     last minute (the same age the once-a-minute refresh below allows) is
+     shown at once while it is checked again. */
+  if (['home', 'cafes', 'welcome'].includes(route)) revalidate('vendors', loadVendors, VENDORS_MAX_AGE);
   /* The fees the server would charge, so the bill is honest before payment.
      Fetched once and reused; it changes only when an admin changes it. */
   if (['cart', 'checkout'].includes(route)) needPricing();
@@ -186,16 +188,31 @@ function toast(msg, tone = 'ok') {
 /* ===================== data cache ======================================= */
 const cache = {};
 const inflight = {};
+const fetchedAt = {};
+const keep = (key, v) => { cache[key] = { ok: true, v }; fetchedAt[key] = Date.now(); };
+function load(key, promise) {
+  inflight[key] = promise
+    .then((v) => keep(key, v), (e) => { cache[key] = { ok: false, e }; })
+    .finally(() => { delete inflight[key]; render(); });
+}
 function need(key, loader) {
   if (key in cache) return cache[key];
-  if (!inflight[key]) {
-    inflight[key] = loader()
-      .then((v) => { cache[key] = { ok: true, v }; }, (e) => { cache[key] = { ok: false, e }; })
-      .finally(() => { delete inflight[key]; render(); });
-  }
+  if (!inflight[key]) load(key, loader());
   return null;
 }
 const drop = (...keys) => keys.forEach((k) => delete cache[k]);
+/* Keep showing what is cached while the server is asked again, but only
+   while it is recent enough to still be true (a café opens and closes by
+   the clock). Older than maxAge, or an error, it is dropped and the screen
+   waits for the server as before. A failed refresh keeps the recent copy. */
+function revalidate(key, loader, maxAge) {
+  if (!(key in cache)) return;
+  if (!cache[key].ok || Date.now() - fetchedAt[key] > maxAge) return drop(key);
+  if (inflight[key]) return;
+  inflight[key] = loader()
+    .then((v) => keep(key, v), () => {})
+    .finally(() => { delete inflight[key]; render(); });
+}
 
 function explain(e) {
   if (e instanceof Offline) return `Cannot reach the ${BRAND} server.`;
@@ -671,11 +688,25 @@ function ScrObLocation() {
    Three short steps, each showing what the server already knows so nothing
    is typed twice. Completion is whatever GET /me/profile says, never a flag
    this screen sets. */
-const loadVendors = () => quad.vendors({ campusId: browseCampus()?.id });
+const VENDORS_MAX_AGE = 60_000;
+const CAMPUS_KEY = 'echo.campus';
+/* Each list remembers which campus it is for, so a list for another campus
+   (after signing in, or changing campus) is never shown. */
+const vendorsFor = (campusId) => quad.vendors({ campusId }).then((r) => {
+  try { if (campusId) localStorage.setItem(CAMPUS_KEY, campusId); } catch { /* storage blocked */ }
+  return { ...r, campusId };
+});
+const loadVendors = () => vendorsFor(browseCampus()?.id);
 /* Outlets are listed per campus, and which campus is only known once boot
    has read /campuses and /auth/me. Asking before that fetched the unscoped
-   list, threw it away and asked again: one wasted round trip per visit. */
-const needVendors = () => (S.campuses === null ? null : need('vendors', loadVendors));
+   list, threw it away and asked again: one wasted round trip per visit.
+   (Boot does ask early for the campus this browser used last time; see
+   boot below.) */
+const needVendors = () => {
+  if (S.campuses === null) return null;
+  if (cache.vendors?.ok && cache.vendors.v.campusId !== browseCampus()?.id) drop('vendors');
+  return need('vendors', loadVendors);
+};
 /* Cafés open and close by the clock, so a page left open at 7:59 or 5:59
    must change without a reload. Once a minute the server is asked again
    (it computes the status in campus time); the page re-renders only when
@@ -685,8 +716,9 @@ setInterval(async () => {
   try {
     const fresh = await loadVendors();
     const sig = (r) => (r?.vendors || []).map((v) => `${v.id}:${v.open_now}:${v.status?.line}`).join('|');
-    if (cache.vendors?.ok && sig(cache.vendors.v) === sig(fresh)) return;
-    cache.vendors = { ok: true, v: fresh };
+    const same = cache.vendors?.ok && sig(cache.vendors.v) === sig(fresh);
+    keep('vendors', fresh);
+    if (same) return;
     if (S.route === 'menu') drop(`menu:${S.params.caf}`);
     render();
   } catch { /* offline: the next tick tries again */ }
@@ -907,7 +939,6 @@ function ScrMenu() {
   const cats = [...new Set(items.map(sectionFor))];
   const count = cartCount();
   const photo = hasCafPhoto(c);
-  const stockPhotos = items.some((m) => dishImage(m)?.illustrative);
   return `<div class="screen">
     <!-- The hero tint follows the theme (it is dark in dark mode), so its
          text does too. The café's photo sits beside the words, never under
@@ -941,8 +972,6 @@ function ScrMenu() {
       ${!c.open ? `<div class="campusnote">${Ico(I.clock, 18)}<p class="t-xs" style="color:var(--text-2)">${esc(c.name)}: ${esc(c.statusLine)}. You can look through the menu, but not order.</p></div>` : ''}
       ${c.hours?.week ? `<div class="card card-pad stack g1" aria-label="Opening hours">${Label('Hours')}
         ${c.hours.week.map((d) => `<div class="between t-xs"><span>${esc(d.day)}</span><span class="${d.open ? '' : 'muted'}">${esc(d.open ? d.hours : 'Closed')}</span></div>`).join('')}</div>` : ''}
-      ${stockPhotos ? `<p class="t-xs faint photo-note">Dish photos are illustrative, not taken at ${esc(c.name)}.
-        <button class="foot-link" data-act="sheet" data-sheet="photos">Photo credits</button></p>` : ''}
       ${items.length ? cats.map((cat, i) => `
         <div class="stack g1" id="cat-${i}">
           ${Label(cat)}
@@ -2533,9 +2562,8 @@ function Sheet() {
     const LICENCE = { cc0: 'CC0', pdm: 'Public domain', by: 'CC BY', 'by-sa': 'CC BY-SA' };
     body = `<div class="sheet-body stack g4">
       <div class="stack g1"><h2 class="t-h1">Photo credits</h2>
-        <p class="t-sm muted">The café photos are our own, taken at each kiosk on campus. Dish photos are openly
-          licensed pictures that show what each dish is; they were not taken at the café. When a café adds a
-          photo of its own dish, that photo replaces the illustration.</p></div>
+        <p class="t-sm muted">The café photos are our own, taken at each kiosk on campus. The dish photos are
+          openly licensed; their photographers and licences are listed below.</p></div>
       <ul class="credits">
         ${Object.values(DISH_CREDITS).map((p) => `<li class="t-xs">
           <a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a>
@@ -2619,7 +2647,9 @@ function render(fresh = false) {
       ${SiteHeader()}
       <main class="site-main">${scr}</main>
       <footer class="site-foot">${logo({ size: 22, alt: '', className: 'brand-logo brand-logo-foot' })} ${BRAND} · ${esc(campusLabel())} · Campus delivery only ·
-        <button class="foot-link" data-act="go" data-route="deliver">Deliver with ${BRAND}</button></footer>
+        <button class="foot-link" data-act="go" data-route="deliver">Deliver with ${BRAND}</button> ·
+        <!-- The CC BY / BY-SA dish photos require attribution; this is where it lives. -->
+        <button class="foot-link" data-act="sheet" data-sheet="photos">Photo credits</button></footer>
       ${nav}
       ${Sheet()}
       ${S.toast ? `<div class="toast"><span>${S.toast.icon}</span>${esc(S.toast.msg)}</div>` : ''}
@@ -3408,12 +3438,23 @@ async function openGateway(intent, draft) {
 /* ===================== boot ============================================= */
 (async function boot() {
   render();
+  /* The café list waits on knowing the campus, which /campuses and
+     /auth/me tell. A returning browser asks for the campus it used last
+     time alongside them, and the answer is used only if that is still the
+     campus; otherwise it is discarded and the right one is asked for. */
+  let early = null;
+  try {
+    const id = localStorage.getItem(CAMPUS_KEY);
+    if (id) early = { id, list: vendorsFor(id) };
+  } catch { /* storage blocked: no early request */ }
+  early?.list.catch(() => {});
   try {
     const [me, status, campuses] = await Promise.all([quad.me(), quad.authStatus().catch(() => null),
       quad.campuses().catch(() => null)]);
     S.campuses = campuses?.campuses || [];
     S.me = me.authenticated ? me : null;
     S.providers = status?.providers || null;
+    if (early && early.id === browseCampus()?.id && !('vendors' in cache)) load('vendors', early.list);
   } catch (e) {
     if (e instanceof Offline) {
       document.getElementById('app').innerHTML = `<div class="shell"><div class="stage"><div class="device">

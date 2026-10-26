@@ -62,6 +62,21 @@
           "value": "public, max-age=31536000, immutable"
         }
       ]
+    },
+    {
+      "source": "/api/vendors/",
+      "missing": [
+        {
+          "type": "query",
+          "key": "includeArchived"
+        }
+      ],
+      "headers": [
+        {
+          "key": "Vercel-CDN-Cache-Control",
+          "value": "max-age=15, stale-while-revalidate=45"
+        }
+      ]
     }
   ]
 }

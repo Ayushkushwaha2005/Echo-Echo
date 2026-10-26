@@ -50,10 +50,20 @@ function hostError(status) {
   return 'Cannot reach the ECHO ECHO server';
 }
 
+/* The site is served with trailing slashes (vercel.json), so /api/vendors is
+   answered with a 308 to /api/vendors/ before the request goes anywhere: a
+   wasted round trip on every call. The API ignores a trailing slash, so ask
+   for the slashed path directly. */
+const slashed = (path) => {
+  const i = path.indexOf('?');
+  const p = i < 0 ? path : path.slice(0, i);
+  return (p.endsWith('/') ? p : `${p}/`) + (i < 0 ? '' : path.slice(i));
+};
+
 async function call(method, path, body, opts = {}) {
   let res;
   try {
-    res = await fetch(API_BASE + path, {
+    res = await fetch(API_BASE + slashed(path), {
       method,
       credentials: 'include',
       headers: body instanceof FormData ? {} : { 'Content-Type': 'application/json' },
