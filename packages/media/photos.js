@@ -10,10 +10,10 @@
      the GPS position) is not carried over.
 
    * DISH photos are openly licensed stock pictures matched to the dish's
-     NAME. They are not pictures of the café's own food, so every surface
-     that shows one says so, and DISH_CREDITS carries the attribution the
-     licence asks for. A photo the counter uploads for a dish (menu_item.
-     photo_asset) is the real thing and always wins over these.
+     NAME. They are not pictures of the café's own food; DISH_CREDITS records
+     each one's source, creator and licence (the site does not display it,
+     at the owner's direction, 26 Oct 2026). A photo the counter uploads for
+     a dish (menu_item.photo_asset) is the real thing and always wins.
 
    Lookups are pure functions of the slug or the dish name: the same dish
    gets the same photo on every load, and nothing here is written anywhere.
@@ -270,8 +270,8 @@ export function dishPhoto(name) {
   return { key, src: asset(`dishes/${key}.webp`), alt: DISH_PHOTOS[key].alt };
 }
 
-/* photo key -> { title, creator, license, url }: the attribution each
-   licence asks for, shown in the menu's "Photo credits" sheet. */
+/* photo key -> { title, creator, license, url }: the source and licence
+   of each dish photo, kept as the record (not displayed on the site). */
 export const DISH_CREDITS = {
   'cold-coffee': { title: 'Ice coffee', creator: 'Krabiman', license: 'by', version: '2.0',
     licenseUrl: 'https://creativecommons.org/licenses/by/2.0/', url: 'https://www.flickr.com/photos/40220273@N05/3723734332' },

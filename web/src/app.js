@@ -20,7 +20,6 @@ import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/dat
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
 import { campusOption } from '../../packages/ui/campus-option.js';
 import { logo, mark, lockup } from '../../brand/logo.js';
-import { DISH_CREDITS } from '../../packages/media/photos.js';
 import { onImageError, dishImage as dishImageFor, DishTile as DishTileFor, CafPhoto, hasCafPhoto } from '../../packages/ui/photo-tiles.js';
 import { mapPointChosen, mapPointAnswered, gpsPointPlaced, spotFromPick, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
 import { deniedHelp } from '../../packages/data/geofix.js';
@@ -2558,22 +2557,6 @@ function Sheet() {
     </div>`;
   }
 
-  if (n === 'photos') {
-    const LICENCE = { cc0: 'CC0', pdm: 'Public domain', by: 'CC BY', 'by-sa': 'CC BY-SA' };
-    body = `<div class="sheet-body stack g4">
-      <div class="stack g1"><h2 class="t-h1">Photo credits</h2>
-        <p class="t-sm muted">The café photos are our own, taken at each kiosk on campus. The dish photos are
-          openly licensed; their photographers and licences are listed below.</p></div>
-      <ul class="credits">
-        ${Object.values(DISH_CREDITS).map((p) => `<li class="t-xs">
-          <a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a>
-          by ${esc(p.creator)} ·
-          <a href="${esc(p.licenseUrl)}" target="_blank" rel="noopener noreferrer license">${esc(LICENCE[p.license] || p.license.toUpperCase())} ${esc(p.version || '')}</a>
-          · cropped and resized</li>`).join('')}
-      </ul>
-    </div>`;
-  }
-
   if (n === 'code') {
     body = `<form class="sheet-body stack g4" data-form="code">
       <div class="stack g1"><h2 class="t-h1">${esc(S.sheet.title)}</h2>
@@ -2647,9 +2630,7 @@ function render(fresh = false) {
       ${SiteHeader()}
       <main class="site-main">${scr}</main>
       <footer class="site-foot">${logo({ size: 22, alt: '', className: 'brand-logo brand-logo-foot' })} ${BRAND} · ${esc(campusLabel())} · Campus delivery only ·
-        <button class="foot-link" data-act="go" data-route="deliver">Deliver with ${BRAND}</button> ·
-        <!-- The CC BY / BY-SA dish photos require attribution; this is where it lives. -->
-        <button class="foot-link" data-act="sheet" data-sheet="photos">Photo credits</button></footer>
+        <button class="foot-link" data-act="go" data-route="deliver">Deliver with ${BRAND}</button></footer>
       ${nav}
       ${Sheet()}
       ${S.toast ? `<div class="toast"><span>${S.toast.icon}</span>${esc(S.toast.msg)}</div>` : ''}

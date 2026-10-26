@@ -795,12 +795,6 @@ textarea.input { resize: vertical; min-height: 72px; }
 .site .item-thumb { width: 84px; height: 84px; }
 .site .item-thumb.has-photo { background: var(--bg-sunken); }
 .site .item-thumb .thumb-photo { position: absolute; inset: 0; }
-.site .credits a {
-  color: var(--accent-text); font-weight: var(--w-semibold); font-size: inherit;
-  text-decoration: underline; text-underline-offset: 2px;
-}
-.site .credits { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; color: var(--text-2); }
-.site .credits a { font-weight: 600; }
 
 /* ---------- the delivery spot ---------- */
 .site .desttile.is-empty { border-style: dashed; border-color: var(--accent); background: var(--accent-faint); }

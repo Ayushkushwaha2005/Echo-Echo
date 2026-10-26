@@ -11,7 +11,7 @@ metadata is carried over.
     python tools/dish-photos.py <download-cache-dir>
 
 The attribution for every photo is in packages/media/photos.js
-(DISH_CREDITS), which the menu's "Photo credits" sheet shows.
+(DISH_CREDITS), kept as the record of each photo's source and licence.
 """
 import json
 import os
