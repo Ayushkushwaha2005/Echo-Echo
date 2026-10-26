@@ -112,7 +112,24 @@ const PLACES = {
   pickup: { colour: '#1C1917', glyph: '🍴', label: 'Pick-up' },
   destination: { colour: '#E0567A', glyph: '📍', label: 'Delivering to' },
   partner: { colour: '#2F7D5F', glyph: '🛵', label: 'Your delivery partner' },
+  partnerStale: { colour: '#8C7A7E', glyph: '🛵', label: 'Last known position', extra: 'echo-pin-stale' },
 };
+
+/* How old a partner's position may be before the map stops treating it as
+   where they are. The phone reports every 20 s (web/src/app.js), so after
+   60 s three reports in a row have not arrived: the marker turns grey and
+   says when it was last seen. After 5 minutes it is not drawn at all; the
+   note under the map says why. The age is the server's (ageSeconds). */
+export const FRESH_SECONDS = 60;
+export const UNAVAILABLE_SECONDS = 300;
+export function partnerFreshness(partner) {
+  if (!partner) return null;
+  const age = Number.isFinite(partner.ageSeconds) ? partner.ageSeconds : null;
+  if (age === null) return { state: 'stale', age: null };   // no age: never present it as live
+  return { state: age <= FRESH_SECONDS ? 'fresh' : age <= UNAVAILABLE_SECONDS ? 'stale' : 'unavailable', age };
+}
+export const ageText = (s) => (s < 60 ? `${Math.max(1, Math.round(s))} s ago`
+  : s < 3600 ? `${Math.round(s / 60)} min ago` : 'over an hour ago');
 
 /**
  * Draw a tracking payload into `el`.
@@ -126,7 +143,11 @@ export async function drawTrackingMap(el, tracking, { self = null } = {}) {
   const points = [];
   if (tracking.pickup) points.push({ ...tracking.pickup, kind: 'pickup' });
   if (tracking.destination) points.push({ ...tracking.destination, kind: 'destination' });
-  if (tracking.partner) points.push({ ...tracking.partner, kind: 'partner', name: 'Delivery partner' });
+  const fresh = partnerFreshness(tracking.partner);
+  if (fresh && fresh.state !== 'unavailable') {
+    points.push({ ...tracking.partner, kind: fresh.state === 'fresh' ? 'partner' : 'partnerStale',
+                  name: fresh.age === null ? 'Delivery partner' : `Delivery partner · updated ${ageText(fresh.age)}` });
+  }
   if (self) points.push({ ...self, kind: 'partner', name: 'You' });
 
   if (!points.length) {
@@ -166,7 +187,7 @@ export async function drawTrackingMap(el, tracking, { self = null } = {}) {
 
   for (const p of points) {
     const spec = PLACES[p.kind];
-    L.marker([p.lat, p.lng], { icon: pin(L, spec.colour, spec.glyph, spec.label) })
+    L.marker([p.lat, p.lng], { icon: pin(L, spec.colour, spec.glyph, spec.label, spec.extra) })
       .addTo(map)
       .bindPopup(`<b>${escapeText(spec.label)}</b><br>${escapeText(p.name || '')}`);
   }
@@ -568,12 +589,29 @@ export async function drawPickerMap(el, data, { onTap, onSelect, ...state } = {}
 }
 
 /** What to tell someone when there is no partner marker. */
-export const partnerVisibilityNote = (v) => ({
-  no_partner_yet: 'No delivery partner has picked this up yet.',
-  hidden_until_pickup: 'You will see your partner on the map once they have collected your order.',
-  not_reported_yet: 'Your partner has collected the order. Their position will appear shortly.',
-  visible: null,
-}[v] ?? null);
+/* The line under a tracking map. `self` is the partner looking at their
+   own delivery; everyone else reads about "your partner". */
+export function partnerVisibilityNote(v, partner = null, { self = false } = {}) {
+  if (v === 'visible') {
+    const f = partnerFreshness(partner);
+    if (!f || f.age === null) return null;
+    const who = self ? 'Your position' : 'Your partner’s location';
+    if (f.state === 'fresh') return `${who} was updated ${ageText(f.age)}.`;
+    if (f.state === 'stale') return self
+      ? `Your position was last sent ${ageText(f.age)}. Keep this screen open so it keeps updating.`
+      : `${who} was last updated ${ageText(f.age)}, so they may have moved since (shown in grey).`;
+    return self
+      ? `Your position has not been sent for ${ageText(f.age).replace(' ago', '')}, so it is not shown. Keep this screen open.`
+      : `${who} has not updated for ${ageText(f.age).replace(' ago', '')}, so it is not shown. Their phone may be locked or offline.`;
+  }
+  return ({
+    no_partner_yet: 'No delivery partner has picked this up yet.',
+    hidden_until_pickup: 'You will see your partner on the map once they have collected your order.',
+    not_reported_yet: self ? 'Your position has not reached the server yet.'
+      : 'Your partner has collected the order. Their position will appear shortly.',
+    delivery_over: 'This delivery has ended, so the partner’s location is no longer shown.',
+  })[v] ?? null;
+}
 
 const escapeText = (s) => String(s ?? '').replace(/[&<>"']/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
