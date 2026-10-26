@@ -795,7 +795,7 @@ textarea.input { resize: vertical; min-height: 72px; }
 .site .item-thumb { width: 84px; height: 84px; }
 .site .item-thumb.has-photo { background: var(--bg-sunken); }
 .site .item-thumb .thumb-photo { position: absolute; inset: 0; }
-.site .photo-note .foot-link, .site .credits a {
+.site .credits a {
   color: var(--accent-text); font-weight: var(--w-semibold); font-size: inherit;
   text-decoration: underline; text-underline-offset: 2px;
 }
