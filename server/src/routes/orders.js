@@ -20,6 +20,7 @@ import { flag } from '../services/flags.js';
 import { audit } from '../audit.js';
 import { notifyAsync } from '../services/notify.js';
 import { assignDelivery } from '../services/delivery.js';
+import { CARRYING, forgetForOrder } from '../services/partner-location.js';
 import { livePolicy, quote, writeSnapshot, snapshotFor } from '../services/pricing.js';
 import { entriesForOrder, postDeliveryEarned } from '../services/ledger.js';
 import { assertOnlinePayment } from '../services/prepaid.js';
@@ -59,6 +60,10 @@ export async function transition(c, orderId, to, actor, note) {
     `INSERT INTO order_event (order_id, from_state, to_state, actor_id, actor_role, note)
      VALUES ($1,$2,$3,$4,$5,$6)`,
     [orderId, o.state, to, actor?.id || null, actor?.roles?.[0] || 'system', note || null]);
+  /* The delivery is over (delivered, refunded): its partner's position goes
+     with it, in this same transaction, so if it cannot be removed the state
+     does not change either. */
+  if (CARRYING.includes(o.state) && !CARRYING.includes(to)) await forgetForOrder(c, orderId);
   return { ...o, state: to };
 }
 

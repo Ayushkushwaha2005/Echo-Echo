@@ -17,6 +17,7 @@ import { RETENTION } from '../config.js';
 import { assignDelivery } from './delivery.js';
 import { purgeExpiredIdImages } from './storage.js';
 import { notifyAsync } from './notify.js';
+import { pruneFinished } from './partner-location.js';
 
 const MAX_ROUNDS = 3;
 const ABANDON_AFTER_MINUTES = 20;
@@ -84,6 +85,8 @@ export async function sweepOnce(log) {
     ['offers', expireOffers],
     ['orders', abandonUnpaidOrders],
     ['otp', pruneOtp],
+    /* A partner's position whose delivery has ended (see partner-location.js). */
+    ['partnerLocations', pruneFinished],
     ['idImages', () => purgeExpiredIdImages(RETENTION.idImageDays).then((n) => ({ purged: n }))],
   ]) {
     try { out[name] = await fn(); }
