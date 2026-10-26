@@ -584,6 +584,9 @@ textarea.input { resize: vertical; min-height: 72px; }
   box-shadow:0 2px 8px rgba(28,25,23,.35);border:2px solid #fff}
 /* The chosen delivery point stays green (it is still a delivery point), with a ring. */
 .echo-pin.sel{box-shadow:0 0 0 4px rgba(47,125,95,.35),0 2px 8px rgba(28,25,23,.35);transform:scale(1.12)}
+/* A partner position older than a minute: grey and faded, so it is never
+   read as where they are now (map.js partnerFreshness). */
+.echo-pin.echo-pin-stale{opacity:.7;border-style:dashed}
 /* Map type and "my location", top right of the picker. */
 .echo-map-tools{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .echo-map-bases{display:flex;background:#fff;overflow:hidden}

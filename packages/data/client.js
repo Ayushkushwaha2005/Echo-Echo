@@ -280,10 +280,15 @@ export const quad = {
   reportLocation: (orderId) => new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('This browser cannot share location'));
     navigator.geolocation.getCurrentPosition(
-      (pos) => resolve(post('/partner/location', {
-        orderId, lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy })),
-      (err) => reject(new Error(err.code === err.PERMISSION_DENIED
-        ? 'Location permission was denied' : 'Your location is unavailable')),
+      (pos) => post('/partner/location', {
+        orderId, lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy,
+        takenAt: pos.timestamp }).then(resolve, reject),
+      /* `code` says which kind of failure it was, so the screen can say what
+         to do about it: 'denied' needs the browser's permission changed,
+         'unavailable' usually passes on its own. */
+      (err) => reject(Object.assign(new Error(err.code === err.PERMISSION_DENIED
+        ? 'Location permission was denied' : 'Your location is unavailable'),
+      { code: err.code === err.PERMISSION_DENIED ? 'denied' : 'unavailable' })),
       { enableHighAccuracy: true, timeout: 15_000, maximumAge: 5_000 });
   }),
   clearLocation: () => post('/partner/location/clear'),

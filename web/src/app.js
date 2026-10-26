@@ -1416,6 +1416,7 @@ function DeliveryBrief(o) {
         <div class="t-label">Contact on arrival</div>
         <a class="t-h3" style="color:var(--accent-text)" href="tel:${esc(o.delivery_contact_phone)}">${esc(prettyPhone(o.delivery_contact_phone))}</a>
       </div>` : ''}
+      ${['assigned', 'picked_up'].includes(o.state) ? ShareStatus() : ''}
       ${MapCard(o.id, { self: true })}
       ${earning ? `<p class="t-xs faint">${esc(earning.note)}</p>` : ''}
     </div>`;
@@ -1432,20 +1433,74 @@ const MapCard = (orderId, { self = false } = {}) => `
     <div class="echo-map-slot" data-map-order="${esc(orderId)}" data-map-self="${self ? '1' : ''}">
       <div class="map-empty"><p class="t-sm muted">Loading the map…</p></div>
     </div>
-    <p class="echo-map-note t-xs faint"></p>
+    <p class="echo-map-note t-xs muted"></p>
   </div>`;
 
 /* ---------- the partner's own position ----------------------------------
    Reported only while an order is actually in their care, and only to the
    order it belongs to. The server refuses it in any other state and drops
    whatever it held, so there is no way to accumulate a movement trail. */
+const SHARE_EVERY_MS = 20_000;
 let positionTimer = null;
+let sharingFor = null;
+/* What the partner is told about their own position: when it last reached
+   the server, or why the last attempt failed. */
+const share = { okAt: null, error: null };
+/* Called on every render of the partner screen; it only (re)starts when the
+   order being carried changes, so re-rendering does not re-send. */
 function shareWhileCarrying(orderId) {
-  if (positionTimer) clearInterval(positionTimer);
+  if (orderId === sharingFor) return;
+  stopSharing();
+  sharingFor = orderId;
   if (!orderId) return quad.clearLocation().catch(() => {});
-  const send = () => quad.reportLocation(orderId).catch(() => {});
-  send();
-  positionTimer = setInterval(send, 20_000);
+  sendPosition();
+  positionTimer = setInterval(sendPosition, SHARE_EVERY_MS);
+}
+function stopSharing() {
+  if (positionTimer) clearInterval(positionTimer);
+  positionTimer = null; sharingFor = null; share.okAt = null; share.error = null;
+}
+async function sendPosition() {
+  const id = sharingFor;
+  if (!id) return;
+  const before = share.error?.code || '';
+  try {
+    await quad.reportLocation(id);
+    share.okAt = Date.now(); share.error = null;
+  } catch (e) {
+    share.error = { code: e.code || 'upload', message: e.message || 'Unknown error' };
+  }
+  if (sharingFor !== id) return;
+  /* Re-render only when the message changes (a failure appears or clears),
+     never on every success: the partner may be typing a handover code. */
+  if ((share.error?.code || '') !== before) return render();
+  const at = document.querySelector('[data-share-at]');
+  if (at && share.okAt) at.textContent = `, last sent at ${clockTime(share.okAt)}`;
+}
+const clockTime = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+/* A hidden page's timers are slowed and phones stop giving it positions;
+   coming back to the screen sends one straight away. */
+document.addEventListener('visibilitychange', () => { if (!document.hidden && sharingFor) sendPosition(); });
+
+/* What the partner reads about their own location sharing, on the card of
+   the order they are carrying. It never claims more than a web page can do. */
+function ShareStatus() {
+  const e = share.error;
+  if (e) {
+    const msg = e.code === 'denied'
+      ? 'Location is blocked for this site, so the student cannot see you on the map. Allow location for echoecho.tech in your browser’s site settings, then tap Try again.'
+      : e.code === 'unavailable'
+        ? 'Your phone could not get a location fix. Move near a window or outdoors. It tries again every 20 seconds.'
+        : e.code === 'offline'
+          ? 'Your location could not be sent: no internet connection. It tries again every 20 seconds.'
+          : `Your location could not be sent (${e.message}). It tries again every 20 seconds.`;
+    return `<div class="campusnote is-warn" role="alert">${Ico(I.warn, 18)}<div class="stack g2">
+      <p class="t-xs" style="color:var(--text-2)">${esc(msg)}</p>
+      <button class="btn btn-secondary btn-sm" style="align-self:flex-start" data-act="retryLocation">Try again</button></div></div>`;
+  }
+  return `<div class="campusnote">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">Sharing your location with the student
+    while you deliver<span data-share-at>${share.okAt ? `, last sent at ${clockTime(share.okAt)}` : ''}</span>.
+    Keep this screen open: sharing pauses when the browser is in the background or the phone is locked.</p></div>`;
 }
 
 /* Draws every map placeholder currently on screen. Called after each render;
@@ -1562,7 +1617,7 @@ async function paintMaps() {
       const { drawTrackingMap, partnerVisibilityNote } = await loadModule(() => import('../../packages/ui/map.js'), import.meta.url);
       await drawTrackingMap(slot, tracking);
       if (note) {
-        const why = partnerVisibilityNote(tracking.partnerVisibility);
+        const why = partnerVisibilityNote(tracking.partnerVisibility, tracking.partner, { self: slot.dataset.mapSelf === '1' });
         note.textContent = why || tracking.note || '';
       }
     } catch (e) {
@@ -2653,8 +2708,8 @@ function render(fresh = false) {
     const p2 = cache.partner?.v;
     const carrying = p2?.mine?.orders?.find((o) => ['assigned', 'picked_up'].includes(o.state));
     shareWhileCarrying(carrying?.id || null);
-  } else if (positionTimer) {
-    clearInterval(positionTimer); positionTimer = null;
+  } else if (sharingFor) {
+    stopSharing();
   }
 }
 
@@ -2782,6 +2837,9 @@ document.addEventListener('click', async (e) => {
           render();
         }
       });
+      break;
+    case 'retryLocation':
+      sendPosition();
       break;
     case 'logout':
       await quad.logout().catch(() => {});
