@@ -11,13 +11,14 @@
    Validation happens on the received bytes: magic number, size and decoded
    dimensions. A filename extension is not evidence of anything.
    ========================================================================== */
-import { authorize, can, BadRequest, NotFound, Forbidden } from '../auth/rbac.js';
+import { authorize, can, BadRequest, NotFound, Forbidden, Conflict } from '../auth/rbac.js';
 import { putImage, getImage, removeImage } from '../services/storage.js';
 import { STORAGE } from '../config.js';
 import { one } from '../db/index.js';
 import { audit } from '../audit.js';
 
-const PUBLIC_KINDS = ['food_photo', 'vendor_photo'];
+/* site_image: the website's logo, favicon, hero and banners (website.customize). */
+const PUBLIC_KINDS = ['food_photo', 'vendor_photo', 'site_image'];
 
 export default async function assetRoutes(app) {
   app.post('/assets', async (req) => {
@@ -30,12 +31,14 @@ export default async function assetRoutes(app) {
       else if (part.fieldname === 'kind') kind = String(part.value);
     }
     if (!buf) throw BadRequest('No image received');
-    if (!['food_photo', 'vendor_photo'].includes(kind)) {
+    if (!PUBLIC_KINDS.includes(kind)) {
       throw BadRequest('Unsupported image kind',
         'ID card images are uploaded through /verification/submit, not here.');
     }
+    /* A website image needs the website permission and nothing less. */
+    if (kind === 'site_image') authorize(req.actor, 'site.draft');
     /* Only someone who can edit a menu may add a menu photo. */
-    if (!req.actor.vendorIds.length && !can(req.actor, 'menu.photo')) {
+    else if (!req.actor.vendorIds.length && !can(req.actor, 'menu.photo')) {
       throw Forbidden('Only cafeteria staff and administrators can upload menu photos');
     }
 
@@ -69,7 +72,15 @@ export default async function assetRoutes(app) {
     const item = await one(`SELECT vendor_id FROM menu_item WHERE photo_asset = $1`, [a.id]);
     const vend = await one(`SELECT id FROM vendor WHERE photo_asset = $1`, [a.id]);
     const vendorId = item?.vendor_id || vend?.id;
-    if (vendorId) authorize(req.actor, 'menu.photo', { vendorId });
+    if (a.kind === 'site_image') {
+      authorize(req.actor, 'site.draft');
+      /* Never pull an image out from under the live website or the draft;
+         any published version may also be rolled back to, so those count. */
+      const used = await one(
+        `SELECT 1 FROM site_config_version WHERE config::text LIKE '%' || $1 || '%'
+         UNION ALL SELECT 1 FROM site_config_draft WHERE config::text LIKE '%' || $1 || '%' LIMIT 1`, [a.id]);
+      if (used) throw Conflict('That image is used by the website', 'Remove it from the draft and from every published version first.');
+    } else if (vendorId) authorize(req.actor, 'menu.photo', { vendorId });
     else if (a.owner_id !== req.actor.id) authorize(req.actor, 'menu.photo', {});
 
     await removeImage(a.id);

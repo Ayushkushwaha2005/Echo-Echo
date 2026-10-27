@@ -24,6 +24,7 @@ import { onImageError, dishImage as dishImageFor, DishTile as DishTileFor, CafPh
 import { mapPointChosen, mapPointAnswered, gpsPointPlaced, spotFromPick, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
 import { deniedHelp } from '../../packages/data/geofix.js';
 import { loadModule } from '../../packages/ui/load-module.js';
+import { startSiteSync, applyToDocument, liveBanners, linkAttrs } from '../../packages/data/site-config.js';
 
 restoreTheme();
 
@@ -80,6 +81,33 @@ const S = {
   chat: { messages: [], busy: false },
 };
 
+/* ===================== published website settings ======================
+   The hero, home sections, featured cafés and dishes, banners, announcement,
+   footer, page title and theme are the settings Campus Control publishes.
+   Until something is published they are exactly what this file always
+   rendered (packages/data/site-config.js holds those defaults).
+
+   In Campus Control's preview frame (?site-preview, inside a same-origin
+   parent) the settings come from the parent's unpublished draft instead,
+   and the page behaves as a signed-out visitor sees it. */
+const PREVIEW = (() => {
+  try { return new URLSearchParams(location.search).has('site-preview') && window.parent !== window; } catch { return false; }
+})();
+let SITE = { version: 0, config: null, featuredItems: [] };
+const site = () => SITE.config;
+/* New settings arrive while somebody may be typing or paying. The theme is
+   applied at once (it moves nothing); the page is redrawn only when that
+   cannot interrupt them, otherwise at their next screen change. */
+const MID_TASK = ['checkout', 'ob-email', 'ob-email-code', 'ob-location', 'setup', 'address', 'place'];
+function siteChanged(st) {
+  SITE = st;
+  applyToDocument(st.config, { assetUrl: (id) => quad.assetUrl(id) });
+  const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  if (!S.sheet && !typing && !MID_TASK.includes(S.route)) render();
+}
+SITE = startSiteSync({ api: quad, onChange: siteChanged, previewFrom: PREVIEW ? window : null });
+applyToDocument(SITE.config, { assetUrl: (id) => quad.assetUrl(id) });
+
 const signedIn = () => !!S.me?.authenticated;
 const NEEDS_ACCOUNT = ['orders', 'tracking', 'profile', 'checkout', 'verify', 'partner', 'join', 'setup', 'address', 'place'];
 
@@ -109,7 +137,7 @@ const prettyPhone = (p) => String(p || '').replace(/^\+91(\d{5})(\d{5})$/, '+91 
    back through the site instead of leaving it, and a café's menu can be
    linked to directly. The fragment only names a screen; whether the visitor
    may see it is decided by go() exactly as for a tap. */
-const PUBLIC_ROUTES = ['welcome', 'home', 'cafes', 'menu', 'cart', 'ai', 'deliver'];
+const PUBLIC_ROUTES = ['welcome', 'signin', 'home', 'cafes', 'menu', 'cart', 'ai', 'deliver'];
 const hashFor = (route, params = {}) =>
   route === 'welcome' ? '' : `#/${route}${route === 'menu' && params.caf ? `/${encodeURIComponent(params.caf)}`
     : route === 'tracking' && params.id ? `/${encodeURIComponent(params.id)}` : ''}`;
@@ -149,7 +177,7 @@ function go(route, params = {}, { history: mode = 'push' } = {}) {
   }
   /* Back from the first screen after signing in must not land on a sign-in
      step that is already done. */
-  if (signedIn() && ['welcome', 'ob-college', 'ob-campus', 'ob-email', 'ob-email-code'].includes(route)) {
+  if (signedIn() && ['welcome', 'signin', 'ob-college', 'ob-campus', 'ob-email', 'ob-email-code'].includes(route)) {
     route = 'home'; params = {};
   }
   /* Ordering needs a complete profile. The server enforces it; this sends the
@@ -435,17 +463,22 @@ const BottomNav = () => {
 function ScrWelcome() {
   const vs = needVendors();
   const open = vs?.ok ? vs.v.vendors.filter((v) => v.open_now).length : null;
+  const h = site().hero;
+  const f = site().features;
+  const img = h.imageAsset ? assetUrl(h.imageAsset) : null;
   /* The hero and the sign-in card, with no café grid under them (it was added
      by commit addf347; the owner did not want it). Cafés are browsed from
      "Browse cafés first" and the Cafés tab. The complete logo is in the header
-     directly above, so the hero does not repeat it. */
+     directly above, so the hero does not repeat it. The words, the image and
+     the two buttons are the published website settings (Campus Control). */
   return `<div class="screen no-nav welcome">
     <div class="welcome-fold">
-    <div class="poster" style="border-radius:0;display:flex;flex-direction:column;justify-content:flex-end;padding:var(--s-7) var(--s-5) var(--s-6)">
+    <div class="poster${img ? ' has-hero-img' : ''}" style="border-radius:0;display:flex;flex-direction:column;justify-content:flex-end;padding:var(--s-7) var(--s-5) var(--s-6)">
+      ${img ? `<img class="hero-img" src="${esc(img)}" alt="" decoding="async" data-fallback="hide">` : ''}
       <div class="stack g5 enter">
-        <span class="t-label" style="color:var(--text-2)">${BRAND} · UPES Bidholi</span>
-        <h1 class="t-hero">Campus food, brought to <span style="color:var(--accent-text)">where you are</span>.</h1>
-        <p class="t-body" style="color:var(--text-2);max-width:38ch">Order from the cafés on campus. Another student on their way past brings it to the library, the ground or your block, or you pick it up yourself.</p>
+        ${h.eyebrow ? `<span class="t-label" style="color:var(--text-2)">${esc(h.eyebrow)}</span>` : ''}
+        <h1 class="t-hero">${esc(h.heading)}${h.headingAccent ? ` <span style="color:var(--accent-text)">${esc(h.headingAccent)}</span>` : ''}.</h1>
+        ${h.body ? `<p class="t-body" style="color:var(--text-2);max-width:38ch">${esc(h.body)}</p>` : ''}
         <div class="row g2" style="flex-wrap:wrap">
           <span class="badge badge-ink">UPES Bidholi only</span>
           ${open === null ? '' : `<span class="badge badge-rose">${open} café${open === 1 ? '' : 's'} open now</span>`}
@@ -457,21 +490,54 @@ function ScrWelcome() {
         <div class="t-h1">Ready to order?</div>
         <p class="t-sm muted">Sign in with your university email, or have a look at the menus first.</p>
       </div>
-      <button class="btn btn-primary btn-lg btn-block" data-act="go" data-route="ob-college">Sign in with your student email</button>
-      <button class="btn btn-ghost btn-block" data-act="go" data-route="cafes">Browse cafés first</button>
+      ${SiteLink(h.primaryLink, h.primaryLabel, 'btn btn-primary btn-lg btn-block')}
+      ${f.browseFirst && h.secondaryLabel ? SiteLink(h.secondaryLink, h.secondaryLabel, 'btn btn-ghost btn-block') : ''}
       <p class="t-xs faint center">Only students with a verified university email can order here.</p>
     </div>
     </div>
-    <div class="pad welcome-info" style="padding-bottom:var(--s-7)">
+    ${f.deliverPromo ? `<div class="pad welcome-info" style="padding-bottom:var(--s-7)">
       <button class="tile partner-tile" data-act="go" data-route="deliver">
         ${Ico(I.bike, 20)}
         <span class="stack g1 grow"><span class="t-h3">Deliver with ${BRAND}</span>
           <span class="t-xs muted">Verified students can earn by delivering campus orders between classes. See how joining works.</span></span>
         ${I.chev}
       </button>
+    </div>` : ''}
+  </div>`;
+}
+
+/* ===================== SIGN IN: who are you? ============================
+   Two doors, and choosing one grants nothing: Student opens the student
+   sign-in (university email, campus, code) and Employee opens Campus
+   Control's own sign-in (password and authenticator code). What either
+   account may do is decided by the server after that. */
+function ScrSignin() {
+  const card = (attrs, icon, title, body, cta) => `
+    <${attrs.href ? `a href="${attrs.href}"` : `button type="button" data-act="go" data-route="${attrs.route}"`} class="role-card">
+      <span class="role-icon" aria-hidden="true">${icon}</span>
+      <span class="role-title">${title}</span>
+      <span class="role-body">${body}</span>
+      <span class="role-cta">${cta}<span class="role-arrow" aria-hidden="true">→</span></span>
+    </${attrs.href ? 'a' : 'button'}>`;
+  return `<div class="screen no-nav role-screen">
+    <div class="role-wrap">
+      <div class="role-head">
+        <h1 class="role-heading">Welcome to ${BRAND}</h1>
+        <p class="role-sub">Choose how you want to continue.</p>
+      </div>
+      <div class="role-grid">
+        ${card({ route: 'ob-college' }, I.user, 'Student',
+          'Order food, explore campus cafés, and manage your student experience.', 'Continue as Student')}
+        ${card({ href: '/admin/' }, ROLE_ICON.employee, 'Employee',
+          'Access the ECHO ECHO management and administration workspace.', 'Continue as Employee')}
+      </div>
+      <p class="role-foot">Café counter staff sign in at the <a href="/shop/">counter</a>.</p>
     </div>
   </div>`;
 }
+const ROLE_ICON = {
+  employee: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7.5" width="17" height="12" rx="2.5"/><path d="M9 7.5V6a2 2 0 012-2h2a2 2 0 012 2v1.5M3.5 12.5h17M11 12.5v1.5h2v-1.5"/></svg>',
+};
 
 /* ===================== DELIVER WITH ECHO ECHO — public explainer ========
    For a visitor who is not signed in. Everything here is either the
@@ -804,39 +870,28 @@ function ScrHome() {
   const active = orders.filter((o) => LIVE.includes(o.state));
   const earlier = orders.filter((o) => o.state === 'delivered').slice(0, 2);
   const cafs = vs?.ok ? vs.v.vendors.map(cafVM) : [];
+  const cfg = site();
+  const f = cfg.features;
 
-  return `<div class="screen">
-    <div class="homehead">
-      <div class="t-sm muted">${greet}${signedIn() ? `, ${esc(firstName())}` : ''}</div>
-      <div class="homehead-row">
-        <h1 class="t-display">Campus food, brought to your spot.</h1>
-        ${signedIn()
-          ? `<button class="avatar avatar-sm hide-lg" data-act="go" data-route="profile" aria-label="Profile">${esc(initials(S.me.user.name))}</button>` : ''}
-      </div>
-      ${campusOpen() ? LocLine() : `<span class="t-sm t-strong">${esc(browseCampus().name)}</span>`}
-    </div>
-
-    <div class="pad stack g5 enter">
-      ${profileIncomplete() ? `<button class="tile row g3" data-act="go" data-route="setup" style="width:100%;text-align:left;background:var(--warn-bg);border-color:transparent">
-        ${Ico(I.user, 22)}<div class="grow"><div class="t-h3">Finish setting up your profile</div>
-        <div class="t-xs muted">Add ${esc(myProfile().missing.map((m) => ({ name: 'your name', student_email: 'your student email', contact_phone: 'a contact number', campus: 'your campus' })[m]).join(', '))} to start ordering.</div></div>${I.chev}</button>` : ''}
-      ${active.length ? `<div class="livegrid">${active.map(ActiveOrderCard).join('')}</div>` : ''}
-
-      <div class="stack g3">
+  /* Each block of the page by name. The published settings choose which are
+     shown and in what order; what is IN a block is still live data, so a
+     closed café shows as closed wherever it is placed. */
+  const blocks = {
+    featured: () => FeaturedBlock(cafs),
+    banners: () => BannerBlock(),
+    cafes: () => `<div class="stack g3">
         ${browseCampus() && !browseCampus().available ? ComingSoon(browseCampus()) : `
         <div class="between">${Label(`Cafés · ${browseCampus()?.name || 'Campus'}`)}<button class="t-xs" data-act="go" data-route="cafes" style="color:var(--accent-text);font-weight:var(--w-semibold)">See all</button></div>
         ${!vs ? Loading('Loading cafés') : !vs.ok ? Problem(vs.e)
           : cafs.length ? `<div class="cafgrid">${cafs.map(CafCard).join('')}</div>`
           : `<div class="empty"><div class="empty-art">${Ico(I.store, 34)}</div><div class="t-h2">No cafés yet.</div>
                <p class="t-sm muted">Outlets appear here as soon as campus admin adds them.</p></div>`}`}
-      </div>
-
-      ${campusOpen() ? `<button class="tile row g3" data-act="go" data-route="ai" style="width:100%;text-align:left">
+      </div>`,
+    ask: () => (campusOpen() && f.askEcho ? `<button class="tile row g3" data-act="go" data-route="ai" style="width:100%;text-align:left">
         ${AiMark()}
         <div class="grow"><div class="t-h3">Know what you want? Just type it.</div>
-        <div class="t-xs muted">"2 cold coffee aur ek veg sandwich" — Ask ${BRAND} puts it together and shows the price.</div></div>${I.chev}</button>` : ''}
-
-      ${earlier.length ? `
+        <div class="t-xs muted">"2 cold coffee aur ek veg sandwich" — Ask ${BRAND} puts it together and shows the price.</div></div>${I.chev}</button>` : ''),
+    reorder: () => (earlier.length ? `
       <div class="stack g3">
         ${Label('Order again')}
         <div class="stack g2">
@@ -849,20 +904,118 @@ function ScrHome() {
               <span class="money t-sm">${money(o.total_paise)}</span>
             </button>`; }).join('')}
         </div>
-      </div>` : ''}
-
-      ${campusOpen() ? `<div class="tile row g3" style="background:var(--surface-blush);border-color:transparent">
+      </div>` : ''),
+    pickup: () => (campusOpen() && f.pickupPromo ? `<div class="tile row g3" style="background:var(--surface-blush);border-color:transparent">
         ${Ico(I.bag, 22)}
         <div class="grow"><div class="t-h3">In a hurry? Self pickup</div>
         <div class="t-xs muted">Skip the delivery fee, collect from the counter</div></div>
         <button class="btn btn-secondary btn-sm" data-act="pickupMode">Pick up</button>
-      </div>` : ''}
-
-      ${campusOpen() && (!S.me?.partner || S.me.partner.status === 'left') ? `<button class="tile row g3" data-act="go" data-route="deliver" style="width:100%;text-align:left">
+      </div>` : ''),
+    deliver: () => (campusOpen() && f.deliverPromo && (!S.me?.partner || S.me.partner.status === 'left') ? `<button class="tile row g3" data-act="go" data-route="deliver" style="width:100%;text-align:left">
         ${Ico(I.bike, 22)}<div class="grow"><div class="t-h3">Deliver with ${BRAND}</div>
-        <div class="t-xs muted">Verified students earn by delivering campus orders between classes</div></div>${I.chev}</button>` : ''}
+        <div class="t-xs muted">Verified students earn by delivering campus orders between classes</div></div>${I.chev}</button>` : ''),
+  };
+
+  return `<div class="screen">
+    <div class="homehead">
+      <div class="t-sm muted">${greet}${signedIn() ? `, ${esc(firstName())}` : ''}</div>
+      <div class="homehead-row">
+        <h1 class="t-display">${esc(cfg.home.title)}</h1>
+        ${signedIn()
+          ? `<button class="avatar avatar-sm hide-lg" data-act="go" data-route="profile" aria-label="Profile">${esc(initials(S.me.user.name))}</button>` : ''}
+      </div>
+      ${campusOpen() ? LocLine() : `<span class="t-sm t-strong">${esc(browseCampus().name)}</span>`}
+    </div>
+
+    <div class="pad stack g5 enter">
+      ${profileIncomplete() ? `<button class="tile row g3" data-act="go" data-route="setup" style="width:100%;text-align:left;background:var(--warn-bg);border-color:transparent">
+        ${Ico(I.user, 22)}<div class="grow"><div class="t-h3">Finish setting up your profile</div>
+        <div class="t-xs muted">Add ${esc(myProfile().missing.map((m) => ({ name: 'your name', student_email: 'your student email', contact_phone: 'a contact number', campus: 'your campus' })[m]).join(', '))} to start ordering.</div></div>${I.chev}</button>` : ''}
+      ${active.length ? `<div class="livegrid">${active.map(ActiveOrderCard).join('')}</div>` : ''}
+
+      ${cfg.home.sections.filter((s) => s.visible && blocks[s.key]).map((s) => blocks[s.key]()).filter(Boolean).join('\n      ')}
     </div>
   </div>`;
+}
+
+/* Featured cafés and dishes, as the published settings name them. A café is
+   shown only if /vendors lists it for this campus (active, not archived); a
+   dish only if the server resolved it to an active row of such a café. The
+   price is the menu's own; ordering still goes through the menu. */
+function FeaturedBlock(cafs) {
+  const cfg = site().featured;
+  const shown = cfg.cafeIds.map((id) => cafs.find((c) => c.id === id)).filter(Boolean);
+  const here = new Set(cafs.map((c) => c.id));
+  const dishes = (SITE.featuredItems || []).filter((d) => here.has(d.vendorId));
+  if (!shown.length && !dishes.length) return '';
+  return `<div class="stack g3 featured-block">
+    ${Label(cfg.heading)}
+    ${shown.length ? `<div class="cafgrid">${shown.map(CafCard).join('')}</div>` : ''}
+    ${dishes.length ? `<div class="featured-dishes">${dishes.map((d) => `
+      <button class="tile featured-dish" data-act="menu" data-caf="${esc(d.vendorId)}">
+        ${d.photoAsset ? `<img class="featured-dish-img" src="${esc(assetUrl(d.photoAsset))}" alt="" loading="lazy" decoding="async" data-fallback="hide">` : ''}
+        <span class="stack g1">
+          <span class="row g2">${d.veg == null ? '' : VegMark(d.veg)}<span class="t-sm t-strong">${esc(d.name)}</span></span>
+          <span class="t-xs muted">${esc(d.vendorName)}${d.available ? '' : ' · Not available right now'}</span>
+          <span class="money t-sm">${money(d.pricePaise)}</span>
+        </span>
+      </button>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+function BannerBlock() {
+  const list = liveBanners(site());
+  if (!list.length) return '';
+  return `<div class="banner-row">${list.map((b) => `
+    <div class="tile site-banner${b.imageAsset ? ' has-img' : ''}">
+      ${b.imageAsset ? `<img class="site-banner-img" src="${esc(assetUrl(b.imageAsset))}" alt="" loading="lazy" decoding="async" data-fallback="hide">` : ''}
+      <div class="stack g1 grow">
+        <div class="t-h3">${esc(b.title)}</div>
+        ${b.body ? `<div class="t-xs muted">${esc(b.body)}</div>` : ''}
+      </div>
+      ${b.link && b.linkLabel ? SiteLink(b.link, b.linkLabel, 'btn btn-secondary btn-sm') : ''}
+    </div>`).join('')}</div>`;
+}
+
+/* A link from the published settings: an internal screen becomes the same
+   button every other screen link is; anything else is an https:/mailto:
+   address the server already checked, opened in a new tab. */
+function SiteLink(link, label, cls) {
+  const l = linkAttrs(link);
+  if (!l) return '';
+  if (!l.internal) return `<a class="${cls}" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
+  if (l.route === 'menu') return `<button class="${cls}" data-act="menu" data-caf="${esc(l.id)}">${esc(label)}</button>`;
+  return `<button class="${cls}" data-act="go" data-route="${esc(l.route)}">${esc(label)}</button>`;
+}
+
+/* The announcement bar, when one is published and switched on. */
+function AnnounceBar() {
+  const a = site().announcement;
+  if (!a.enabled || !a.text) return '';
+  return `<div class="site-announce tone-${esc(a.tone)}" role="status">
+    <span>${esc(a.text)}</span>${a.link && a.linkLabel ? SiteLink(a.link, a.linkLabel, 'announce-link') : ''}
+  </div>`;
+}
+
+/* The footer: the campus line, then the published text, links and contact. */
+function SiteFooter() {
+  const ft = site().footer;
+  const links = [
+    ...ft.links.map((l) => SiteLink(l.link, l.label, 'foot-link')),
+    ft.supportLink ? SiteLink(ft.supportLink, 'Help', 'foot-link') : '',
+    ft.contactEmail ? `<a class="foot-link" href="mailto:${esc(ft.contactEmail)}">${esc(ft.contactEmail)}</a>` : '',
+    ft.contactPhone ? `<a class="foot-link" href="tel:${esc(ft.contactPhone.replace(/[^+0-9]/g, ''))}">${esc(ft.contactPhone)}</a>` : '',
+  ].filter(Boolean);
+  return `<footer class="site-foot">${BrandLogo({ size: 22, foot: true })} ${BRAND} · ${esc(campusLabel())}${ft.text ? ` · ${esc(ft.text)}` : ''}${site().features.deliverPromo ? ` ·
+        <button class="foot-link" data-act="go" data-route="deliver">Deliver with ${BRAND}</button>` : ''}${links.length ? `
+        <span class="foot-links">${links.join('<span class="meta-sep" aria-hidden="true"> · </span>')}</span>` : ''}</footer>`;
+}
+
+/* The published logo when there is one, otherwise the approved artwork. */
+function BrandLogo({ size = 40, foot = false } = {}) {
+  const id = site().brand.logoAsset;
+  if (id) return `<img class="brand-logo brand-logo-custom${foot ? ' brand-logo-foot' : ''}" src="${esc(assetUrl(id))}" alt="${foot ? '' : BRAND}" height="${size}" decoding="async">`;
+  return foot ? logo({ size, alt: '', className: 'brand-logo brand-logo-foot' }) : lockup({ height: size });
 }
 
 /* The payment's own state, as the server reports it. Paid only means the
@@ -2628,14 +2781,14 @@ function Sheet() {
 
 /* ===================== render =========================================== */
 const ROUTES = {
-  welcome: ScrWelcome, 'ob-college': ScrObCollege, 'ob-campus': ScrObCampus,
+  welcome: ScrWelcome, signin: ScrSignin, 'ob-college': ScrObCollege, 'ob-campus': ScrObCampus,
   'ob-email': ScrObEmail, 'ob-email-code': ScrObEmailCode, 'ob-location': ScrObLocation,
   home: ScrHome, cafes: ScrCafes, menu: ScrMenu, cart: ScrCart, checkout: ScrCheckout,
   tracking: ScrTracking, orders: ScrOrders, profile: ScrProfile, ai: ScrAI,
   verify: ScrVerify, partner: ScrPartner, join: ScrJoin, setup: ScrSetup, address: ScrAddress,
   place: ScrPlace, deliver: ScrDeliver,
 };
-const NAVLESS = ['welcome', 'ob-college', 'ob-campus', 'ob-email', 'ob-email-code',
+const NAVLESS = ['welcome', 'signin', 'ob-college', 'ob-campus', 'ob-email', 'ob-email-code',
                  'ob-location', 'checkout', 'setup'];
 
 /* The page frame. On desktop the header carries the navigation; below
@@ -2645,7 +2798,7 @@ const SiteHeader = () => {
   const count = cartCount();
   return `<header class="site-head"><div class="site-head-in">
     <button class="site-brand" data-act="go" data-route="${signedIn() ? 'home' : 'welcome'}" aria-label="${BRAND} home">
-      ${lockup({ height: 40 })}</button>
+      ${BrandLogo({ size: 40 })}</button>
     <nav class="site-nav" aria-label="Main">
       <button data-act="go" data-route="home" ${at('home')}>Home</button>
       <button data-act="go" data-route="cafes" ${at('cafes', 'menu')}>Cafés</button>
@@ -2658,7 +2811,7 @@ const SiteHeader = () => {
       <button class="site-icon" data-act="theme" aria-label="Toggle theme">${I.moon}</button>
       ${signedIn()
         ? `<button class="avatar avatar-sm only-lg" data-act="go" data-route="profile" aria-label="Your account">${esc(initials(S.me.user.name))}</button>`
-        : `<button class="btn btn-secondary btn-sm" data-act="go" data-route="ob-college">Sign in</button>`}
+        : `<button class="btn btn-secondary btn-sm" data-act="go" data-route="signin">Sign in</button>`}
     </div>
   </div></header>`;
 };
@@ -2683,9 +2836,9 @@ function render(fresh = false) {
   app.innerHTML = `
     <div class="site${settled ? ' settled' : ''}">
       ${SiteHeader()}
+      ${AnnounceBar()}
       <main class="site-main">${scr}</main>
-      <footer class="site-foot">${logo({ size: 22, alt: '', className: 'brand-logo brand-logo-foot' })} ${BRAND} · ${esc(campusLabel())} · Campus delivery only ·
-        <button class="foot-link" data-act="go" data-route="deliver">Deliver with ${BRAND}</button></footer>
+      ${SiteFooter()}
       ${nav}
       ${Sheet()}
       ${S.toast ? `<div class="toast"><span>${S.toast.icon}</span>${esc(S.toast.msg)}</div>` : ''}
@@ -3488,8 +3641,10 @@ async function openGateway(intent, draft) {
   } catch { /* storage blocked: no early request */ }
   early?.list.catch(() => {});
   try {
-    const [me, status, campuses] = await Promise.all([quad.me(), quad.authStatus().catch(() => null),
-      quad.campuses().catch(() => null)]);
+    /* The preview frame shows what a signed-out visitor sees, and never the
+       administrator's own account, orders or location. */
+    const [me, status, campuses] = await Promise.all([PREVIEW ? { authenticated: false } : quad.me(),
+      quad.authStatus().catch(() => null), quad.campuses().catch(() => null)]);
     S.campuses = campuses?.campuses || [];
     S.me = me.authenticated ? me : null;
     S.providers = status?.providers || null;
@@ -3518,6 +3673,14 @@ async function openGateway(intent, draft) {
   } else if (wanted) go(wanted.route, wanted.params, { history: 'replace' });
   else go(signedIn() ? 'home' : 'welcome', {}, { history: 'replace' });
 })();
+
+/* Campus Control's preview asks for a screen by name: public screens only. */
+if (PREVIEW) {
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin || e.source !== window.parent) return;
+    if (e.data?.type === 'echo-site-route' && PUBLIC_ROUTES.includes(e.data.route)) go(e.data.route);
+  });
+}
 
 /* Back and Forward. An open sheet closes with the screen it sat on. */
 window.addEventListener?.('popstate', (e) => {

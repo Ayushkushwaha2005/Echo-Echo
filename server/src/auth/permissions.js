@@ -84,6 +84,10 @@ export const PERMISSIONS = {
   'platform.view':   { group: 'Platform', label: 'View feature flags and provider status', caps: ['platform.read'] },
   'platform.manage': { group: 'Platform', label: 'Change feature flags and platform settings', caps: ['flags.update', 'config.update'] },
 
+  /* ---- public website ---- */
+  'website.customize': { group: 'Website', label: 'Edit the website draft: theme, homepage, banners, footer, images', caps: ['site.read', 'site.draft'] },
+  'website.publish':   { group: 'Website', label: 'Publish the website draft, or roll back to an earlier version', caps: ['site.read', 'site.publish'] },
+
   /* ---- audit ---- */
   'audit.view': { group: 'Audit', label: 'Read the audit log', caps: ['audit.read'] },
 
@@ -115,7 +119,8 @@ export const PRESETS = {
   operations: {
     label: 'Operations admin',
     permissions: GRANTABLE_KEYS.filter((k) => !['finance.manage', 'deposits.approve_deduction', 'deposits.refund',
-      'platform.manage', 'admins.suspend', 'sessions.revoke', 'counter.manage', 'boundary.confirm'].includes(k)),
+      'platform.manage', 'admins.suspend', 'sessions.revoke', 'counter.manage', 'boundary.confirm',
+      'website.publish'].includes(k)),
   },
   support: {
     label: 'Support (read-mostly)',
@@ -134,8 +139,11 @@ export const PRESETS = {
    gets - accounts created before per-admin permissions existed, or listed in
    PLATFORM_ADMIN_EMAILS. Kept equal to the role's previous behaviour so an
    upgrade does not lock anyone out; the owner narrows it from Campus Control. */
+/* Permissions added after this default was set are NOT in it, so an older
+   account does not quietly gain a new power: the owner grants it by name. */
+const ADDED_LATER = ['website.customize', 'website.publish'];
 export const ROLE_DEFAULT_PERMISSIONS = {
-  platform_admin: [...GRANTABLE_KEYS],
+  platform_admin: GRANTABLE_KEYS.filter((k) => !ADDED_LATER.includes(k)),
   support: [...PRESETS.support.permissions, 'audit.view', 'delivery.resolve_incidents'],
 };
 

@@ -16,6 +16,7 @@ import {
 } from '../../packages/ui/runtime.js';
 import { esc, toggleTheme, restoreTheme, Mark } from '../../packages/ui/kit.js';
 import { lockup } from '../../brand/logo.js';
+import { API_BASE, ApiError } from '../../packages/data/client.js';
 
 const root = document.getElementById('app');
 restoreTheme();
@@ -30,14 +31,28 @@ const ENROLLABLE = ['platform_admin', 'support', 'vendor_owner', 'vendor_staff']
 
 gate(root, 'admin', render);
 
-const NAV = [
-  ['overview', 'Overview'], ['cafeterias', 'Cafeterias'], ['menu', 'Menu'],
-  ['orders', 'Orders'], ['users', 'Users'], ['verification', 'Verification'],
-  ['partners', 'Partners'], ['trust', 'Incidents & deposits'], ['reviews', 'Reviews'],
-  ['locations', 'Locations'], ['support', 'Support'],
-  ['payments', 'Payments'], ['finance', 'Settlements & finance'], ['reports', 'Reports'],
-  ['reliability', 'Reliability'], ['admins', 'Administrators'], ['platform', 'Platform'], ['audit', 'Audit'],
+/* The sidebar, in the groups an administrator thinks in. Every page still
+   reads its own API, which checks its own permission; hiding an entry here
+   is a courtesy so nobody stares at a page of refusals. */
+const NAV_GROUPS = [
+  ['Operations', [
+    ['overview', 'Overview', 'grid'], ['orders', 'Orders', 'bag'], ['deliveries', 'Live Deliveries', 'route'],
+    ['cafeterias', 'Cafés', 'store'], ['menu', 'Menu Management', 'menu'],
+    ['partners', 'Delivery Partners', 'bike'], ['verification', 'Verification', 'id'],
+    ['users', 'Users', 'users'], ['trust', 'Incidents & deposits', 'shield'],
+    ['reviews', 'Reviews', 'star'], ['locations', 'Locations', 'pin'], ['support', 'Support', 'chat'],
+  ]],
+  ['Website', [['website', 'Website Customization', 'brush']]],
+  ['Money', [
+    ['finance', 'Payments & Settlements', 'wallet'], ['payments', 'Gateway payments', 'card'],
+    ['reports', 'Reports', 'chart'],
+  ]],
+  ['Access & system', [
+    ['admins', 'Access Management', 'key'], ['sessions', 'Sessions', 'device'],
+    ['audit', 'Audit Logs', 'log'], ['reliability', 'System Health', 'pulse'], ['platform', 'Platform settings', 'cog'],
+  ]],
 ];
+const NAV = NAV_GROUPS.flatMap(([, items]) => items);
 
 /* Which permission opens each page. Hiding is a courtesy: every panel's API
    call is checked by the server regardless. */
@@ -48,48 +63,143 @@ const NAV_PERM = {
   locations: ['locations.view', 'boundary.view', 'campuses.view'], support: ['support.view'],
   finance: ['finance.view'], admins: ['admins.view'], platform: ['platform.view'], audit: ['audit.view'],
   payments: ['finance.view'], reports: ['orders.view', 'finance.view'], reliability: ['platform.view'],
+  website: ['website.customize', 'website.publish'], deliveries: ['orders.view'],
+  sessions: ['admins.view'],
 };
-const allowedNav = () => NAV.filter(([r]) => !NAV_PERM[r] || session.can(...NAV_PERM[r]));
+const allowed = (r) => !NAV_PERM[r] || session.can(...NAV_PERM[r]);
+const allowedNav = () => NAV.filter(([r]) => allowed(r));
+
+/* Line icons for the sidebar: one stroke weight, one 24px grid. */
+const ICON = {
+  grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
+  bag: '<path d="M5 8h14l-1 12H6z"/><path d="M9 8V6a3 3 0 016 0v2"/>',
+  route: '<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 000-6H9a3 3 0 010-6h6.5"/>',
+  store: '<path d="M4 9.5L5.5 4h13L20 9.5"/><path d="M4 9.5a2.7 2.7 0 005.3 0 2.7 2.7 0 005.4 0 2.7 2.7 0 005.3 0"/><path d="M5.5 11.5V20h13v-8.5M10 20v-5h4v5"/>',
+  menu: '<path d="M5 4.5h14v15H5z"/><path d="M8.5 9h7M8.5 12.5h7M8.5 16h4"/>',
+  bike: '<circle cx="5.5" cy="17" r="3.2"/><circle cx="18.5" cy="17" r="3.2"/><path d="M8 17h7l-3-8h-3M12 9l2-4h3"/>',
+  id: '<rect x="3.5" y="5.5" width="17" height="13" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M6.5 15.5c.6-1.3 1.5-2 2.5-2s1.9.7 2.5 2M14 10h4M14 13.5h3"/>',
+  users: '<circle cx="9" cy="8.5" r="3"/><path d="M3.5 19c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"/><path d="M15.5 5.8a3 3 0 010 5.4M17 14.7c1.6.6 2.8 2 3.4 4.3"/>',
+  shield: '<path d="M12 3.5l7 2.8v5.2c0 4.4-2.9 7.6-7 9-4.1-1.4-7-4.6-7-9V6.3z"/><path d="M9 12l2 2 4-4"/>',
+  star: '<path d="M12 4l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.4 7.2 18.9l.9-5.4-3.9-3.8 5.4-.8z"/>',
+  pin: '<path d="M12 20.5s6-5.6 6-10.5a6 6 0 00-12 0c0 4.9 6 10.5 6 10.5z"/><circle cx="12" cy="10" r="2.2"/>',
+  chat: '<path d="M4.5 6.5A2.5 2.5 0 017 4h10a2.5 2.5 0 012.5 2.5v7A2.5 2.5 0 0117 16h-6.2L6.5 19.5V16H7a2.5 2.5 0 01-2.5-2.5z"/>',
+  brush: '<path d="M14.5 4.5l5 5-7.8 7.8-5-5z"/><path d="M6.7 12.3c-2 0-3.2 1.6-3.2 3.7 0 1.4-.5 2.4-1 3 3.6.3 6.8-.6 7.6-3.6"/>',
+  wallet: '<rect x="3.5" y="6" width="17" height="13" rx="2.5"/><path d="M3.5 9.5h17M16 14h1.5"/><path d="M6 6l9-2.5L16.5 6"/>',
+  card: '<rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/>',
+  chart: '<path d="M4 20V4M4 20h16"/><path d="M8 16v-4M12 16V8M16 16v-6"/>',
+  key: '<circle cx="8" cy="15" r="3.5"/><path d="M10.5 12.5L19 4M16 7l2.5 2.5M14 9l2 2"/>',
+  device: '<rect x="3.5" y="4.5" width="17" height="11" rx="2"/><path d="M9 19.5h6M12 15.5v4"/>',
+  log: '<path d="M6 3.5h9l3 3v14H6z"/><path d="M15 3.5v3h3M9 11h6M9 14.5h6M9 18h3"/>',
+  pulse: '<path d="M3 12h4l2.5-6 4 12 2.5-6h5"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M20.5 12h-2.2M5.7 12H3.5M18 6l-1.6 1.6M7.6 16.4L6 18M18 18l-1.6-1.6M7.6 7.6L6 6"/>',
+  bell: '<path d="M6 16.5V11a6 6 0 0112 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 004 0"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>',
+  out: '<path d="M14 4.5h4.5v15H14M10 8l-4 4 4 4M6 12h9.5"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.4 3.5 5.2 3.5 8.5s-1.1 6.1-3.5 8.5c-2.4-2.4-3.5-5.2-3.5-8.5s1.1-6.1 3.5-8.5z"/>',
+  moon: '<path d="M19.5 14.5A7.5 7.5 0 019.5 4.5a7.5 7.5 0 1010 10z"/>',
+  collapse: '<path d="M14.5 6l-6 6 6 6"/>',
+};
+const icon = (k, size = 19) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k] || ''}</svg>`;
+
+const ROLE_LABEL = { platform_owner: 'Owner', platform_admin: 'Administrator', support: 'Support' };
+const navLabel = (r) => NAV.find(([k]) => k === r)?.[1] || 'Overview';
 
 function render() {
-  if (NAV_PERM[S.route] && !session.can(...NAV_PERM[S.route])) S.route = 'overview';
+  if (!allowed(S.route)) S.route = 'overview';
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('cc-rail') === 'collapsed'; } catch { /* storage blocked */ }
+  const name = session.me.user.name || session.me.user.email || session.me.user.phone || 'Administrator';
+  const role = session.roles.map((r) => ROLE_LABEL[r]).filter(Boolean)[0] || 'Staff';
   root.innerHTML = `
-    <div class="appframe">
-      <aside class="rail">
-        <div class="rail-brand">${lockup({ height: 32 })}
-          <span class="t-xs faint">Campus Control</span></div>
-        <nav class="stack">
-          ${allowedNav().map(([r, l]) =>
-            `<button class="railbtn" data-route="${r}" ${S.route === r ? 'aria-current="page"' : ''}>${esc(l)}</button>`).join('')}
-        </nav>
-        <div class="rail-foot">
-          <div class="t-xs faint">${esc(session.me.user.name || session.me.user.phone)}</div>
-          <div class="t-xs faint">${session.roles.map(esc).join(' · ')}</div>
-          <button class="railbtn" data-act="theme">Theme</button>
-          <button class="railbtn" data-act="signout">Sign out</button>
-        </div>
-      </aside>
-      <main class="webmain">
-        <nav class="chiprow webnav-mobile" aria-label="Pages"
-             style="padding:var(--s-3) var(--s-4);border-bottom:1px solid var(--line)">
-          ${allowedNav().map(([r, l]) =>
-            `<button class="chip" data-route="${r}" ${S.route === r ? 'aria-pressed="true"' : ''}>${esc(l)}</button>`).join('')}
-          <button class="chip" data-act="theme">Theme</button>
-          <button class="chip" data-act="signout">Sign out</button>
-        </nav>
-        <header class="webhead">
-          <div class="webhead-title">
-            <h1 class="t-h2" id="page-title"></h1>
-            <p class="t-sm muted" id="page-sub"></p>
+    <div class="cc${collapsed ? ' cc-collapsed' : ''}">
+      <div class="cc-frame">
+        <aside class="cc-rail" aria-label="Campus Control">
+          <div class="cc-brand">
+            ${lockup({ height: 34 })}
+            <span class="cc-brand-sub">Campus Control</span>
           </div>
-          <div class="row" id="head-actions"></div>
-        </header>
-        <div class="webbody"><div id="view" class="wrapmax"></div></div>
-      </main>
+          <nav class="cc-nav" aria-label="Pages">
+            ${NAV_GROUPS.map(([group, items]) => {
+              const mine = items.filter(([r]) => allowed(r));
+              return mine.length ? `<div class="cc-navgroup"><div class="cc-navlabel">${esc(group)}</div>
+                ${mine.map(([r, l, ic]) => `<button type="button" class="cc-navbtn" data-route="${r}" title="${esc(l)}"
+                  ${S.route === r ? 'aria-current="page"' : ''}>${icon(ic)}<span>${esc(l)}</span></button>`).join('')}</div>` : '';
+            }).join('')}
+          </nav>
+          <div class="cc-rail-foot">
+            <button type="button" class="cc-navbtn" data-act="collapseRail" aria-label="Collapse the sidebar">${icon('collapse')}<span>Collapse</span></button>
+          </div>
+        </aside>
+        <main class="cc-main">
+          <header class="cc-top">
+            <form class="cc-search" data-form="search" role="search">
+              ${icon('search', 17)}
+              <input class="cc-search-in" name="q" type="search" placeholder="Search orders: code, student or café" aria-label="Search orders" autocomplete="off">
+            </form>
+            <div class="cc-top-right">
+              <span id="site-status"></span>
+              <a class="cc-iconbtn" href="/web/" target="_blank" rel="noopener" title="Open the public website" aria-label="Open the public website">${icon('globe')}</a>
+              <button type="button" class="cc-iconbtn" data-act="notifications" aria-label="Notifications" aria-haspopup="true">${icon('bell')}<span class="cc-dot" id="notif-dot" hidden></span></button>
+              <div class="cc-profile">
+                <button type="button" class="cc-profile-btn" data-act="profileMenu" aria-haspopup="true" aria-expanded="false">
+                  <span class="cc-avatar">${esc(initialsOf(name))}</span>
+                  <span class="cc-profile-text"><span class="cc-profile-name">${esc(name)}</span><span class="cc-profile-role">${esc(role)}</span></span>
+                </button>
+                <div class="cc-menu" id="profile-menu" hidden>
+                  <div class="cc-menu-head"><b>${esc(name)}</b><span class="t-xs muted">${esc(session.me.user.email || '')}</span>
+                    <span class="t-xs muted">${esc(session.roles.map((r) => ROLE_LABEL[r] || r).join(' · '))} · password and authenticator session</span></div>
+                  <button type="button" class="cc-menu-item" data-route="admins">${icon('key', 17)} Your sign-in and access</button>
+                  <button type="button" class="cc-menu-item" data-act="theme">${icon('moon', 17)} Light or dark</button>
+                  <button type="button" class="cc-menu-item danger" data-act="signout">${icon('out', 17)} Sign out</button>
+                </div>
+              </div>
+            </div>
+          </header>
+          <div class="cc-panel">
+            <div class="cc-pagehead">
+              <div class="cc-pagehead-text">
+                <nav class="cc-crumbs" aria-label="Breadcrumb"><span>Campus Control</span><span aria-hidden="true">/</span><span id="crumb-page">${esc(navLabel(S.route))}</span></nav>
+                <h1 class="cc-title" id="page-title"></h1>
+                <p class="cc-sub" id="page-sub"></p>
+              </div>
+              <div class="cc-head-actions" id="head-actions"></div>
+            </div>
+            <div id="view" class="cc-view"></div>
+          </div>
+        </main>
+      </div>
     </div>`;
   root.addEventListener('click', onClick);
   root.addEventListener('submit', onFormSubmit);
+  document.addEventListener('click', closeMenusOutside);
   route();
+}
+
+const initialsOf = (n) => String(n).split(/[\s@.]+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || 'A';
+
+/* The bell's unread dot and the website's live version, refreshed with each
+   page. Both are optional: a failure leaves them blank, never an error. */
+async function refreshTopbar() {
+  quad.notifications('true').then((r) => {
+    const dot = document.getElementById('notif-dot');
+    if (dot) dot.hidden = !(r.notifications || []).length;
+  }).catch(() => {});
+  const box = document.getElementById('site-status');
+  if (!box || !allowed('website')) return;
+  try {
+    const d = await quad.adminSite();
+    const changed = d.draft.revision > 0 && (d.draft.baseVersion !== (d.live?.version ?? null)
+      || JSON.stringify(d.draft.config) !== JSON.stringify(d.live?.config ?? d.defaults));
+    box.innerHTML = `<button type="button" class="cc-sitechip${changed ? ' is-draft' : ''}" data-route="website"
+      title="Website settings">${d.live ? `Website v${d.live.version} live` : 'Website: built-in settings'}${changed ? ' · unpublished draft' : ''}</button>`;
+  } catch { box.innerHTML = ''; }
+}
+
+function closeMenusOutside(e) {
+  if (e.target.closest('.cc-profile, .cc-notifs, [data-act="notifications"]')) return;
+  document.querySelectorAll('.cc-menu').forEach((m) => { m.hidden = true; });
+  document.querySelector('.cc-profile-btn')?.setAttribute('aria-expanded', 'false');
+  document.querySelector('.cc-notifs')?.remove();
 }
 
 const view = () => document.getElementById('view');
@@ -97,12 +207,18 @@ const head = () => document.getElementById('head-actions');
 const setTitle = (t, sub = '') => {
   document.getElementById('page-title').textContent = t;
   document.getElementById('page-sub').textContent = sub;
+  const crumb = document.getElementById('crumb-page');
+  if (crumb) crumb.textContent = navLabel(S.route);
 };
 
 async function onClick(e) {
   const t = e.target.closest('[data-route],[data-act]');
   if (!t) return;
-  if (t.dataset.route) { S.route = t.dataset.route; route(); return; }
+  if (t.dataset.route) {
+    if (S.route === 'website' && t.dataset.route !== 'website' && wDirty()
+        && !confirm('The website draft has unsaved changes. Leave without saving them?')) return;
+    S.route = t.dataset.route; route(); return;
+  }
   const fn = ACTIONS[t.dataset.act];
   if (fn) await fn(t, e);
 }
@@ -114,19 +230,19 @@ const SCREENS = {
   locations: scrLocations, support: scrSupport, finance: scrFinance,
   platform: scrPlatform, audit: scrAudit,
   payments: scrPayments, reliability: scrReliability, reports: scrReports,
+  website: scrWebsite, deliveries: scrDeliveries, sessions: scrSessions,
 };
 
 /* The current page is marked with aria-current / aria-pressed, which is what
    .railbtn and .chip style. Called on every route change. */
 function markNav() {
-  root.querySelectorAll('.railbtn[data-route]').forEach((b) => {
+  root.querySelectorAll('.cc-navbtn[data-route]').forEach((b) => {
     if (b.dataset.route === S.route) b.setAttribute('aria-current', 'page');
     else b.removeAttribute('aria-current');
   });
-  root.querySelectorAll('.webnav-mobile [data-route]').forEach((b) =>
-    b.setAttribute('aria-pressed', String(b.dataset.route === S.route)));
+  document.querySelectorAll('.cc-menu').forEach((m) => { m.hidden = true; });
 }
-const route = () => { markNav(); return (SCREENS[S.route] || scrOverview)(); };
+const route = () => { markNav(); refreshTopbar(); return (SCREENS[S.route] || scrOverview)(); };
 
 /* ========================================================================
    OVERVIEW — counts, and honest gaps
@@ -209,10 +325,10 @@ async function scrOverview() {
   }, { label: 'Loading platform state' });
 }
 
-const kpi = (label, value, note) => `
-  <div class="kpi"><div class="t-label">${esc(label)}</div>
-  <div class="statval">${esc(String(value))}</div>
-  <div class="t-xs faint">${esc(note)}</div></div>`;
+const KPI_ICON = { Cafeterias: 'store', 'Live orders': 'bag', 'ID reviews waiting': 'id', 'Partner applications': 'bike',
+  'GMV today': 'chart', 'Platform fees today': 'wallet', 'ECHO ECHO revenue': 'wallet', 'Owed to cafés': 'store',
+  'Owed to partners': 'bike', 'Payouts in flight': 'card' };
+const kpi = (label, value, note) => statCard(KPI_ICON[label] || 'grid', label, value, note);
 
 const table = (cols, rows) => `
   <div class="dtable-wrap"><table class="dtable">
@@ -870,12 +986,13 @@ function permissionPicker(catalog, selected = []) {
       ${catalog.presets.map((p) => `<button type="button" class="btn btn-ghost btn-sm" data-act="applyPreset" data-perms="${esc(p.permissions.join(','))}">${esc(p.label)}</button>`).join('')}
       <button type="button" class="btn btn-ghost btn-sm" data-act="applyPreset" data-perms="">None</button>
     </div>
-    <div class="stack" style="gap:12px;max-height:48vh;overflow:auto">
+    <input class="input perm-search" type="search" placeholder="Search permissions" aria-label="Search permissions" data-perm-search>
+    <div class="stack" style="gap:12px;max-height:56vh;overflow:auto">
       ${catalog.groups.map((g) => `
-        <fieldset style="border:1px solid var(--line);border-radius:10px;padding:8px 12px">
+        <fieldset data-perm-group style="border:1px solid var(--line);border-radius:10px;padding:8px 12px">
           <legend class="t-label">${esc(g.name)}</legend>
           ${g.permissions.map((p) => `
-            <label class="row" style="gap:8px;align-items:flex-start;padding:3px 0">
+            <label class="row" data-perm-row="${esc(`${g.name} ${p.label} ${p.key}`.toLowerCase())}" style="gap:8px;align-items:flex-start;padding:3px 0">
               <input type="checkbox" name="perm" value="${esc(p.key)}" ${selected.includes(p.key) ? 'checked' : ''} ${p.ownerOnly ? 'disabled' : ''}>
               <span class="t-sm">${esc(p.label)}
                 <span class="t-xs faint">${esc(p.key)}${p.ownerOnly ? ' · owner only' : ''}${p.personalData ? ' · shows personal data' : ''}</span></span>
@@ -1388,6 +1505,12 @@ function onFormSubmit(e) {
   const form = e.target.closest('form[data-form]');
   if (!form || form.closest('.modalwrap')) return;
   e.preventDefault();
+  if (form.dataset.form === 'search') {
+    const q = String(new FormData(form).get('q') || '').trim();
+    if (!session.can('orders.view')) return toast('Searching orders needs the orders.view permission.', 'bad');
+    S.orderFilter = q ? { q } : {}; S.orderPage = 1; S.route = 'orders'; route();
+    return;
+  }
   if (form.dataset.form === 'orders') { S.orderFilter = formValues(form); S.orderPage = 1; paintOrders(); }
   else if (form.dataset.form === 'payments') { S.payFilter = formValues(form); S.payPage = 1; paintPayments(); }
   else if (form.dataset.form === 'report') downloadReport(form);
@@ -1403,9 +1526,9 @@ function onFormSubmit(e) {
    and a blur that put it ON TOP of the dialog, blurring it and eating clicks. */
 /* An information-only dialog: one Done button, nothing to save. */
 const DONE = () => Promise.resolve(true);
-function modal(title, bodyHtml, onSubmit, sub = '') {
+function modal(title, bodyHtml, onSubmit, sub = '', { drawer = false } = {}) {
   const m = el(`
-    <div class="modalwrap" role="dialog" aria-modal="true"><div class="scrim-fixed" data-act="closeModal"></div>
+    <div class="modalwrap${drawer ? ' drawerwrap' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="scrim-fixed" data-act="closeModal"></div>
       <form class="modal">
         <div class="modal-head"><h2 class="t-h3">${esc(title)}</h2>
           ${sub ? `<p class="t-sm muted">${esc(sub)}</p>` : ''}</div>
@@ -1494,7 +1617,7 @@ const ACTIONS = {
         <span class="chip chip-soft">${esc(TIMELINE_KIND[e.kind] || e.kind)}</span>
         ${esc(e.label)}${e.amountPaise ? ` · ${rupees(e.amountPaise)}` : ''}${e.by ? ` · ${esc(e.by)}` : ''}${
           e.outcome && e.outcome !== 'ok' ? ` · <b>${esc(e.outcome)}</b>` : ''}${e.duplicates ? ` · ${e.duplicates} duplicate(s) ignored` : ''}${
-          e.note ? `<div class="t-xs faint">${esc(e.note)}</div>` : ''}</li>`).join('') || '<li class="t-sm muted">Nothing recorded.</li>'}</ol>`, DONE);
+          e.note ? `<div class="t-xs faint">${esc(e.note)}</div>` : ''}</li>`).join('') || '<li class="t-sm muted">Nothing recorded.</li>'}</ol>`, DONE, '', { drawer: true });
   },
   theme: () => toggleTheme(),
 
@@ -1593,10 +1716,25 @@ const ACTIONS = {
   },
   editAdminPermissions: async (t) => {
     const [catalog, detail] = await Promise.all([quad.accessCatalog(), quad.accessAdmin(t.dataset.id)]);
+    const before = detail.administrator.effective.permissions;
     modal(`Permissions · ${t.dataset.name}`, `
-      ${permissionPicker(catalog, detail.administrator.effective.permissions)}
-      ${field('reason', 'Reason for the change (kept in the audit log)')}`,
-    (d, form) => quad.setAdminPermissions(t.dataset.id, pickedPermissions(form), d.reason));
+      <p class="t-sm muted">${esc(detail.administrator.email || '')} · ${esc(detail.administrator.status)} ·
+        ${detail.sessions.length} open session(s). A change applies to their open sessions on the next request.</p>
+      ${permissionPicker(catalog, before)}
+      ${field('reason', 'Reason for the change (kept in the audit log)')}
+      ${detail.history.length ? `<h3 class="t-label" style="margin-top:6px">Permission history</h3>
+        ${table(['When', 'Change', 'By'], detail.history.slice(0, 12).map((h) => [when(h.at), esc(h.action.replace(/^admin\./, '').replace(/_/g, ' ')), esc(h.actor_name || '—')]))}` : ''}`,
+    (d, form) => {
+      const after = pickedPermissions(form);
+      const added = after.filter((k) => !before.includes(k));
+      const removed = before.filter((k) => !after.includes(k));
+      if (!added.length && !removed.length) throw new Error('Nothing changed.');
+      if (!confirm(`Change ${t.dataset.name}'s permissions?
+
+${added.length ? `Grant: ${added.join(', ')}
+` : ''}${removed.length ? `Remove: ${removed.join(', ')}` : ''}`)) throw new Error('Not saved.');
+      return quad.setAdminPermissions(t.dataset.id, after, d.reason);
+    }, '', { drawer: true });
   },
   suspendAdmin: (t) => modal(`Suspend ${t.dataset.name}`,
     `<p class="t-sm muted">Every session ends now. Their password and authenticator are kept, so the owner can restore access later.</p>
@@ -1640,7 +1778,7 @@ const ACTIONS = {
       <h3 class="t-label" style="margin-top:12px">Access history</h3>
       ${d.history.length ? table(['When', 'Change', 'By'], d.history.map((h) => [when(h.at), esc(h.action), esc(h.actor_name || '—')])) : '<p class="t-sm muted">None.</p>'}
       <h3 class="t-label" style="margin-top:12px">Recent activity</h3>
-      ${d.activity.length ? table(['When', 'Action', 'Outcome'], d.activity.slice(0, 50).map((x) => [when(x.at), esc(x.action), esc(x.outcome)])) : '<p class="t-sm muted">No activity yet.</p>'}`, DONE);
+      ${d.activity.length ? table(['When', 'Action', 'Outcome'], d.activity.slice(0, 50).map((x) => [when(x.at), esc(x.action), esc(x.outcome)])) : '<p class="t-sm muted">No activity yet.</p>'}`, DONE, '', { drawer: true });
   },
   revokePasskey: (t) => {
     if (!confirm(`Remove the passkey “${t.dataset.label}”? Sessions opened with it end immediately.`)) return;
@@ -2470,3 +2608,843 @@ async function fileOrText(form) {
 }
 
 const splitList = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
+
+/* ========================================================================
+   WEBSITE CUSTOMIZATION — the public website's content and look
+
+   One shared draft on the server, edited here and previewed live in a frame
+   of the real website. Nothing on this page changes what visitors see until
+   Publish: that is a server call that re-validates the draft and makes it a
+   new version in one transaction. Every control maps to an allowlisted
+   field the server checks; there is no free CSS, HTML or script anywhere.
+   ======================================================================== */
+const W = {
+  data: null,        // GET /admin/site
+  config: null,      // the working copy being edited
+  saved: null,       // JSON of the draft as last saved, for "unsaved changes"
+  revision: 0,
+  tab: 'theme',
+  problems: [],
+  previewRoute: 'welcome',
+  previewWidth: 'mobile',
+  vendors: null,
+  items: null,       // id -> { id, vendorId, vendorName, name, pricePaise, veg, available, photoAsset }
+  limits: null,      // /assets/limits
+  busy: false,
+};
+const W_TABS = [
+  ['theme', 'Brand & theme'], ['hero', 'Landing hero'], ['home', 'Homepage sections'],
+  ['featured', 'Featured cafés & dishes'], ['banners', 'Banners'], ['announcement', 'Announcement bar'],
+  ['footer', 'Footer & contact'], ['seo', 'Title & description'], ['features', 'Show or hide'],
+  ['history', 'Versions & rollback'],
+];
+const SECTION_LABEL = {
+  featured: 'Featured cafés & dishes', banners: 'Promotional banners', cafes: 'Cafés on this campus',
+  ask: 'Ask ECHO ECHO', reorder: 'Order again', pickup: 'Self pickup', deliver: 'Deliver with ECHO ECHO',
+};
+const SHIPPED_THEME = { accent: '#C8425F', background: '#FAF7F3', surface: '#FFFFFF', text: '#1A1416', textSecondary: '#3D3134', border: '#E9E1DA' };
+const ROUTE_LABEL = { home: 'Home', cafes: 'Cafés', deliver: 'Deliver with ECHO ECHO', ai: 'Ask ECHO ECHO', orders: 'Orders',
+  profile: 'Profile', signin: 'Sign in (Student / Employee)', 'ob-college': 'Student sign-in', cart: 'Cart' };
+
+const getPath = (o, path) => path.split('.').reduce((x, k) => (x == null ? x : x[k]), o);
+function setPath(o, path, v) {
+  const ks = path.split('.'); const last = ks.pop();
+  const parent = ks.reduce((x, k) => x[k], o);
+  parent[last] = v;
+}
+const wDirty = () => W.config && JSON.stringify(W.config) !== W.saved;
+const canEdit = () => !!W.data?.can.edit;
+const canPublish = () => !!W.data?.can.publish;
+
+async function scrWebsite() {
+  setTitle('Website Customization', 'Edit the public website’s words, images, sections and colours. Visitors see a change only after it is published.');
+  head().innerHTML = '';
+  await panel(view(), async () => {
+    const [d, limits] = await Promise.all([quad.adminSite(), W.limits ? W.limits : quad.assetLimits().catch(() => null)]);
+    return { d, limits };
+  }, ({ d, limits }) => {
+    W.data = d; W.limits = limits;
+    W.config = structuredClone(d.draft.config);
+    W.saved = JSON.stringify(d.draft.config);
+    W.revision = d.draft.revision;
+    W.problems = [];
+    return `<div class="wz" id="wz">
+      <nav class="wz-tabs" aria-label="Website settings">${W_TABS.map(([k, l]) => `
+        <button type="button" class="wz-tab" data-act="wzTab" data-tab="${k}" ${W.tab === k ? 'aria-current="true"' : ''}>${esc(l)}</button>`).join('')}
+      </nav>
+      <section class="wz-edit card" aria-label="Editor">
+        <div class="wz-status" id="wz-status"></div>
+        <div id="wz-problems"></div>
+        <div id="wz-form" class="wz-form"></div>
+      </section>
+      <section class="wz-preview card" aria-label="Live preview">
+        <div class="wz-preview-bar">
+          <select class="input input-sm" data-wz-route aria-label="Preview screen">
+            ${[['welcome', 'Landing page'], ['home', 'Home'], ['signin', 'Student / Employee'], ['cafes', 'Cafés'], ['deliver', 'Deliver with ECHO ECHO']]
+              .map(([r, l]) => `<option value="${r}" ${W.previewRoute === r ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+          <div class="seg" role="group" aria-label="Preview width">
+            <button type="button" class="seg-btn" data-act="wzWidth" data-w="mobile" aria-pressed="${W.previewWidth === 'mobile'}">Phone</button>
+            <button type="button" class="seg-btn" data-act="wzWidth" data-w="desktop" aria-pressed="${W.previewWidth === 'desktop'}">Desktop</button>
+          </div>
+          <span class="wz-preview-tag">Draft preview · not public</span>
+        </div>
+        <div class="wz-frame-wrap ${W.previewWidth}"><iframe id="wz-frame" title="Preview of the website with this draft"
+          src="/web/?site-preview=1" loading="eager"></iframe></div>
+      </section>
+    </div>`;
+  }, { label: 'Loading website settings' });
+  if (!W.data) return;
+  wzHeadActions();
+  wzStatus();
+  await wzPaintForm();
+  wzBindOnce();
+}
+
+function wzHeadActions() {
+  head().innerHTML = `
+    <button type="button" class="btn btn-ghost btn-sm" data-act="wzDiscard" ${canEdit() ? '' : 'disabled'}>Discard changes</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-act="wzReset" ${canEdit() ? '' : 'disabled'}>Reset to last published</button>
+    <button type="button" class="btn btn-secondary btn-sm" data-act="wzSave" ${canEdit() ? '' : 'disabled'}>Save draft</button>
+    <button type="button" class="btn btn-primary btn-sm" data-act="wzPublish" ${canPublish() ? '' : 'disabled title="Needs the website.publish permission"'}>Publish changes</button>`;
+}
+
+function wzStatus() {
+  const box = document.getElementById('wz-status');
+  if (!box || !W.data) return;
+  const d = W.data;
+  const live = d.live;
+  box.innerHTML = `
+    <span class="wz-pill ${wDirty() ? 'warn' : 'ok'}">${wDirty() ? 'Unsaved changes' : 'All changes saved'}</span>
+    <span>${W.revision ? `Draft revision ${W.revision}${d.draft.updatedAt ? `, saved ${when(d.draft.updatedAt)}${d.draft.updatedBy ? ` by ${esc(d.draft.updatedBy)}` : ''}` : ''}` : 'No draft saved yet'}</span>
+    <span>${live ? `Live: version ${live.version}, published ${when(live.publishedAt)}${live.publishedBy ? ` by ${esc(live.publishedBy)}` : ''}` : 'Live: the built-in website (nothing published yet)'}</span>
+    ${!canEdit() ? '<span class="wz-pill">Read only: you do not have website.customize</span>' : ''}`;
+}
+
+function wzProblems() {
+  const box = document.getElementById('wz-problems');
+  if (!box) return;
+  box.innerHTML = W.problems.length ? `<div class="wz-problems" role="alert"><b>Fix these before saving:</b><ul>${
+    W.problems.map((p) => `<li><code>${esc(p.path)}</code> ${esc(p.problem)}</li>`).join('')}</ul></div>` : '';
+  document.querySelectorAll('[data-path]').forEach((i) => {
+    const bad = W.problems.some((p) => p.path === i.dataset.path || p.path.startsWith(`${i.dataset.path}.`));
+    i.classList.toggle('is-invalid', bad);
+    i.setAttribute('aria-invalid', String(bad));
+  });
+}
+
+/* ---------- field builders ---------------------------------------------- */
+const ro = () => (canEdit() ? '' : 'disabled');
+const wText = (path, label, { max = 120, area = false, hint = '' } = {}) => {
+  const v = getPath(W.config, path) ?? '';
+  return `<label class="field"><span class="t-label">${esc(label)} <span class="wz-count" data-count-for="${path}">${String(v).length}/${max}</span></span>
+    ${area ? `<textarea class="input" rows="3" maxlength="${max}" data-path="${path}" ${ro()}>${esc(v)}</textarea>`
+      : `<input class="input" maxlength="${max}" data-path="${path}" value="${esc(v)}" ${ro()}>`}
+    ${hint ? `<span class="t-xs faint">${esc(hint)}</span>` : ''}</label>`;
+};
+const wBool = (path, label, hint = '') => `<label class="wz-switch"><input type="checkbox" data-path="${path}" ${getPath(W.config, path) ? 'checked' : ''} ${ro()}>
+  <span class="grow"><span class="t-sm t-strong">${esc(label)}</span>${hint ? `<span class="t-xs faint" style="display:block">${esc(hint)}</span>` : ''}</span></label>`;
+const wSelect = (path, label, options, { allowNull = false } = {}) => {
+  const v = getPath(W.config, path);
+  return `<label class="field"><span class="t-label">${esc(label)}</span>
+    <select class="input" data-path="${path}" ${allowNull ? 'data-null="1"' : ''} ${ro()}>
+      ${allowNull ? `<option value="" ${v == null ? 'selected' : ''}>Website default</option>` : ''}
+      ${options.map(([val, l]) => `<option value="${esc(val)}" ${v === val ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+    </select></label>`;
+};
+const wColor = (key, label) => {
+  const path = `theme.${key}`;
+  const v = getPath(W.config, path);
+  const shown = v || SHIPPED_THEME[key];
+  return `<div class="wz-color">
+    <span class="t-label">${esc(label)}</span>
+    <div class="row g2">
+      <input type="color" class="wz-swatch" data-color-for="${path}" value="${esc(shown.toLowerCase())}" aria-label="${esc(label)} colour picker" ${ro()}>
+      <input class="input wz-hex" data-path="${path}" data-null="1" value="${esc(v || '')}" placeholder="${esc(SHIPPED_THEME[key])}" title="Empty means the website's own colour" maxlength="7" aria-label="${esc(label)} hex value" ${ro()}>
+      <button type="button" class="btn btn-ghost btn-sm" data-act="wzClear" data-path="${path}" ${v ? '' : 'disabled'} ${ro()}>Reset</button>
+    </div></div>`;
+};
+const wNumber = (path, label, min, max) => {
+  const v = getPath(W.config, path);
+  return `<label class="field"><span class="t-label">${esc(label)} <span class="t-xs faint">${min}–${max} px, empty for default</span></span>
+    <input class="input" type="number" min="${min}" max="${max}" step="1" data-path="${path}" data-null="1" data-int="1" value="${v ?? ''}" ${ro()}></label>`;
+};
+const linkOptions = (path, label, { allowEmpty = true } = {}) => {
+  const v = getPath(W.config, path) || '';
+  const internal = Object.entries(ROUTE_LABEL).map(([r, l]) => [`#/${r}`, l]);
+  const custom = v && !internal.some(([x]) => x === v);
+  return `<label class="field"><span class="t-label">${esc(label)}</span>
+    <select class="input" data-link-select="${path}" ${ro()}>
+      ${allowEmpty ? `<option value="" ${!v ? 'selected' : ''}>No link</option>` : ''}
+      ${internal.map(([x, l]) => `<option value="${esc(x)}" ${v === x ? 'selected' : ''}>Website: ${esc(l)}</option>`).join('')}
+      <option value="__custom" ${custom ? 'selected' : ''}>Another address (https:// or mailto:)</option>
+    </select>
+    <input class="input" data-path="${path}" value="${esc(custom ? v : '')}" placeholder="https://…" ${custom ? '' : 'hidden'} ${ro()}></label>`;
+};
+function wImage(path, label, hint) {
+  const id = getPath(W.config, path);
+  return `<div class="wz-image" data-image-for="${path}">
+    <span class="t-label">${esc(label)}</span>
+    <div class="row g3" style="align-items:center;flex-wrap:wrap">
+      <div class="wz-thumb">${id ? `<img src="${esc(quad.assetUrl(id))}" alt="">` : '<span class="t-xs faint">No image</span>'}</div>
+      <div class="stack g1">
+        <label class="btn btn-secondary btn-sm ${canEdit() ? '' : 'is-disabled'}">Upload<input type="file" accept="image/jpeg,image/png,image/webp" data-upload="${path}" hidden ${ro()}></label>
+        ${id ? `<button type="button" class="btn btn-ghost btn-sm" data-act="wzClear" data-path="${path}" ${ro()}>Remove</button>` : ''}
+      </div>
+      <div class="wz-progress" data-progress-for="${path}" hidden><span></span></div>
+    </div>
+    <span class="t-xs faint">${esc(hint)}${W.limits ? ` JPEG, PNG or WebP, up to ${Math.round(W.limits.maxBytes / 1048576)} MB.` : ''}</span>
+  </div>`;
+}
+
+/* ---------- the forms ----------------------------------------------------- */
+async function wzPaintForm() {
+  const box = document.getElementById('wz-form');
+  if (!box) return;
+  const c = W.config;
+  const opt = W.data.options;
+  const T = {
+    theme: () => `
+      <h2 class="wz-h">Brand</h2>
+      ${wImage('brand.logoAsset', 'Logo', 'Shown in the header and footer instead of the approved artwork. Wide images work best; at least 120 px high.')}
+      ${wImage('brand.faviconAsset', 'Favicon', 'The browser-tab icon. Square, at least 64 × 64 px.')}
+      <h2 class="wz-h">Colours <span class="t-xs faint">applied to the light appearance; dark mode keeps its own tuned palette</span></h2>
+      <div class="wz-grid2">
+        ${wColor('accent', 'Primary brand colour')}${wColor('background', 'Page background')}
+        ${wColor('surface', 'Cards and panels')}${wColor('border', 'Borders and dividers')}
+        ${wColor('text', 'Main text')}${wColor('textSecondary', 'Secondary text')}
+      </div>
+      <p class="t-xs faint">Text colours are checked against the background and cards (4.5:1) and the brand colour against cards (3:1); a combination that would be hard to read is refused.</p>
+      <h2 class="wz-h">Shape and type</h2>
+      <div class="wz-grid2">
+        ${wNumber('theme.buttonRadius', 'Button corner radius', 0, 24)}
+        ${wNumber('theme.cardRadius', 'Card corner radius', 0, 28)}
+        ${wSelect('theme.font', 'Typeface', opt.fonts.map((f) => [f, f]), { allowNull: true })}
+        ${wSelect('theme.density', 'Spacing', opt.densities.map((x) => [x, x[0].toUpperCase() + x.slice(1)]), { allowNull: true })}
+        ${wSelect('theme.appearance', 'Appearance for new visitors', [['system', 'Follow the device'], ['light', 'Light'], ['dark', 'Dark']], { allowNull: true })}
+      </div>`,
+    hero: () => `
+      <h2 class="wz-h">Landing hero <span class="t-xs faint">the first screen a signed-out visitor sees</span></h2>
+      ${wText('hero.eyebrow', 'Small line above the heading', { max: 60 })}
+      ${wText('hero.heading', 'Heading', { max: 90 })}
+      ${wText('hero.headingAccent', 'Highlighted end of the heading', { max: 60, hint: 'Shown in the brand colour after the heading.' })}
+      ${wText('hero.body', 'Description', { max: 280, area: true })}
+      ${wImage('hero.imageAsset', 'Background photograph', 'Optional. Faded behind the words so they stay readable; at least 1200 px wide.')}
+      <div class="wz-grid2">
+        ${wText('hero.primaryLabel', 'Main button label', { max: 40 })}
+        ${linkOptions('hero.primaryLink', 'Main button opens', { allowEmpty: false })}
+        ${wText('hero.secondaryLabel', 'Second button label', { max: 40, hint: 'Leave empty to hide the second button.' })}
+        ${linkOptions('hero.secondaryLink', 'Second button opens')}
+      </div>`,
+    home: () => `
+      <h2 class="wz-h">Homepage</h2>
+      ${wText('home.title', 'Home page heading', { max: 90 })}
+      <h2 class="wz-h">Sections <span class="t-xs faint">drag to reorder, or use the arrows; switch a section off to hide it</span></h2>
+      <ol class="wz-sections" id="wz-sections">${c.home.sections.map((s, i) => `
+        <li class="wz-section" draggable="${canEdit()}" data-index="${i}">
+          <span class="wz-grip" aria-hidden="true">⋮⋮</span>
+          <span class="grow t-sm t-strong">${esc(SECTION_LABEL[s.key] || s.key)}</span>
+          <label class="wz-mini"><input type="checkbox" data-path="home.sections.${i}.visible" ${s.visible ? 'checked' : ''} ${ro()}> Shown</label>
+          <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="home.sections" data-i="${i}" data-d="-1" aria-label="Move ${esc(SECTION_LABEL[s.key])} up" ${i === 0 ? 'disabled' : ''} ${ro()}>↑</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="home.sections" data-i="${i}" data-d="1" aria-label="Move ${esc(SECTION_LABEL[s.key])} down" ${i === c.home.sections.length - 1 ? 'disabled' : ''} ${ro()}>↓</button>
+        </li>`).join('')}</ol>
+      <p class="t-xs faint">Active orders and the "finish your profile" reminder always stay at the top: they are a student's own business, not promotion.</p>`,
+    featured: () => wzFeatured(),
+    banners: () => `
+      <h2 class="wz-h">Promotional banners <span class="t-xs faint">up to ${opt.limits.banners}, shown in the "Promotional banners" home section</span></h2>
+      ${c.banners.map((b, i) => `
+        <fieldset class="wz-card">
+          <legend class="t-label">Banner ${i + 1}</legend>
+          <div class="wz-grid2">
+            ${wText(`banners.${i}.title`, 'Title', { max: 60 })}
+            ${wText(`banners.${i}.linkLabel`, 'Button label', { max: 30 })}
+          </div>
+          ${wText(`banners.${i}.body`, 'Text', { max: 140, area: true })}
+          ${linkOptions(`banners.${i}.link`, 'Button opens')}
+          ${wImage(`banners.${i}.imageAsset`, 'Image', 'Optional, square works best.')}
+          <div class="wz-grid2">
+            <label class="field"><span class="t-label">Show from</span><input class="input" type="datetime-local" data-path="banners.${i}.startsAt" data-date="1" data-null="1" value="${esc(toLocalInput(b.startsAt))}" ${ro()}></label>
+            <label class="field"><span class="t-label">Show until</span><input class="input" type="datetime-local" data-path="banners.${i}.endsAt" data-date="1" data-null="1" value="${esc(toLocalInput(b.endsAt))}" ${ro()}></label>
+          </div>
+          <div class="row g2" style="flex-wrap:wrap">
+            ${wBool(`banners.${i}.active`, 'Switched on')}
+            <span class="grow"></span>
+            <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="banners" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''} ${ro()}>↑</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="banners" data-i="${i}" data-d="1" ${i === c.banners.length - 1 ? 'disabled' : ''} ${ro()}>↓</button>
+            <button type="button" class="btn btn-ghost btn-sm danger-text" data-act="wzRemove" data-list="banners" data-i="${i}" ${ro()}>Remove banner</button>
+          </div>
+        </fieldset>`).join('') || '<p class="t-sm muted">No banners yet.</p>'}
+      <button type="button" class="btn btn-secondary btn-sm" data-act="wzAddBanner" ${c.banners.length >= opt.limits.banners ? 'disabled' : ''} ${ro()}>Add a banner</button>`,
+    announcement: () => `
+      <h2 class="wz-h">Announcement bar <span class="t-xs faint">a single line under the header on every page</span></h2>
+      ${wBool('announcement.enabled', 'Show the announcement bar')}
+      ${wText('announcement.text', 'Message', { max: 160 })}
+      ${wSelect('announcement.tone', 'Style', [['info', 'Information'], ['promo', 'Promotion'], ['alert', 'Important notice']])}
+      <div class="wz-grid2">${wText('announcement.linkLabel', 'Link label', { max: 30 })}${linkOptions('announcement.link', 'Link opens')}</div>`,
+    footer: () => `
+      <h2 class="wz-h">Footer</h2>
+      ${wText('footer.text', 'Footer line', { max: 200 })}
+      <h2 class="wz-h">Footer links <span class="t-xs faint">up to ${opt.limits.footerLinks}</span></h2>
+      ${c.footer.links.map((l, i) => `<div class="wz-card wz-grid2">
+          ${wText(`footer.links.${i}.label`, 'Label', { max: 30 })}
+          ${linkOptions(`footer.links.${i}.link`, 'Opens', { allowEmpty: false })}
+          <div class="row g2"><button type="button" class="btn btn-ghost btn-sm danger-text" data-act="wzRemove" data-list="footer.links" data-i="${i}" ${ro()}>Remove link</button></div>
+        </div>`).join('')}
+      <button type="button" class="btn btn-secondary btn-sm" data-act="wzAddLink" ${c.footer.links.length >= opt.limits.footerLinks ? 'disabled' : ''} ${ro()}>Add a link</button>
+      <h2 class="wz-h">Contact and support</h2>
+      <div class="wz-grid2">
+        ${wText('footer.contactEmail', 'Contact email', { max: 120 })}
+        ${wText('footer.contactPhone', 'Contact phone', { max: 20 })}
+      </div>
+      ${linkOptions('footer.supportLink', 'Help link')}`,
+    seo: () => `
+      <h2 class="wz-h">Title and description <span class="t-xs faint">what a browser tab and a search result show</span></h2>
+      ${wText('seo.title', 'Page title', { max: 70 })}
+      ${wText('seo.description', 'Description', { max: 300, area: true })}`,
+    features: () => `
+      <h2 class="wz-h">Show or hide</h2>
+      ${wBool('features.askEcho', 'Ask ECHO ECHO on the home page', 'The assistant itself stays available from the menu.')}
+      ${wBool('features.deliverPromo', '"Deliver with ECHO ECHO" invitations', 'On the landing page, the home page and in the footer.')}
+      ${wBool('features.pickupPromo', 'The self-pickup suggestion on the home page')}
+      ${wBool('features.browseFirst', 'The second button on the landing page')}
+      <p class="t-xs faint">These hide promotion only. Ordering, prices, opening hours and who may order are not website settings and cannot be changed here.</p>`,
+    history: () => '<div id="wz-history"><p class="t-sm muted">Loading versions…</p></div>',
+  };
+  box.innerHTML = (T[W.tab] || T.theme)();
+  wzProblems();
+  if (W.tab === 'history') wzHistory();
+  if (W.tab === 'featured') wzFeaturedLoad();
+  wzPreview();
+}
+
+const toLocalInput = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+function wzFeatured() {
+  const c = W.config.featured;
+  const opt = W.data.options.limits;
+  const vendors = W.vendors || [];
+  const items = W.items ? Object.values(W.items) : [];
+  const name = (id) => vendors.find((v) => v.id === id)?.name;
+  return `
+    <h2 class="wz-h">Featured</h2>
+    ${wText('featured.heading', 'Section heading', { max: 60 })}
+    <p class="t-xs faint">A featured café appears only while it is listed on the website, and a featured dish only while its café and the dish are active: featuring never makes anything orderable.</p>
+    <h2 class="wz-h">Cafés <span class="t-xs faint">${c.cafeIds.length}/${opt.featuredCafes}</span></h2>
+    ${W.vendors === null ? '<p class="t-sm muted">Loading cafés…</p>' : `<div class="wz-checklist">${vendors.map((v) => `
+      <label class="wz-mini"><input type="checkbox" data-feature="cafeIds" value="${v.id}" ${c.cafeIds.includes(v.id) ? 'checked' : ''}
+        ${!c.cafeIds.includes(v.id) && c.cafeIds.length >= opt.featuredCafes ? 'disabled' : ''} ${ro()}> ${esc(v.name)}</label>`).join('')}</div>`}
+    <h2 class="wz-h">Dishes <span class="t-xs faint">${c.itemIds.length}/${opt.featuredItems}</span></h2>
+    ${c.itemIds.length ? `<ol class="wz-picked">${c.itemIds.map((id, i) => {
+      const it = W.items?.[id];
+      return `<li>${it ? `${esc(it.name)} <span class="t-xs faint">${esc(it.vendorName)} · ${rupees(it.pricePaise)}</span>` : `<span class="t-xs faint">Dish ${esc(id.slice(0, 8))} (not found: archived?)</span>`}
+        <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="featured.itemIds" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''} ${ro()}>↑</button>
+        <button type="button" class="btn btn-ghost btn-sm danger-text" data-act="wzRemove" data-list="featured.itemIds" data-i="${i}" ${ro()}>Remove</button></li>`;
+    }).join('')}</ol>` : '<p class="t-sm muted">No dishes featured.</p>'}
+    ${W.items === null ? '<p class="t-sm muted">Loading menus…</p>' : `
+    <label class="field"><span class="t-label">Add a dish</span>
+      <select class="input" data-add-item ${c.itemIds.length >= opt.featuredItems ? 'disabled' : ''} ${ro()}>
+        <option value="">Choose a dish…</option>
+        ${vendors.map((v) => `<optgroup label="${esc(v.name)}">${items.filter((it) => it.vendorId === v.id && !c.itemIds.includes(it.id))
+          .map((it) => `<option value="${it.id}">${esc(it.name)} · ${rupees(it.pricePaise)}${it.available ? '' : ' (unavailable now)'}</option>`).join('')}</optgroup>`).join('')}
+      </select></label>`}
+    ${c.cafeIds.length ? `<p class="t-xs faint">Featured cafés: ${c.cafeIds.map((id) => esc(name(id) || id.slice(0, 8))).join(', ')}</p>` : ''}`;
+}
+
+/* Cafés and their menus, read once, to name featured dishes and to give the
+   preview the same dish details the public endpoint would. */
+async function wzFeaturedLoad(force = false) {
+  if (W.vendors && W.items && !force) return;
+  try {
+    const vs = (await quad.vendors()).vendors;
+    W.vendors = vs;
+    const menus = await Promise.all(vs.map((v) => quad.menu(v.id).catch(() => ({ items: [] }))));
+    W.items = {};
+    menus.forEach((m, i) => (m.items || []).filter((it) => it.active !== false).forEach((it) => {
+      W.items[it.id] = { id: it.id, vendorId: vs[i].id, vendorName: vs[i].name, name: it.name,
+        pricePaise: it.price_paise, veg: it.veg, available: it.available, photoAsset: it.photo_asset };
+    }));
+  } catch (e) {
+    W.vendors ||= []; W.items ||= {};
+    toast(explain(e), 'bad');
+  }
+  if (W.tab === 'featured') { document.getElementById('wz-form').innerHTML = wzFeatured(); wzProblems(); }
+  wzPreview();
+}
+
+async function wzHistory() {
+  const box = document.getElementById('wz-history');
+  try {
+    const { versions } = await quad.siteVersions();
+    box.innerHTML = `
+      <h2 class="wz-h">Published versions <span class="t-xs faint">every publish is kept; rolling back publishes a copy as a new version</span></h2>
+      ${versions.length ? table(['Version', 'Published', 'By', 'Note', ''], versions.map((v) => [
+        `<b>v${v.version}</b> ${v.live ? '<span class="badge badge-ok">live</span>' : ''}${v.kind === 'rollback' ? ` <span class="badge">rollback of v${v.rolledBackFrom}</span>` : ''}`,
+        when(v.publishedAt), esc(v.publishedBy || '—'), `<span class="t-xs">${esc(v.note || '')}</span>`,
+        `<div class="row g2"><button type="button" class="btn btn-ghost btn-sm" data-act="wzPreviewVersion" data-v="${v.version}">Preview</button>
+          ${!v.live && canPublish() ? `<button type="button" class="btn btn-ghost btn-sm" data-act="wzRollback" data-v="${v.version}">Roll back to this</button>` : ''}</div>`,
+      ])) : '<p class="t-sm muted">Nothing has been published yet. The website shows its built-in settings.</p>'}`;
+  } catch (e) { box.innerHTML = ErrorState(e); }
+}
+
+/* ---------- preview --------------------------------------------------------
+   The frame is the real website, told by URL that it is a preview. The draft
+   reaches it only by postMessage on this origin; it is never stored or sent
+   to the server by the frame. */
+let previewTimer = null;
+let previewOverride = null;   // a historical version being looked at
+function wzPreview(now = false) {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {
+    const f = document.getElementById('wz-frame');
+    if (!f?.contentWindow) return;
+    const cfg = previewOverride || W.config;
+    const items = (cfg.featured?.itemIds || []).map((id) => W.items?.[id]).filter(Boolean);
+    f.contentWindow.postMessage({ type: 'echo-site-preview', config: cfg, featuredItems: items,
+      version: W.data?.live?.version || 0 }, location.origin);
+  }, now ? 0 : 140);
+}
+const wzPreviewRoute = () => document.getElementById('wz-frame')?.contentWindow
+  ?.postMessage({ type: 'echo-site-route', route: W.previewRoute }, location.origin);
+
+let wzBound = false;
+function wzBindOnce() {
+  if (wzBound) return;
+  wzBound = true;
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin || e.data?.type !== 'echo-site-preview-ready') return;
+    wzPreview(true);
+    setTimeout(wzPreviewRoute, 60);
+  });
+  root.addEventListener('input', wzOnInput);
+  root.addEventListener('change', wzOnChange);
+  root.addEventListener('dragstart', (e) => { const li = e.target.closest?.('.wz-section'); if (li) { e.dataTransfer.setData('text/plain', li.dataset.index); li.classList.add('dragging'); } });
+  root.addEventListener('dragend', (e) => e.target.closest?.('.wz-section')?.classList.remove('dragging'));
+  root.addEventListener('dragover', (e) => { if (e.target.closest?.('.wz-section')) e.preventDefault(); });
+  root.addEventListener('drop', (e) => {
+    const li = e.target.closest?.('.wz-section');
+    if (!li || !canEdit()) return;
+    e.preventDefault();
+    const from = Number(e.dataTransfer.getData('text/plain'));
+    const to = Number(li.dataset.index);
+    if (Number.isInteger(from) && from !== to) {
+      const list = W.config.home.sections;
+      const [moved] = list.splice(from, 1);
+      list.splice(to, 0, moved);
+      wzChanged(true);
+    }
+  });
+  window.addEventListener('beforeunload', (e) => { if (S.route === 'website' && wDirty()) { e.preventDefault(); e.returnValue = ''; } });
+}
+
+function wzValue(i) {
+  if (i.type === 'checkbox') return i.checked;
+  const raw = i.value.trim();
+  if (i.dataset.null && raw === '') return null;
+  if (i.dataset.int) { const n = Number(raw); return Number.isInteger(n) ? n : raw; }
+  if (i.dataset.date) { const d = new Date(raw); return Number.isNaN(d.getTime()) ? raw : d.toISOString(); }
+  if (i.classList.contains('wz-hex')) return raw.toUpperCase();
+  return i.tagName === 'SELECT' && i.dataset.null && raw === '' ? null : i.value;
+}
+
+function wzOnInput(e) {
+  const i = e.target;
+  if (S.route !== 'website') return;
+  if (i.dataset.path) {
+    setPath(W.config, i.dataset.path, wzValue(i));
+    const cnt = document.querySelector(`[data-count-for="${i.dataset.path}"]`);
+    if (cnt) cnt.textContent = `${i.value.length}/${cnt.textContent.split('/')[1]}`;
+    if (i.classList.contains('wz-hex') && /^#[0-9A-Fa-f]{6}$/.test(i.value)) {
+      const sw = document.querySelector(`[data-color-for="${i.dataset.path}"]`);
+      if (sw) sw.value = i.value.toLowerCase();
+    }
+    wzChanged(false);
+  } else if (i.dataset.colorFor) {
+    const v = i.value.toUpperCase();
+    setPath(W.config, i.dataset.colorFor, v);
+    const hex = document.querySelector(`.wz-hex[data-path="${i.dataset.colorFor}"]`);
+    if (hex) hex.value = v;
+    wzChanged(false);
+  }
+}
+
+async function wzOnChange(e) {
+  const i = e.target;
+  if (S.route !== 'website') return;
+  if (i.matches('[data-wz-route]')) { W.previewRoute = i.value; wzPreviewRoute(); return; }
+  if (i.dataset.linkSelect) {
+    const path = i.dataset.linkSelect;
+    const text = i.parentElement.querySelector(`input[data-path="${path}"]`);
+    if (i.value === '__custom') { text.hidden = false; text.focus(); setPath(W.config, path, text.value.trim()); }
+    else { text.hidden = true; text.value = ''; setPath(W.config, path, i.value); }
+    return wzChanged(false);
+  }
+  if (i.dataset.feature) {
+    const list = W.config.featured[i.dataset.feature];
+    if (i.checked && !list.includes(i.value)) list.push(i.value);
+    if (!i.checked) list.splice(list.indexOf(i.value), 1);
+    return wzChanged(true);
+  }
+  if (i.matches('[data-add-item]') && i.value) {
+    W.config.featured.itemIds.push(i.value);
+    return wzChanged(true);
+  }
+  if (i.dataset.upload) return wzUpload(i);
+  if (i.dataset.path && (i.type === 'checkbox' || i.tagName === 'SELECT')) wzChanged(false);
+}
+
+/* After an edit: mark unsaved, refresh the preview, and redraw the form
+   only when its structure changed (a list grew, shrank or moved). */
+function wzChanged(repaint) {
+  W.problems = [];
+  previewOverride = null;
+  wzStatus();
+  wzProblems();
+  if (repaint) wzPaintForm(); else wzPreview();
+  refreshSiteChipDirty();
+}
+function refreshSiteChipDirty() {
+  const chip = document.querySelector('.cc-sitechip');
+  if (chip && wDirty()) chip.classList.add('is-draft');
+}
+
+/* Uploads go to the image store as `site_image` (website.customize on the
+   server); the bytes are checked there by their magic number, size and
+   dimensions. The checks here only save a pointless upload. */
+async function wzUpload(input) {
+  const file = input.files?.[0];
+  const path = input.dataset.upload;
+  input.value = '';
+  if (!file) return;
+  const allowed = W.limits?.allowedMime || ['image/jpeg', 'image/png', 'image/webp'];
+  if (!allowed.includes(file.type)) return toast('Choose a JPEG, PNG or WebP image.', 'bad');
+  if (W.limits?.maxBytes && file.size > W.limits.maxBytes) return toast(`That image is larger than ${Math.round(W.limits.maxBytes / 1048576)} MB.`, 'bad');
+  const dims = await imageSize(file).catch(() => null);
+  if (!dims) return toast('That file could not be read as an image.', 'bad');
+  const minimum = path === 'brand.faviconAsset' ? [64, 64] : path === 'brand.logoAsset' ? [0, 120] : path === 'hero.imageAsset' ? [1200, 0] : [200, 200];
+  if (dims.width < minimum[0] || dims.height < minimum[1]) {
+    return toast(`Too small: ${dims.width} × ${dims.height} px. This needs at least ${minimum[0] || 'any'} wide and ${minimum[1] || 'any'} high.`, 'bad');
+  }
+  if (path === 'brand.faviconAsset' && Math.abs(dims.width - dims.height) > 2) return toast('A favicon must be square.', 'bad');
+  const bar = document.querySelector(`[data-progress-for="${path}"]`);
+  if (bar) { bar.hidden = false; bar.firstElementChild.style.width = '0%'; }
+  try {
+    const out = await uploadWithProgress(file, 'site_image', (p) => { if (bar) bar.firstElementChild.style.width = `${Math.round(p * 100)}%`; });
+    setPath(W.config, path, out.id);
+    toast('Image uploaded. Save the draft to keep it.');
+    wzChanged(true);
+  } catch (e) {
+    toast(explain(e), 'bad');
+  } finally { if (bar) bar.hidden = true; }
+}
+
+const imageSize = (file) => new Promise((ok, bad) => {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => { ok({ width: img.naturalWidth, height: img.naturalHeight }); URL.revokeObjectURL(url); };
+  img.onerror = () => { bad(new Error('unreadable')); URL.revokeObjectURL(url); };
+  img.src = url;
+});
+
+/* fetch() cannot report upload progress; XMLHttpRequest can. Same endpoint,
+   same cookie, same error shape as the API client. */
+function uploadWithProgress(file, kind, onProgress) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append('kind', kind);
+    fd.append('photo', file);
+    const x = new XMLHttpRequest();
+    x.open('POST', `${API_BASE}/assets/`);
+    x.withCredentials = true;
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    x.onload = () => {
+      let body = null;
+      try { body = JSON.parse(x.responseText); } catch { /* not JSON */ }
+      if (x.status >= 200 && x.status < 300 && body?.id) resolve(body);
+      else reject(new ApiError(x.status, body || { error: 'The upload failed' }));
+    };
+    x.onerror = () => reject(new Error('Cannot reach the ECHO ECHO server'));
+    x.send(fd);
+  });
+}
+
+/* ---------- save, publish, rollback ---------------------------------------- */
+async function wzSave(btn) {
+  if (!canEdit()) return null;
+  const out = await act(btn, async () => {
+    try {
+      return await quad.saveSiteDraft(W.config, W.revision);
+    } catch (e) {
+      if (e instanceof ApiError && e.problems) { W.problems = e.problems; wzProblems(); }
+      throw e;
+    }
+  });
+  if (!out) return null;
+  W.revision = out.revision;
+  W.config = structuredClone(out.config);
+  W.saved = JSON.stringify(out.config);
+  W.data.draft = { ...W.data.draft, revision: out.revision, updatedAt: out.updatedAt, updatedBy: session.me.user.name, config: out.config };
+  W.problems = [];
+  toast(`Draft saved (revision ${out.revision})`);
+  wzStatus(); wzProblems(); refreshTopbar();
+  return out;
+}
+
+const GROUP_LABEL = { theme: 'Colours and type', brand: 'Logo and favicon', announcement: 'Announcement bar', hero: 'Landing hero',
+  home: 'Homepage sections', featured: 'Featured', banners: 'Banners', footer: 'Footer and contact', seo: 'Title and description', features: 'Show or hide' };
+function changedGroups(a, b) {
+  return Object.keys(GROUP_LABEL).filter((k) => JSON.stringify(a?.[k]) !== JSON.stringify(b?.[k])).map((k) => GROUP_LABEL[k]);
+}
+
+async function wzPublish(btn) {
+  if (!canPublish()) return;
+  if (wDirty()) {
+    const saved = await wzSave(btn);
+    if (!saved) return;
+  }
+  const check = await quad.validateSite(W.config).catch((e) => ({ ok: false, problems: [{ path: 'server', problem: explain(e) }] }));
+  if (!check.ok) { W.problems = check.problems; wzProblems(); return toast('The draft has problems; nothing was published.', 'bad'); }
+  const live = W.data.live?.config || W.data.defaults;
+  const groups = changedGroups(W.config, live);
+  modal('Publish the website?', `
+    <p class="t-sm">Visitors will see this draft (revision ${W.revision}) as version ${(W.data.live?.version || 0) + 1}.
+      Open pages pick it up within about half a minute, without reloading.</p>
+    <p class="t-sm"><b>Changed since the live version:</b> ${groups.length ? groups.map(esc).join(', ') : 'nothing; this publishes the same settings again'}.</p>
+    ${field('note', 'Note for the history (optional)')}
+    <p class="t-xs faint">You may be asked for your password and authenticator code. The previous version stays in the history and can be restored.</p>`,
+  async (d) => {
+    const t0 = performance.now();
+    const out = await quad.publishSite(W.revision, d.note || '');
+    toast(`Published version ${out.version}. Checking the public website…`);
+    measurePublic(out.version, t0);
+    return out;
+  });
+}
+
+/* How long until the PUBLIC endpoint, through the CDN, returns the new
+   version: the number reported to the owner is measured, not promised. */
+async function measurePublic(version, t0) {
+  for (let i = 0; i < 40; i++) {
+    try {
+      const r = await fetch(`${API_BASE}/site/version/?t=${Date.now()}`, { credentials: 'omit', cache: 'no-store' }).then((x) => x.json());
+      if (r.version >= version) {
+        toast(`Version ${version} is live on the public website (${((performance.now() - t0) / 1000).toFixed(1)} s after publishing). Open pages update within 30 s.`);
+        return;
+      }
+    } catch { /* keep trying */ }
+    await new Promise((res) => setTimeout(res, 1500));
+  }
+  toast(`Version ${version} is published; the public endpoint had not shown it after a minute. Check System Health.`, 'bad');
+}
+
+function wzRollback(t) {
+  const v = Number(t.dataset.v);
+  modal(`Roll back to version ${v}?`, `
+    <p class="t-sm">Version ${v}'s settings become the live website again, as a new version. Nothing is deleted, and your draft is left as it is.</p>
+    ${field('note', 'Reason (kept in the history)')}`,
+  (d) => quad.rollbackSite(v, d.note || '').then((out) => { toast(`Rolled back: version ${out.version} is live`); measurePublic(out.version, performance.now()); return out; }));
+}
+
+async function wzPreviewVersion(t) {
+  const v = Number(t.dataset.v);
+  try {
+    const r = await quad.siteVersionConfig(v);
+    previewOverride = r.config;
+    wzPreview(true);
+    toast(`Previewing version ${v}. Any edit returns the preview to your draft.`);
+  } catch (e) { toast(explain(e), 'bad'); }
+}
+
+const WZ_ACTIONS = {
+  wzTab: (t) => { W.tab = t.dataset.tab; previewOverride = null; document.querySelectorAll('.wz-tab').forEach((b) => b.toggleAttribute('aria-current', b === t)); return wzPaintForm(); },
+  wzWidth: (t) => {
+    W.previewWidth = t.dataset.w;
+    document.querySelector('.wz-frame-wrap')?.classList.toggle('mobile', W.previewWidth === 'mobile');
+    document.querySelector('.wz-frame-wrap')?.classList.toggle('desktop', W.previewWidth === 'desktop');
+    document.querySelectorAll('[data-act="wzWidth"]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.w === W.previewWidth)));
+  },
+  wzClear: (t) => { setPath(W.config, t.dataset.path, null); wzChanged(true); },
+  wzMove: (t) => {
+    const list = getPath(W.config, t.dataset.list);
+    const i = Number(t.dataset.i), j = i + Number(t.dataset.d);
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    wzChanged(true);
+  },
+  wzRemove: (t) => { getPath(W.config, t.dataset.list).splice(Number(t.dataset.i), 1); wzChanged(true); },
+  wzAddBanner: () => {
+    const n = W.config.banners.length + 1;
+    let id = `banner-${n}`;
+    while (W.config.banners.some((b) => b.id === id)) id = `banner-${Math.floor(Math.random() * 1e6)}`;
+    W.config.banners.push({ id, title: 'New banner', body: '', imageAsset: null, link: '', linkLabel: '', active: false, startsAt: null, endsAt: null });
+    wzChanged(true);
+  },
+  wzAddLink: () => { W.config.footer.links.push({ label: 'New link', link: '#/cafes' }); wzChanged(true); },
+  wzDiscard: () => {
+    if (!wDirty()) return toast('There are no unsaved changes.');
+    W.config = JSON.parse(W.saved); W.problems = []; previewOverride = null;
+    toast('Unsaved changes discarded'); wzStatus(); wzPaintForm();
+  },
+  wzReset: () => modal('Reset the draft to the live website?', `
+    <p class="t-sm">The shared draft is replaced with ${W.data.live ? `version ${W.data.live.version}, which is live now` : 'the built-in website settings'}.
+      Unpublished changes, including other administrators' saved ones, are discarded.</p>`,
+    async () => { const out = await quad.resetSiteDraft(W.revision); toast('The draft now matches the live website'); return out; }),
+  wzSave: (t) => wzSave(t),
+  wzPublish: (t) => wzPublish(t),
+  wzRollback: (t) => wzRollback(t),
+  wzPreviewVersion: (t) => wzPreviewVersion(t),
+};
+
+/* ========================================================================
+   LIVE DELIVERIES — what is being carried right now
+
+   The state of each delivery and how fresh its partner's position is. The
+   position itself (coordinates) is never drawn or shown here: the age is
+   what operations needs, and the location stays with the people who need
+   it. The tracking API applies its own rules: a position exists only while
+   an order is being carried and is deleted when the delivery ends.
+   ======================================================================== */
+const FRESH_S = 60, STALE_S = 300;
+function freshness(t) {
+  if (!t) return '<span class="badge">unknown</span>';
+  if (t.partnerVisibility === 'delivery_over') return '<span class="badge">delivery over</span>';
+  if (!t.partner) return '<span class="badge badge-warn">no position shared yet</span>';
+  const a = t.partner.ageSeconds;
+  if (a <= FRESH_S) return `<span class="badge badge-ok">updated ${a} s ago</span>`;
+  if (a <= STALE_S) return `<span class="badge badge-warn">stale · ${Math.round(a / 60)} min old</span>`;
+  return `<span class="badge badge-danger">not updating · ${Math.round(a / 60)} min</span>`;
+}
+
+async function scrDeliveries() {
+  setTitle('Live Deliveries', 'Deliveries in progress, who is carrying them and whether their position is updating. Positions are not shown here.');
+  head().innerHTML = '<button type="button" class="btn btn-secondary btn-sm" data-act="deliveriesRefresh">Refresh</button>';
+  await panel(view(), async () => {
+    const get = (state) => quad.adminOrders({ state, fulfilment: 'delivery', pageSize: 50 }).then((r) => r.orders);
+    const [waiting, assigned, onway] = await Promise.all([
+      Promise.all(['confirmed', 'preparing', 'ready'].map(get)).then((x) => x.flat()), get('assigned'), get('picked_up')]);
+    const carrying = [...assigned, ...onway];
+    const tracks = await Promise.all(carrying.map((o) => quad.tracking(o.id).catch(() => null)));
+    return { waiting, assigned, onway, track: Object.fromEntries(carrying.map((o, i) => [o.id, tracks[i]])) };
+  }, (d) => {
+    const stale = [...d.assigned, ...d.onway].filter((o) => {
+      const t = d.track[o.id];
+      return !t?.partner || t.partner.ageSeconds > FRESH_S;
+    }).length;
+    const rows = (list, carrying) => list.map((o) => [
+      `<b>${esc(o.code)}</b><div class="t-xs muted">${when(o.created_at)}</div>`,
+      esc(o.vendor_name), esc(o.customer_name || '—'),
+      carrying ? (o.partner_name ? esc(o.partner_name) : '<span class="t-xs faint">assigned (name needs partners.view)</span>')
+        : '<span class="t-xs faint">not assigned yet</span>',
+      `<span class="badge badge-ink">${esc(ORDER_LABEL[o.state] || o.state)}</span>`,
+      carrying ? freshness(d.track[o.id]) : '—',
+      `<span class="num">${rupees(o.total_paise)}</span>`,
+      `<button type="button" class="btn btn-ghost btn-sm" data-act="orderTimeline" data-id="${o.id}">Timeline</button>`,
+    ]);
+    const cols = ['Order', 'Café', 'Student', 'Partner', 'State', 'Position', 'Total', ''];
+    return `
+      <div class="grid-kpi">
+        ${statCard('route', 'On the way', d.onway.length, 'picked up, being carried')}
+        ${statCard('bike', 'Partner assigned', d.assigned.length, 'heading to the café')}
+        ${statCard('bag', 'Waiting for a partner', d.waiting.length, 'confirmed delivery orders')}
+        ${statCard('pulse', 'Position not fresh', stale, `older than ${FRESH_S} s, or not shared`, stale ? 'warn' : '')}
+      </div>
+      <section class="card card-pad cc-section">
+        <h2 class="cc-h">Being carried</h2>
+        ${d.assigned.length + d.onway.length ? table(cols, rows([...d.onway, ...d.assigned], true))
+          : EmptyState('Nothing is being carried right now.', 'Deliveries appear here when a partner accepts one.')}
+      </section>
+      <section class="card card-pad cc-section">
+        <h2 class="cc-h">Waiting for a partner</h2>
+        ${d.waiting.length ? table(cols, rows(d.waiting, false)) : EmptyState('No delivery is waiting.', '')}
+      </section>
+      <p class="t-xs faint">A partner's phone sends its position about every 20 seconds while the delivery screen is open; a locked phone or a backgrounded browser pauses it.
+        Fresh means under ${FRESH_S} s, stale up to ${STALE_S / 60} min; after that the customer's map stops drawing it.</p>`;
+  }, { label: 'Loading deliveries' });
+}
+
+/* ========================================================================
+   SESSIONS — who is signed in to Campus Control
+   ======================================================================== */
+async function scrSessions() {
+  setTitle('Sessions', 'Open administrator sessions. Signing someone out ends every session they have, at once.');
+  head().innerHTML = '';
+  await panel(view(), async () => {
+    const { administrators } = await quad.accessAdmins();
+    const details = await Promise.all(administrators.map((a) => quad.accessAdmin(a.id).catch(() => null)));
+    return administrators.map((a, i) => ({ a, sessions: details[i]?.sessions || [] }));
+  }, (list) => {
+    const total = list.reduce((n, x) => n + x.sessions.length, 0);
+    return `
+      <div class="grid-kpi">
+        ${statCard('device', 'Open sessions', total, 'across all administrators')}
+        ${statCard('users', 'Administrators', list.length, `${list.filter((x) => x.sessions.length).length} signed in now`)}
+      </div>
+      ${list.map(({ a, sessions }) => {
+        const self = a.id === session.me.user.id;
+        return `<section class="card card-pad cc-section">
+          <div class="between" style="flex-wrap:wrap;gap:8px">
+            <div><h2 class="cc-h" style="margin:0">${esc(a.name || a.email || 'Administrator')}${self ? ' <span class="badge">you</span>' : ''}</h2>
+              <span class="t-xs muted">${esc(a.email || '')} · ${a.isOwner ? 'Owner' : esc(a.status)}</span></div>
+            ${!a.isOwner && !self && session.can('sessions.revoke') && sessions.length
+              ? `<button class="btn btn-secondary btn-sm" data-act="revokeAdminSessions" data-id="${a.id}" data-name="${esc(a.name || a.email || '')}">Sign out everywhere</button>` : ''}
+          </div>
+          ${sessions.length ? table(['Signed in', 'Expires', 'Method', 'IP', 'Device'], sessions.map((s) => [
+            when(s.issued_at), new Date(s.expires_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }),
+            esc(s.auth_method === 'admin_totp' ? 'password + authenticator' : s.auth_method), esc(s.ip || '—'),
+            `<span class="t-xs">${esc(s.user_agent || '')}</span>`])) : '<p class="t-sm muted">No open sessions.</p>'}
+        </section>`; }).join('')}
+      <p class="t-xs faint">Session details only: no session token or its hash ever leaves the server.</p>`;
+  }, { label: 'Loading sessions' });
+}
+
+/* A figure card in the reference's style: a round tinted icon, a label and
+   the number. Values always come from the server. */
+const statCard = (ic, label, value, note = '', tone = '') => `
+  <div class="cc-stat${tone ? ` tone-${tone}` : ''}">
+    <span class="cc-stat-icon" aria-hidden="true">${icon(ic, 22)}</span>
+    <span class="cc-stat-text"><span class="cc-stat-label">${esc(label)}</span>
+      <span class="cc-stat-value">${esc(String(value))}</span>
+      ${note ? `<span class="cc-stat-note">${esc(note)}</span>` : ''}</span>
+  </div>`;
+
+Object.assign(ACTIONS, WZ_ACTIONS, {
+  collapseRail: () => {
+    const c = document.querySelector('.cc');
+    c.classList.toggle('cc-collapsed');
+    try { localStorage.setItem('cc-rail', c.classList.contains('cc-collapsed') ? 'collapsed' : 'open'); } catch { /* storage blocked */ }
+  },
+  profileMenu: (t) => {
+    const m = document.getElementById('profile-menu');
+    m.hidden = !m.hidden;
+    t.setAttribute('aria-expanded', String(!m.hidden));
+    if (!m.hidden) m.querySelector('button')?.focus();
+  },
+  notifications: async (t) => {
+    if (document.querySelector('.cc-notifs')) { document.querySelector('.cc-notifs').remove(); return; }
+    const box = el('<div class="cc-menu cc-notifs" role="dialog" aria-label="Notifications"><p class="t-sm muted" style="padding:12px">Loading…</p></div>');
+    t.parentElement.append(box);
+    try {
+      const { notifications } = await quad.notifications();
+      box.innerHTML = `<div class="cc-menu-head"><b>Notifications</b></div>${notifications.length ? notifications.slice(0, 12).map((n) => `
+        <div class="cc-notif${n.read_at ? '' : ' unread'}"><span class="t-sm">${esc(n.title || n.kind || 'Notice')}</span>
+          ${n.body ? `<span class="t-xs muted">${esc(n.body)}</span>` : ''}<span class="t-xs faint">${when(n.created_at)}</span></div>`).join('')
+        : '<p class="t-sm muted" style="padding:12px">Nothing new.</p>'}`;
+    } catch (e) { box.innerHTML = `<p class="t-sm" style="padding:12px">${esc(explain(e))}</p>`; }
+  },
+  deliveriesRefresh: () => scrDeliveries(),
+});
+
+/* Narrowing the permission list as the owner types. Only hides rows; the
+   checked state, and what is saved, is unaffected. */
+document.addEventListener('input', (e) => {
+  const box = e.target.closest?.('[data-perm-search]');
+  if (!box) return;
+  const want = box.value.trim().toLowerCase();
+  const form = box.closest('form');
+  form.querySelectorAll('[data-perm-row]').forEach((r) => { r.hidden = want && !r.dataset.permRow.includes(want); });
+  form.querySelectorAll('[data-perm-group]').forEach((g) => { g.hidden = ![...g.querySelectorAll('[data-perm-row]')].some((r) => !r.hidden); });
+});

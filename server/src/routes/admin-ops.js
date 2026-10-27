@@ -20,7 +20,7 @@
    a session; personal data is limited to what orders.view already shows.
    ========================================================================== */
 import { q, one } from '../db/index.js';
-import { authorize, BadRequest, NotFound } from '../auth/rbac.js';
+import { authorize, can, BadRequest, NotFound } from '../auth/rbac.js';
 import { audit } from '../audit.js';
 import { webhookHealth } from '../services/reconciliation.js';
 
@@ -120,11 +120,16 @@ export default async function adminOpsRoutes(app) {
               v.id AS vendor_id, v.name AS vendor_name, u.name AS customer_name,
               p.status AS payment_status, p.provider AS payment_provider,
               f.platform_fee_paise,
-              (SELECT count(*)::int FROM order_item oi WHERE oi.order_id = o.id) AS item_count
+              (SELECT count(*)::int FROM order_item oi WHERE oi.order_id = o.id) AS item_count,
+              (o.partner_id IS NOT NULL) AS has_partner,
+              (SELECT pu.name FROM app_user pu WHERE pu.id = o.partner_id) AS partner_name
          ${ORDER_FROM} ${f.sql}
         ORDER BY o.created_at DESC
         LIMIT ${pageSize} OFFSET ${offset}`, f.params);
-    return { orders: rows, total, page, pageSize };
+    /* Who is carrying an order is partner data: named only to an
+       administrator who may see partner profiles. */
+    const partners = can(req.actor, 'partner.read');
+    return { orders: rows.map((r) => (partners ? r : { ...r, partner_name: null })), total, page, pageSize };
   });
 
   app.get('/admin/orders/:id/timeline', async (req) => {

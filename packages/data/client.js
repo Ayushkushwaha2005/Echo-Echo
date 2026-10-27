@@ -32,6 +32,8 @@ export class ApiError extends Error {
     this.status = status;
     this.code = body?.code;
     this.detail = body?.detail;
+    /* Field-level problems, when the server checked a form (website settings). */
+    this.problems = Array.isArray(body?.problems) ? body.problems : null;
   }
   /* True when the failure is "an external service is not connected" rather
      than "you did something wrong" — surfaces render these differently. */
@@ -456,6 +458,22 @@ export const quad = {
     return call('POST', '/assets', fd);
   },
   assetUrl: (id) => id ? `${API_BASE}/assets/${id}` : null,
+  assetLimits: () => get('/assets/limits'),
+
+  /* ---------- website settings --------------------------------------------
+     The public pair returns only what is PUBLISHED. The admin calls are
+     permission-checked by the server; `revision` is the draft revision the
+     editor loaded, so a stale save is refused instead of overwriting. */
+  siteConfig: () => get('/site/config'),
+  siteVersion: () => get('/site/version'),
+  adminSite: () => get('/admin/site'),
+  validateSite: (config) => post('/admin/site/validate', { config }),
+  saveSiteDraft: (config, revision) => put('/admin/site/draft', { config, revision }),
+  resetSiteDraft: (revision) => post('/admin/site/draft/reset', { revision }),
+  publishSite: (revision, note) => post('/admin/site/publish', { revision, note }),
+  rollbackSite: (version, note) => post('/admin/site/rollback', { version, note }),
+  siteVersions: () => get('/admin/site/versions'),
+  siteVersionConfig: (v) => get(`/admin/site/versions/${v}`),
 
   /* ---------- assistant --------------------------------------------------- */
   aiStatus: () => get('/ai/status'),

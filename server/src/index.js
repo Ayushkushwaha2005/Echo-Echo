@@ -37,6 +37,7 @@ import trackingRoutes from './routes/tracking.js';
 import adminAccessRoutes from './routes/admin-access.js';
 import geodataRoutes from './routes/geodata.js';
 import adminOpsRoutes from './routes/admin-ops.js';
+import siteRoutes from './routes/site.js';
 
 const boot = assertBootable();
 if (!boot.ok) {
@@ -199,6 +200,8 @@ export function build() {
          publish, and is rate-limited; ordering still needs an account. */
       /^\/ai\/(status|chat)$/, /^\/campuses$/, /^\/partner\/policy$/, /^\/pricing\/current$/,
       /^\/assets\/[0-9a-f-]{36}$/, /^\/assets\/limits$/,
+      /* The PUBLISHED website settings only; drafts are behind /admin/site. */
+      /^\/site\/(config|version)$/,
     ];
 
     app.addHook('preHandler', async (req) => {
@@ -229,7 +232,8 @@ export function build() {
         }).catch(() => {});
       }
       if (err instanceof HttpError) {
-        return reply.code(err.status).send({ error: err.message, code: err.code, detail: err.detail });
+        return reply.code(err.status).send({ error: err.message, code: err.code, detail: err.detail,
+          ...(Array.isArray(err.problems) ? { problems: err.problems } : {}) });
       }
       if (err.validation || err.statusCode === 400) {
         return reply.code(400).send({ error: err.message, code: 'bad_request' });
@@ -363,6 +367,7 @@ export function build() {
     await app.register(adminAccessRoutes);
     await app.register(geodataRoutes);
     await app.register(adminOpsRoutes);
+    await app.register(siteRoutes);
 
     return app;
   })();
