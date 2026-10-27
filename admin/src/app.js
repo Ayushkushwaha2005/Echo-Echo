@@ -3802,7 +3802,7 @@ Object.assign(ACTIONS, WZ_ACTIONS, {
 /* Narrowing the permission list as the owner types. Only hides rows; the
    checked state, and what is saved, is unaffected. */
 document.addEventListener('input', (e) => {
-  if (e.target.matches?.('[data-form="pfPassword"] input[name="password"]')) { paintMeter(e.target.value); return; }
+  if (e.target.matches?.('[data-form="pfNewPw"] input[name="password"]')) { paintMeter(e.target.value); return; }
   const box = e.target.closest?.('[data-perm-search]');
   if (!box) return;
   const want = box.value.trim().toLowerCase();
@@ -3894,7 +3894,7 @@ async function scrProfile() {
       <section class="card pf-card">
         <h2 class="pf-h">Password</h2>
         <p class="pf-help">Last changed ${esc(sec.passwordUpdatedAt ? when(sec.passwordUpdatedAt) : 'never')}. Changing it signs you out everywhere else.</p>
-        <form class="pf-form" data-form="pfPassword" novalidate>
+        <form class="pf-form" data-form="pfNewPw" novalidate>
           ${pwField('currentPassword', 'Current password', 'current-password')}
           ${pwField('password', 'New password', 'new-password')}
           <div class="pw-meter" aria-hidden="true"><span id="pw-bar"></span></div>
@@ -3994,7 +3994,7 @@ async function pfSubmit(form) {
       form.displayName.value = out.displayName;
       refreshIdentity();
       msg('pf-name-msg', 'Saved.');
-    } else if (kind === 'pfPassword') {
+    } else if (kind === 'pfNewPw') {
       if (data.password !== data.again) throw new Error('The two new passwords are not the same.');
       if (String(data.password).length < 12) throw new Error('The new password needs at least 12 characters.');
       await quad.setAdminPassword({ password: data.password, currentPassword: data.currentPassword, code: String(data.code || '').replace(/\D/g, '') });
@@ -4013,7 +4013,7 @@ async function pfSubmit(form) {
       return scrProfile();
     }
   } catch (e) {
-    const where = { pfName: 'pf-name-msg', pfPassword: 'pf-pw-msg', pfReplaceMe: 'pf-rep-msg', pfReplaceNew: 'pf-rep-msg' }[kind];
+    const where = { pfName: 'pf-name-msg', pfNewPw: 'pf-pw-msg', pfReplaceMe: 'pf-rep-msg', pfReplaceNew: 'pf-rep-msg' }[kind];
     msg(where, explain(e), true);
   } finally {
     if (document.body.contains(btn)) btn.disabled = false;
