@@ -199,24 +199,34 @@ function render() {
   root.addEventListener('click', onClick);
   root.addEventListener('submit', onFormSubmit);
   document.addEventListener('click', closeMenusOutside);
+  refreshUnread();
   route();
 }
 
 const initialsOf = (n) => String(n).split(/[\s@.]+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || 'A';
 
-/* The bell's unread dot and the website's live version, refreshed with each
-   page. Both are optional: a failure leaves them blank, never an error. */
-async function refreshTopbar() {
-  refreshUnread();
+/* The topbar's website status (optional: a failure leaves it blank). Moving between pages reuses an answer from
+   the last minute instead of asking again on every click; a save, publish
+   or rollback forces a fresh one, and the Website page paints it from the
+   data it has just loaded. (The unread count has its own minute poll.) */
+const SITE_CHIP_TTL_MS = 60_000;
+let siteChipAt = 0;
+async function refreshTopbar({ force = false } = {}) {
   const box = document.getElementById('site-status');
   if (!box || !allowed('website')) return;
-  try {
-    const d = await quad.adminSite();
+  if (!force && (S.route === 'website' || Date.now() - siteChipAt < SITE_CHIP_TTL_MS)) return;
+  try { paintSiteChip(await quad.adminSite()); } catch { box.innerHTML = ''; }
+}
+function paintSiteChip(d) {
+  const box = document.getElementById('site-status');
+  if (!box) return;
+  siteChipAt = Date.now();
+  {
     const changed = d.draft.revision > 0 && (d.draft.baseVersion !== (d.live?.version ?? null)
       || JSON.stringify(d.draft.config) !== JSON.stringify(d.live?.config ?? d.defaults));
     box.innerHTML = `<button type="button" class="cc-sitechip${changed ? ' is-draft' : ''}" data-route="website"
       title="Website settings">${d.live ? `Website v${d.live.version} live` : 'Website: built-in settings'}${changed ? ' · unpublished draft' : ''}</button>`;
-  } catch { box.innerHTML = ''; }
+  }
 }
 
 function closeMenusOutside(e) {
@@ -235,6 +245,7 @@ const setTitle = (t, sub = '') => {
   document.getElementById('page-sub').textContent = sub;
   const crumb = document.getElementById('crumb-page');
   if (crumb) crumb.textContent = navLabel(S.route);
+  document.title = `${t} · ECHO ECHO ADMIN`;
 };
 
 async function onClick(e) {
@@ -3073,6 +3084,7 @@ async function scrWebsite() {
     return { d, limits };
   }, ({ d, limits }) => {
     W.data = d; W.limits = limits;
+    paintSiteChip(d);
     W.config = structuredClone(d.draft.config);
     W.saved = JSON.stringify(d.draft.config);
     W.revision = d.draft.revision;
@@ -3610,7 +3622,7 @@ async function wzSave(btn) {
   W.data.draft = { ...W.data.draft, revision: out.revision, updatedAt: out.updatedAt, updatedBy: session.me.user.name, config: out.config };
   W.problems = [];
   toast(`Draft saved (revision ${out.revision})`);
-  wzStatus(); wzProblems(); refreshTopbar();
+  wzStatus(); wzProblems(); refreshTopbar({ force: true });
   return out;
 }
 

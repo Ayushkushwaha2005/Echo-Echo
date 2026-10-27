@@ -903,7 +903,7 @@ body { background: var(--cc-c-canvas); color: var(--cc-c-text); font-family: var
 .cc-notif-read { border: 0; background: none; color: var(--cc-c-marker); font-size: 12px; padding: 12px 10px; cursor: pointer; }
 .cc-notifs-more { margin: 4px auto 6px; }
 .panel-retry { display: flex; justify-content: center; margin-top: -8px; }
-@media (max-width: 640px) { .cc-notifs { position: fixed; top: 64px; left: 16px; right: 16px; width: auto; } }
+@media (max-width: 640px) { .cc-notifs { position: fixed; top: 64px; left: 16px; right: 16px; width: auto; min-width: 0; max-width: none; } }
 
 /* ---------- Cafés: a card per café, its own photograph on top ------------------ */
 .cafe-grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
