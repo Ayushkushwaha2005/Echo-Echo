@@ -17,6 +17,7 @@ import {
 import { esc, toggleTheme, restoreTheme, Mark } from '../../packages/ui/kit.js';
 import { lockup } from '../../brand/logo.js';
 import { API_BASE, ApiError } from '../../packages/data/client.js';
+import { ORDER_TABS, TAB_STATE, orderActions, avatarFor, chartGeometry } from '../../packages/ui/order-view.js';
 
 const root = document.getElementById('app');
 restoreTheme();
@@ -36,7 +37,7 @@ gate(root, 'admin', render);
    is a courtesy so nobody stares at a page of refusals. */
 const NAV_GROUPS = [
   ['Operations', [
-    ['overview', 'Overview', 'grid'], ['orders', 'Orders', 'bag'], ['deliveries', 'Live Deliveries', 'route'],
+    ['overview', 'Overview', 'grid'], ['orders', 'Order History', 'bag'], ['deliveries', 'Live Deliveries', 'route'],
     ['cafeterias', 'Cafés', 'store'], ['menu', 'Menu Management', 'menu'],
     ['partners', 'Delivery Partners', 'bike'], ['verification', 'Verification', 'id'],
     ['users', 'Users', 'users'], ['trust', 'Incidents & deposits', 'shield'],
@@ -64,7 +65,7 @@ const NAV_PERM = {
   finance: ['finance.view'], admins: ['admins.view'], platform: ['platform.view'], audit: ['audit.view'],
   payments: ['finance.view'], reports: ['orders.view', 'finance.view'], reliability: ['platform.view'],
   website: ['website.customize', 'website.publish'], deliveries: ['orders.view'],
-  sessions: ['admins.view'],
+  sessions: ['admins.view'], order: ['orders.view'],
 };
 const allowed = (r) => !NAV_PERM[r] || session.can(...NAV_PERM[r]);
 const allowedNav = () => NAV.filter(([r]) => allowed(r));
@@ -98,6 +99,10 @@ const ICON = {
   globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.4 3.5 5.2 3.5 8.5s-1.1 6.1-3.5 8.5c-2.4-2.4-3.5-5.2-3.5-8.5s1.1-6.1 3.5-8.5z"/>',
   moon: '<path d="M19.5 14.5A7.5 7.5 0 019.5 4.5a7.5 7.5 0 1010 10z"/>',
   collapse: '<path d="M14.5 6l-6 6 6 6"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4M7.5 13.5h2M11 13.5h2M14.5 13.5h2M7.5 17h2M11 17h2"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  dots: '<circle cx="12" cy="5.5" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="18.5" r="1.4" fill="currentColor"/>',
+  check: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/>',
 };
 const icon = (k, size = 19) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k] || ''}</svg>`;
 
@@ -196,8 +201,10 @@ async function refreshTopbar() {
 }
 
 function closeMenusOutside(e) {
+  /* An order row's menu closes on any click except the button that opened it. */
+  if (!e.target.closest('.oh-dots')) document.querySelector('.oh-menu')?.remove();
   if (e.target.closest('.cc-profile, .cc-notifs, [data-act="notifications"]')) return;
-  document.querySelectorAll('.cc-menu').forEach((m) => { m.hidden = true; });
+  document.querySelectorAll('.cc-menu:not(.oh-menu)').forEach((m) => { m.hidden = true; });
   document.querySelector('.cc-profile-btn')?.setAttribute('aria-expanded', 'false');
   document.querySelector('.cc-notifs')?.remove();
 }
@@ -230,14 +237,15 @@ const SCREENS = {
   locations: scrLocations, support: scrSupport, finance: scrFinance,
   platform: scrPlatform, audit: scrAudit,
   payments: scrPayments, reliability: scrReliability, reports: scrReports,
-  website: scrWebsite, deliveries: scrDeliveries, sessions: scrSessions,
+  website: scrWebsite, deliveries: scrDeliveries, sessions: scrSessions, order: scrOrderDetail,
 };
 
 /* The current page is marked with aria-current / aria-pressed, which is what
    .railbtn and .chip style. Called on every route change. */
 function markNav() {
+  const here = S.route === 'order' ? 'orders' : S.route;
   root.querySelectorAll('.cc-navbtn[data-route]').forEach((b) => {
-    if (b.dataset.route === S.route) b.setAttribute('aria-current', 'page');
+    if (b.dataset.route === here) b.setAttribute('aria-current', 'page');
     else b.removeAttribute('aria-current');
   });
   document.querySelectorAll('.cc-menu').forEach((m) => { m.hidden = true; });
@@ -1323,43 +1331,267 @@ const ORDER_STATES = ['awaiting_payment', 'confirmed', 'preparing', 'ready', 'as
   'picked_up', 'delivered', 'cancelled', 'refunded'];
 
 async function scrOrders() {
-  setTitle('Orders', 'Every order, searched and filtered on the server. Open one for its full timeline.');
+  setTitle('Order History', 'Every order, searched and filtered on the server. Open one for its details and full timeline.');
   head().innerHTML = '';
   const f = S.orderFilter;
+  const tab = S.orderTab || 'all';
+  const cal = icon('calendar', 18);
   view().innerHTML = `
-    <form class="filterbar" data-form="orders" aria-label="Filter orders">
+    <div class="oh-bar">
+      <nav class="oh-tabs" aria-label="Order views">${ORDER_TABS.map(([k, l]) => `
+        <button type="button" class="oh-tab" data-act="orderTab" data-tab="${k}" ${tab === k ? 'aria-current="page"' : ''}>${esc(l)}</button>`).join('')}
+      </nav>
+      <form class="oh-dates" data-form="orderDates" aria-label="Date range">
+        <label class="oh-date">${cal}<input type="date" name="from" value="${esc(f.from || '')}" aria-label="From date"></label>
+        <span class="oh-to">To</span>
+        <label class="oh-date">${cal}<input type="date" name="to" value="${esc(f.to || '')}" aria-label="To date"></label>
+      </form>
+    </div>
+    ${tab === 'summary' ? '<div id="orders-summary"></div>' : `
+    <form class="oh-filters" data-form="orders" aria-label="Filter orders">
       <input class="input" name="q" placeholder="Order code, student or café" value="${esc(f.q || '')}" aria-label="Search orders">
-      <select class="input" name="state" aria-label="Order state">${optionList(ORDER_STATES, f.state, 'Any state', ORDER_LABEL)}</select>
+      ${tab === 'all' ? `<select class="input" name="state" aria-label="Order state">${optionList(ORDER_STATES, f.state, 'Any state', ORDER_LABEL)}</select>` : ''}
       <select class="input" name="fulfilment" aria-label="Fulfilment">${optionList(['pickup', 'delivery'], f.fulfilment, 'Pickup or delivery')}</select>
       <select class="input" name="payment" aria-label="Payment state">${optionList(['paid', 'pending', 'created', 'failed', 'refunded', 'cancelled'], f.payment, 'Any payment')}</select>
-      <label class="t-xs faint">From <input class="input" type="date" name="from" value="${esc(f.from || '')}"></label>
-      <label class="t-xs faint">To <input class="input" type="date" name="to" value="${esc(f.to || '')}"></label>
       <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
       <button type="button" class="btn btn-ghost btn-sm" data-act="ordersReset">Clear</button>
     </form>
-    <div id="orders-list"></div>`;
-  await paintOrders();
+    <div id="orders-list"></div>`}`;
+  if (tab === 'summary') await paintSummary(); else await paintOrders();
 }
+
+/* The list for the current tab: the tab fixes the state, the form adds to it. */
+const orderQuery = () => {
+  const tab = S.orderTab || 'all';
+  const q = { ...S.orderFilter };
+  if (tab !== 'all') q.state = TAB_STATE[tab];
+  return q;
+};
+
+const STATUS_TONE = { delivered: 'ok', cancelled: 'bad', refunded: 'bad', picked_up: 'warn', assigned: 'warn',
+  ready: 'ink', preparing: 'ink', confirmed: 'ink', awaiting_payment: 'faint', draft: 'faint' };
+const PAY_LABEL_ADMIN = { paid: 'Paid', pending: 'Pending', created: 'Started', failed: 'Failed', refunded: 'Refunded', cancelled: 'Cancelled' };
+const Avatar = (name, size = 34) => {
+  const a = avatarFor(name);
+  return `<span class="oh-avatar" style="width:${size}px;height:${size}px;background:${a.tint}" aria-hidden="true">${esc(a.initials)}</span>`;
+};
+const StatusDot = (state) => `<span class="oh-status tone-${STATUS_TONE[state] || 'ink'}"><span class="oh-dot"></span>${esc(ORDER_LABEL[state] || state)}</span>`;
 
 async function paintOrders() {
   await panel(document.getElementById('orders-list'),
-    () => quad.adminOrders({ ...S.orderFilter, page: S.orderPage, pageSize: 25 }), (d) => {
+    () => quad.adminOrders({ ...orderQuery(), page: S.orderPage, pageSize: 25 }), (d) => {
+      S.orderRows = Object.fromEntries(d.orders.map((o) => [o.id, o]));
       if (!d.orders.length) {
-        return Object.keys(S.orderFilter).length
-          ? EmptyState('No order matches these filters.', 'Clear a filter to widen the search.')
+        return Object.keys(S.orderFilter).length || (S.orderTab && S.orderTab !== 'all')
+          ? EmptyState('No order matches.', 'Change the tab, the dates or a filter to widen the search.')
           : EmptyState('No orders yet.', 'Orders appear here the moment a student starts checkout.');
       }
-      return table(['Code', 'When', 'Cafeteria', 'Student', 'Type', 'State', 'Payment', 'Total', 'Platform fee', ''],
-        d.orders.map((o) => [
-          `<b style="white-space:nowrap">${esc(o.code)}</b>`, when(o.created_at), esc(o.vendor_name), esc(o.customer_name || '—'),
-          esc(o.fulfilment), `<span class="badge badge-ink">${esc(ORDER_LABEL[o.state] || o.state)}</span>`,
-          payBadge(o.payment_status), `<span class="num">${rupees(o.total_paise)}</span>`,
-          `<span class="num">${o.platform_fee_paise == null ? '—' : rupees(o.platform_fee_paise)}</span>`,
-          `<button type="button" class="btn btn-ghost btn-sm" data-act="orderTimeline" data-id="${o.id}">Timeline</button>
-           <button type="button" class="btn btn-ghost btn-sm" data-act="inspectOrder" data-id="${o.id}">Items</button>`,
-        ])) + pager(d, 'ordersPage');
+      return `<div class="oh-table-wrap"><table class="oh-table">
+        <thead><tr><th>Id</th><th>Name</th><th>Payment</th><th>Placed</th><th>Type</th><th>Status</th><th class="num">Total</th><th class="oh-act-col">Action</th></tr></thead>
+        <tbody>${d.orders.map((o) => `
+          <tr data-row="${o.id}">
+            <td><button type="button" class="oh-code" data-act="openOrder" data-id="${o.id}">#${esc(o.code)}</button></td>
+            <td><span class="oh-person">${Avatar(o.customer_name)}<span>${esc(o.customer_name || '—')}<span class="oh-sub">${esc(o.vendor_name)}</span></span></span></td>
+            <td>${esc(PAY_LABEL_ADMIN[o.payment_status] || 'No payment')}</td>
+            <td><span class="oh-when">${icon('clock', 15)}${when(o.created_at)}</span></td>
+            <td class="${o.fulfilment === 'delivery' ? 'oh-delivery' : ''}">${o.fulfilment === 'delivery' ? 'Delivery' : 'Collection'}</td>
+            <td>${StatusDot(o.state)}</td>
+            <td class="num">${rupees(o.total_paise)}</td>
+            <td class="oh-act-col"><button type="button" class="oh-dots" data-act="rowMenu" data-id="${o.id}" aria-haspopup="true" aria-label="Actions for order ${esc(o.code)}">${icon('dots', 18)}</button></td>
+          </tr>`).join('')}</tbody>
+      </table></div>${pager(d, 'ordersPage')}`;
     }, { label: 'Loading orders' });
 }
+
+/* ---------- Summary: the figures and the Graph View ------------------------ */
+async function paintSummary() {
+  const box = document.getElementById('orders-summary');
+  await panel(box, () => quad.adminOrderSummary({ from: S.orderFilter.from, to: S.orderFilter.to }), (d) => {
+    S.summary = d;
+    const t = d.totals;
+    return `
+      <div class="oh-summary">
+        <div class="oh-top">
+          ${bigStat('chart', 'Total Sales', rupees(t.sales_paise), 'gold')}
+          ${bigStat('card', 'Average Order', rupees(t.average_paise), 'blue')}
+          ${bigStat('check', 'Completed', String(t.completed), 'teal')}
+        </div>
+        <section class="oh-graph card">
+          <div class="oh-graph-head">
+            <h2>Graph View</h2>
+            <select class="input oh-metric" data-graph-metric aria-label="Graph shows">
+              <option value="sales" ${S.graphMetric !== 'orders' ? 'selected' : ''}>Sales</option>
+              <option value="orders" ${S.graphMetric === 'orders' ? 'selected' : ''}>Orders</option>
+            </select>
+          </div>
+          <div id="oh-chart"></div>
+        </section>
+        <div class="oh-side">
+          ${bigStat('bag', 'Total Order', String(t.orders), 'grey')}
+          ${bigStat('bike', 'Total Delivery', String(t.delivery), 'grey')}
+          ${bigStat('store', 'Total Collection', String(t.pickup), 'grey')}
+        </div>
+      </div>
+      <p class="t-xs faint oh-note">${esc(d.from)} to ${esc(d.to)}, India time${d.bucket === 'month' ? ', by month' : ', by day'}.
+        Orders count from the moment payment is confirmed; sales leave out cancelled and refunded orders.
+        ${t.cancelled ? `${t.cancelled} cancelled or refunded in this range.` : ''}</p>`;
+  }, { label: 'Loading the summary' });
+  paintChart();
+}
+
+const bigStat = (ic, label, value, tone) => `
+  <div class="oh-stat">
+    <span class="oh-stat-icon tone-${tone}" aria-hidden="true">${icon(ic, 26)}</span>
+    <span class="oh-stat-text"><span class="oh-stat-label">${esc(label)}</span><span class="oh-stat-value">${esc(value)}</span></span>
+  </div>`;
+
+function paintChart() {
+  const box = document.getElementById('oh-chart');
+  if (!box || !S.summary) return;
+  const metric = S.graphMetric === 'orders' ? 'orders' : 'sales';
+  const val = (p) => (metric === 'orders' ? p.orders : p.salesPaise / 100);
+  const g = chartGeometry(S.summary.series, val, { w: 640, h: 300 });
+  const fmt = (v) => (metric === 'orders' ? String(Math.round(v)) : v >= 1000 ? `₹${(v / 1000).toFixed(v >= 10000 ? 0 : 1)}k` : `₹${Math.round(v)}`);
+  const label = (at) => {
+    const d = new Date(`${at}T00:00:00`);
+    return S.summary.bucket === 'month' ? d.toLocaleDateString('en-IN', { month: 'short' }) : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  };
+  const empty = g.pts.every((p) => p.v === 0);
+  const peak = g.peak && g.peak.v > 0 ? g.peak : null;
+  box.innerHTML = `<svg class="oh-svg" viewBox="0 0 ${g.box.w} ${g.box.h}" role="img"
+      aria-label="${metric === 'orders' ? 'Orders' : 'Sales'} from ${esc(S.summary.from)} to ${esc(S.summary.to)}${peak ? `, highest ${esc(fmt(peak.v))} on ${esc(label(peak.at))}` : ''}">
+      ${g.grid.map((l) => `<line x1="${g.box.left}" x2="${g.box.w - g.box.right}" y1="${l.y}" y2="${l.y}" class="oh-gridline"/>
+        <text x="${g.box.left - 8}" y="${l.y + 4}" class="oh-axis" text-anchor="end">${esc(fmt(l.v))}</text>`).join('')}
+      ${g.pts.filter((_, i) => i % Math.max(1, Math.ceil(g.pts.length / 6)) === 0).map((p) => `<line x1="${p.x}" x2="${p.x}" y1="${g.box.top}" y2="${g.box.h - g.box.bottom}" class="oh-gridline v"/>`).join('')}
+      ${g.labels.map((p) => `<text x="${p.x}" y="${g.box.h - 8}" class="oh-axis" text-anchor="middle">${esc(label(p.at))}</text>`).join('')}
+      <path d="${g.d}" class="oh-line"/>
+      ${peak ? `<g class="oh-peak"><line x1="${peak.x}" x2="${peak.x}" y1="${peak.y}" y2="${g.box.h - g.box.bottom}" class="oh-marker"/>
+        <circle cx="${peak.x}" cy="${peak.y}" r="6" class="oh-point"/>
+        <rect x="${peak.x - 26}" y="${peak.y - 32}" width="52" height="20" rx="10" class="oh-tip"/>
+        <text x="${peak.x}" y="${peak.y - 18}" text-anchor="middle" class="oh-tiptext">${esc(fmt(peak.v))}</text></g>` : ''}
+      ${g.pts.map((p) => `<circle cx="${p.x}" cy="${p.y}" r="10" class="oh-hit"><title>${esc(label(p.at))}: ${esc(fmt(p.v))}</title></circle>`).join('')}
+    </svg>${empty ? '<p class="t-sm muted oh-empty">No placed orders in this range yet.</p>' : ''}`;
+}
+
+/* ---------- the order page: two columns, as in the reference ---------------- */
+async function scrOrderDetail() {
+  const id = S.orderId;
+  setTitle('Order', '');
+  head().innerHTML = '<button type="button" class="btn btn-ghost btn-sm" data-route="orders">← Order History</button>';
+  await panel(view(), async () => {
+    const [o, t] = await Promise.all([quad.order(id), quad.orderTimeline(id)]);
+    return { o, t };
+  }, ({ o, t }) => {
+    const ord = o.order;
+    const f = t.financials || o.financials || null;
+    const addr = ord.delivery_address || null;
+    const dest = ord.destination_snapshot || null;
+    const carrying = ['assigned', 'picked_up'].includes(ord.state);
+    document.getElementById('page-title').innerHTML = `Order Number <span class="od-code">#${esc(ord.code)}</span>`;
+    document.getElementById('crumb-page').textContent = `Order History / #${ord.code}`;
+    const row = (k, v) => (v == null || v === '' ? '' : `<div class="od-row"><span>${esc(k)}</span><b>${v}</b></div>`);
+    const money = (p) => (p == null ? '—' : rupees(p));
+    const refundable = orderActions({ ...ord, payment_status: o.payment?.status }, (p) => session.can(p)).some((a) => a.act === 'refund');
+    return `<div class="od">
+      <div class="od-main">
+        <section class="card od-card">
+          <table class="od-items">
+            <thead><tr><th>Items summary</th><th>QTY</th><th class="num">Price</th><th class="num">Total Price</th></tr></thead>
+            <tbody>${o.items.map((i) => `<tr>
+              <td><span class="od-item">${Avatar(i.name_snapshot, 30)}${esc(i.name_snapshot)}</span></td>
+              <td>× ${i.qty}</td><td class="num">${rupees(i.unit_paise_snapshot)}</td><td class="num">${rupees(i.line_paise)}</td></tr>`).join('')}</tbody>
+          </table>
+        </section>
+        <section class="card od-card">
+          <h2 class="od-h">Customer And Order Details</h2>
+          ${row('Customer Name', esc(t.order.customer_name || '—'))}
+          ${row('Phone Number', ord.delivery_contact_phone ? esc(ord.delivery_contact_phone) : '—')}
+          ${row('Café', esc(t.order.vendor_name))}
+          ${row('Type', ord.fulfilment === 'delivery' ? 'Delivery' : 'Collection')}
+          ${row('Placed via', esc(ord.placed_via || 'website'))}
+          ${row('Note', esc(addr?.instructions || 'N/A'))}
+        </section>
+        <section class="card od-card">
+          <h2 class="od-h">Timeline</h2>
+          <ol class="timeline">${t.timeline.map((e) => `<li>
+            <span class="t-xs faint">${esc(new Date(e.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}</span>
+            <span class="chip chip-soft">${esc(TIMELINE_KIND[e.kind] || e.kind)}</span>
+            ${esc(e.label)}${e.amountPaise ? ` · ${rupees(e.amountPaise)}` : ''}${e.by ? ` · ${esc(e.by)}` : ''}${
+              e.outcome && e.outcome !== 'ok' ? ` · <b>${esc(e.outcome)}</b>` : ''}${e.note ? `<div class="t-xs faint">${esc(e.note)}</div>` : ''}</li>`).join('')
+            || '<li class="t-sm muted">Nothing recorded yet.</li>'}</ol>
+        </section>
+      </div>
+      <aside class="od-side">
+        ${ord.fulfilment === 'delivery' ? `<section class="card od-card od-rider">
+          <h2 class="od-h">Rider Details</h2>
+          ${ord.partner_id ? `<div class="od-rider-row">
+              <span class="od-rider-avatar">${Avatar(t.order.partner_name || 'Partner', 56)}${session.can('partners.view')
+                ? `<img class="od-rider-photo" src="${esc(quad.adminPartnerPhotoUrl(ord.partner_id))}" alt="" data-fallback="hide">` : ''}</span>
+              <b class="od-rider-name">${esc(t.order.partner_name || 'Assigned partner')}</b>
+              ${carrying ? '<button type="button" class="btn od-track" data-act="goDeliveries">Track Rider</button>' : ''}
+            </div>${!t.order.partner_name ? '<p class="t-xs faint">The name needs the partners.view permission.</p>' : ''}`
+            : '<p class="t-sm muted">No partner assigned yet.</p>'}
+        </section>` : ''}
+        <section class="card od-card">
+          <div class="between"><h2 class="od-h" style="margin:0">Order summary</h2>${StatusDot(ord.state)}</div>
+          ${row('Order Created', esc(new Date(ord.created_at).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })))}
+          ${row('Order Time', esc(new Date(ord.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })))}
+          ${row('Subtotal', money(f?.food_subtotal_paise ?? ord.subtotal_paise))}
+          ${row('Delivery Fee', money(f?.delivery_fee_paise ?? ord.delivery_paise))}
+          ${f ? row('Platform Fee', money(f.platform_fee_paise)) : ''}
+        </section>
+        <section class="card od-card od-total"><div class="od-row"><span>Total</span><b>${rupees(ord.total_paise)}</b></div></section>
+        ${ord.fulfilment === 'delivery' ? `<section class="card od-card">
+          <h2 class="od-h">Delivery Address</h2>
+          ${row('Place', esc(dest?.name || addr?.label || '—'))}
+          ${row('Block', esc(addr?.block || ''))}${row('Floor', esc(addr?.floor || ''))}${row('Room', esc(addr?.room || ''))}
+          ${row('Landmark', esc(addr?.landmark || ''))}
+        </section>` : ''}
+        <section class="card od-card">
+          <h2 class="od-h">Payment</h2>
+          ${o.payment ? `${row('Status', esc(PAY_LABEL_ADMIN[o.payment.status] || o.payment.status))}${row('Provider', esc(o.payment.provider))}${row('Amount', rupees(o.payment.amount_paise))}`
+            : '<p class="t-sm muted">No payment recorded.</p>'}
+          ${refundable ? `<button type="button" class="btn btn-danger btn-sm" data-act="refund" data-id="${ord.id}" style="margin-top:10px">Refund this order</button>` : ''}
+        </section>
+      </aside>
+    </div>`;
+  }, { label: 'Loading the order' });
+}
+
+/* The ⋮ menu: built from orderActions() for this administrator. */
+function rowMenu(t) {
+  const open = document.querySelector('.oh-menu');
+  const same = open?.dataset.for === t.dataset.id;
+  open?.remove();
+  if (same) return;
+  const o = S.orderRows?.[t.dataset.id];
+  if (!o) return;
+  const items = orderActions(o, (p) => session.can(p));
+  const m = el(`<div class="cc-menu oh-menu" role="menu" data-for="${o.id}">${items.map((a) => `
+    <button type="button" role="menuitem" class="cc-menu-item${a.danger ? ' danger' : ''}" data-act="${a.act}" data-id="${o.id}" data-code="${esc(o.code)}">${esc(a.label)}</button>`).join('')}</div>`);
+  /* On <body>, fixed to the button: inside the table's scroll box it would
+     be clipped. It has its own click listener for the same reason. */
+  document.body.append(m);
+  const r = t.getBoundingClientRect();
+  const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.right - w))}px`;
+  m.style.top = `${r.bottom + 6 + h > innerHeight ? Math.max(8, r.top - h - 6) : r.bottom + 6}px`;
+  m.addEventListener('click', onClick);
+  m.querySelector('button')?.focus();
+}
+document.addEventListener('scroll', () => document.querySelector('.oh-menu')?.remove(), { passive: true, capture: true });
+
+const ORDER_ACTIONS = {
+  orderTab: (t) => { S.orderTab = t.dataset.tab; S.orderPage = 1; return scrOrders(); },
+  rowMenu: (t) => rowMenu(t),
+  openOrder: (t) => { document.querySelector('.oh-menu')?.remove(); S.orderId = t.dataset.id; S.route = 'order'; route(); },
+  goDeliveries: () => { document.querySelector('.oh-menu')?.remove(); S.route = 'deliveries'; route(); },
+  copyCode: async (t) => {
+    document.querySelector('.oh-menu')?.remove();
+    try { await navigator.clipboard.writeText(t.dataset.code); toast(`Copied ${t.dataset.code}`); }
+    catch { toast(`Order code: ${t.dataset.code}`); }
+  },
+};
 
 const TIMELINE_KIND = { state: 'Status', payment: 'Payment', refund: 'Refund', webhook: 'Gateway webhook', audit: 'Audit' };
 
@@ -1508,10 +1740,13 @@ function onFormSubmit(e) {
   if (form.dataset.form === 'search') {
     const q = String(new FormData(form).get('q') || '').trim();
     if (!session.can('orders.view')) return toast('Searching orders needs the orders.view permission.', 'bad');
-    S.orderFilter = q ? { q } : {}; S.orderPage = 1; S.route = 'orders'; route();
+    S.orderFilter = q ? { q } : {}; S.orderTab = 'all'; S.orderPage = 1; S.route = 'orders'; route();
     return;
   }
-  if (form.dataset.form === 'orders') { S.orderFilter = formValues(form); S.orderPage = 1; paintOrders(); }
+  if (form.dataset.form === 'orders') {
+    S.orderFilter = { ...formValues(form), from: S.orderFilter.from, to: S.orderFilter.to };
+    S.orderPage = 1; paintOrders();
+  }
   else if (form.dataset.form === 'payments') { S.payFilter = formValues(form); S.payPage = 1; paintPayments(); }
   else if (form.dataset.form === 'report') downloadReport(form);
 }
@@ -1564,7 +1799,19 @@ function lockScroll() {
   document.body.style.overflow = document.querySelector('.modalwrap') ? 'hidden' : '';
 }
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.querySelector('.oh-menu')) { document.querySelector('.oh-menu').remove(); return; }
   if (e.key === 'Escape' && document.querySelector('.modalwrap')) closeModal();
+});
+
+/* The date chips and the Graph View's metric apply as soon as they change. */
+document.addEventListener('change', (e) => {
+  const d = e.target.closest?.('.oh-dates input');
+  if (d) {
+    S.orderFilter = { ...S.orderFilter, [d.name]: d.value || undefined };
+    S.orderPage = 1;
+    return (S.orderTab === 'summary' ? paintSummary : paintOrders)();
+  }
+  if (e.target.matches?.('[data-graph-metric]')) { S.graphMetric = e.target.value; paintChart(); }
 });
 
 const field = (name, label, value = '', type = 'text') => `
@@ -2308,8 +2555,9 @@ ${added.length ? `Grant: ${added.join(', ')}
   refund: async (t) => {
     const reason = prompt('Refund reason (recorded in the audit log):');
     if (!reason) return;
-    await act(t, () => quad.refund(t.dataset.id, reason), { ok: 'Refund issued' });
+    const out = await act(t, () => quad.refund(t.dataset.id, reason), { ok: 'Refund issued' });
     closeModal();
+    if (out && ['orders', 'order'].includes(S.route)) route();
   },
 
   /* ---- platform ---- */
@@ -3448,3 +3696,4 @@ document.addEventListener('input', (e) => {
   form.querySelectorAll('[data-perm-row]').forEach((r) => { r.hidden = want && !r.dataset.permRow.includes(want); });
   form.querySelectorAll('[data-perm-group]').forEach((g) => { g.hidden = ![...g.querySelectorAll('[data-perm-row]')].some((r) => !r.hidden); });
 });
+Object.assign(ACTIONS, ORDER_ACTIONS);

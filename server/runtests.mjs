@@ -59,6 +59,7 @@ const FILES = [
   ['e2e', 'test/cafe-list-speed.test.mjs'],
   ['e2e', 'test/tracking-privacy.test.mjs'],
   ['e2e', 'test/site-config.test.mjs'],
+  ['e2e', 'test/order-history.test.mjs'],
   ['e2e', 'test/tulips-name.test.mjs'],
   ['e2e', 'test/agent.test.mjs'],
   ['security', 'test/security.test.mjs'],

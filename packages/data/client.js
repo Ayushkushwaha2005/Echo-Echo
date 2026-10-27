@@ -170,6 +170,7 @@ export const quad = {
   /* ---------- Campus Control operations (server-paged, server-checked) ---- */
   adminOrders: (opts) => get('/admin/orders' + qs(opts)),
   orderTimeline: (id) => get(`/admin/orders/${id}/timeline`),
+  adminOrderSummary: (opts) => get('/admin/orders/summary' + qs(opts)),
   adminPayments: (opts) => get('/admin/payments' + qs(opts)),
   adminWebhooks: (days) => get('/admin/webhooks' + qs({ days })),
   reliability: () => get('/admin/reliability'),
