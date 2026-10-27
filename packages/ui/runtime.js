@@ -72,14 +72,18 @@ export async function gate(root, surface, render) {
   }
   session.me = me;
 
-  /* An administrator signed in without a passkey (email code, or a recovery
-     code): the surface opens only after the passkey step. The server holds
-     the role back until then, so this is the honest next screen rather than
-     a wall of 403s. */
-  if (!me.surfaces.includes(surface) &&
-      (me.passkey?.adminSurfacesPending?.includes(surface) || me.passkey?.recoverySession)) {
+  /* An administrator signed in with only their student email code: the
+     server holds the platform role back from that session, so the honest
+     next screen is setting up (or going to) the real Campus Control sign-in
+     - password plus authenticator code - rather than a wall of 403s. A
+     legacy passkey recovery session keeps the passkey step it was made for. */
+  if (!me.surfaces.includes(surface) && me.passkey?.recoverySession) {
     const { mountPasskeyStep } = await import('./passkey.js');
     return mountPasskeyStep(root, { onDone: () => location.reload() });
+  }
+  if (!me.surfaces.includes(surface) && me.passkey?.adminSurfacesPending?.includes(surface)) {
+    const { mountAdminEnrol } = await import('./admin-enrol.js');
+    return mountAdminEnrol(root);
   }
 
   if (!me.surfaces.includes(surface)) {

@@ -926,3 +926,15 @@ textarea.input { resize: vertical; min-height: 72px; }
 .role-foot { text-align: center; color: var(--text-muted); font-size: var(--t-xs); margin: 0; }
 .role-foot a { color: var(--accent-text); font-weight: var(--w-semibold); }
 @media (prefers-reduced-motion: reduce) { .role-card, .role-arrow { transition: none; } }
+
+/* ---------- Campus Control authenticator enrolment ------------------------
+   The QR code and the typed-out key, shown once to the signed-in account. */
+.enrol-card { max-width: 420px; }
+.enrol-qr { display: grid; place-items: center; padding: 14px; margin: 6px auto; background: #fff; border-radius: 14px;
+  border: 1px solid var(--line); width: 232px; max-width: 100%; }
+.enrol-qr svg { width: 200px; height: 200px; display: block; }
+.enrol-key summary { cursor: pointer; font-size: var(--t-sm); color: var(--accent-text); font-weight: var(--w-semibold); }
+.enrol-secret, .enrolcode { display: block; font-family: var(--font-mono); font-size: 1rem; letter-spacing: .08em;
+  word-break: break-all; background: var(--bg-sunken); border-radius: 10px; padding: 10px 12px; user-select: all; }
+.enrol-recovery { margin-top: 14px; }
+.enrol-recovery code { font-family: var(--font-mono); font-size: .85em; }

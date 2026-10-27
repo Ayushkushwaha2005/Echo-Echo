@@ -12,12 +12,13 @@
    ========================================================================== */
 import {
   quad, session, gate, el, panel, toast, act, explain, rupees, ratingLabel,
-  vendorVM, EmptyState, NotConfigured, Loading, ErrorState, signOut, when, ORDER_LABEL,
+  vendorVM, EmptyState, NotConfigured, Loading, ErrorState, signOut, when, ORDER_LABEL, adminReauth,
 } from '../../packages/ui/runtime.js';
 import { esc, toggleTheme, restoreTheme, Mark } from '../../packages/ui/kit.js';
 import { lockup } from '../../brand/logo.js';
 import { API_BASE, ApiError } from '../../packages/data/client.js';
 import { ORDER_TABS, TAB_STATE, orderActions, avatarFor, chartGeometry } from '../../packages/ui/order-view.js';
+import { qrSvg, groupKey } from '../../packages/ui/admin-enrol.js';
 
 const root = document.getElementById('app');
 restoreTheme();
@@ -2055,11 +2056,18 @@ ${added.length ? `Grant: ${added.join(', ')}
     if (!confirm('Set up a new authenticator? The one you use now stops working as soon as you confirm the new one.')) return;
     let out;
     try { out = await quad.beginAuthenticator(); }
-    catch (e) { return toast(explain(e), 'bad'); }
+    catch (e) {
+      /* Replacing a working authenticator needs a fresh password + code. */
+      if (e instanceof ApiError && e.code === 'reauth_required') {
+        try { await adminReauth(); out = await quad.beginAuthenticator(); } catch (e2) { return toast(explain(e2), 'bad'); }
+      } else return toast(explain(e), 'bad');
+    }
+    const qr = await qrSvg(out.uri);
     modal('Set up your authenticator', `
-      <p class="t-sm muted">In Microsoft Authenticator — or any authenticator app — choose
-        <b>Add account → Other account → Enter key manually</b>, then type this key.</p>
-      <div class="enrolcode">${esc(out.secret)}</div>
+      <p class="t-sm muted">In Microsoft Authenticator choose <b>Add account → Other account</b> and scan this code,
+        or choose <b>Enter code manually</b> and type the key below.</p>
+      ${qr ? `<div class="enrol-qr">${qr}</div>` : ''}
+      <div class="enrolcode">${esc(groupKey(out.secret))}</div>
       <p class="t-xs faint">Account name: ${esc(out.issuer)} · ${out.digits} digits · a new code every ${out.periodSeconds} seconds.
         This key is shown once. It is stored encrypted and nothing can read it back.</p>
       <label class="t-label" style="margin-top:12px;display:block">Code the app is showing now</label>
