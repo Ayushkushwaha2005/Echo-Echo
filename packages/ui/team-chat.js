@@ -162,6 +162,10 @@ export function mountChat(box, { quad, staff = false, toast = () => {}, explain 
               <button type="button" class="chat-seg-btn" data-kind="group" aria-pressed="false">Group</button></div>` : ''}
             <label class="field chat-title-field" ${group ? '' : 'hidden'}><span class="t-label">Group name</span>
               <input class="input" name="title" maxlength="80" placeholder="e.g. Evening delivery shift"></label>
+            ${audience === 'cafes' ? `<div class="chat-seg" role="group" aria-label="Who at the café">
+              <button type="button" class="chat-seg-btn" data-role="" aria-pressed="true">Owners and staff</button>
+              <button type="button" class="chat-seg-btn" data-role="owner" aria-pressed="false">Owners</button>
+              <button type="button" class="chat-seg-btn" data-role="staff" aria-pressed="false">Staff</button></div>` : ''}
             <label class="field"><span class="t-label">Search</span><input class="input" name="q" placeholder="Name${audience === 'cafes' ? ' or café' : ''}" autocomplete="off"></label>
             <div class="chat-people" role="group" aria-label="People"><p class="chat-empty">Loading…</p></div>
             <p class="t-xs muted chat-pick-msg" role="alert"></p>
@@ -171,6 +175,7 @@ export function mountChat(box, { quad, staff = false, toast = () => {}, explain 
         </form>`;
       document.body.append(wrap);
       let kind = group ? 'group' : 'direct';
+      let role = '';
       const chosen = new Set();
       const list = wrap.querySelector('.chat-people');
       const msg = wrap.querySelector('.chat-pick-msg');
@@ -179,7 +184,7 @@ export function mountChat(box, { quad, staff = false, toast = () => {}, explain 
       async function search() {
         const mine = ++seq;
         try {
-          const r = await quad.chatPeople(audience, wrap.querySelector('[name=q]').value.trim());
+          const r = await quad.chatPeople(audience, wrap.querySelector('[name=q]').value.trim(), role || undefined);
           if (mine !== seq) return;
           const people = r.people.filter((p) => !existing.includes(p.id));
           list.innerHTML = people.length ? people.map((p) => `
@@ -196,6 +201,12 @@ export function mountChat(box, { quad, staff = false, toast = () => {}, explain 
       });
       wrap.addEventListener('click', (e) => {
         if (e.target.closest('[data-x="cancel"]')) return done(null);
+        const rb = e.target.closest('[data-role]');
+        if (rb) {
+          role = rb.dataset.role;
+          wrap.querySelectorAll('[data-role]').forEach((b) => b.setAttribute('aria-pressed', String(b === rb)));
+          search(); return;
+        }
         const k = e.target.closest('[data-kind]');
         if (k) {
           kind = k.dataset.kind; chosen.clear();

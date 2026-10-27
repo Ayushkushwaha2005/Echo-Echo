@@ -457,7 +457,7 @@ export const quad = {
   markAllRead: () => post('/notifications/read', {}),
 
   /* Team Chat: membership is checked on the server for every call. */
-  chatPeople: (audience, q) => get('/chat/people' + qs({ audience, q: q || undefined })),
+  chatPeople: (audience, q, role) => get('/chat/people' + qs({ audience, q: q || undefined, role })),
   chatConversations: (audience) => get('/chat/conversations' + qs({ audience })),
   chatStart: (body) => post('/chat/conversations', body),
   chatMessages: (id, o = {}) => get(`/chat/conversations/${encodeURIComponent(id)}/messages` + qs({ after: o.after, before: o.before, limit: o.limit })),

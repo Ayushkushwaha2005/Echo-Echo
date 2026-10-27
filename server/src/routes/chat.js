@@ -55,19 +55,20 @@ function mayReach(actor, audience) {
 
 /* People on one side of the platform, by audience. */
 const PEOPLE_SQL = {
-  staff: `SELECT DISTINCT u.id, ${NAME} AS name, 'Campus Control' AS detail, NULL::uuid AS vendor_id
+  staff: `SELECT DISTINCT u.id, ${NAME} AS name, 'Campus Control' AS detail, NULL::uuid AS vendor_id, 'staff' AS kind
             FROM app_user u JOIN user_role r ON r.user_id = u.id AND r.status = 'active'
                  AND r.role IN ('platform_owner','platform_admin','support')
             LEFT JOIN admin_account aa ON aa.user_id = u.id
             LEFT JOIN admin_profile ap ON ap.user_id = u.id
            WHERE u.status = 'active' AND (aa.status IS NULL OR aa.status = 'active')`,
-  partners: `SELECT DISTINCT u.id, ${NAME} AS name, 'Delivery partner' AS detail, NULL::uuid AS vendor_id
+  partners: `SELECT DISTINCT u.id, ${NAME} AS name, 'Delivery partner' AS detail, NULL::uuid AS vendor_id, 'partner' AS kind
                FROM app_user u JOIN user_role r ON r.user_id = u.id AND r.status = 'active' AND r.role = 'delivery_partner'
                JOIN partner_profile pp ON pp.user_id = u.id AND pp.status = 'approved'
                LEFT JOIN admin_profile ap ON ap.user_id = u.id
               WHERE u.status = 'active'`,
   cafes: `SELECT DISTINCT u.id, ${NAME} AS name,
-                 v.name || CASE r.role WHEN 'vendor_owner' THEN ' · owner' ELSE ' · staff' END AS detail, r.vendor_id
+                 v.name || CASE r.role WHEN 'vendor_owner' THEN ' · owner' ELSE ' · staff' END AS detail, r.vendor_id,
+                 CASE r.role WHEN 'vendor_owner' THEN 'owner' ELSE 'staff' END AS kind
             FROM app_user u JOIN user_role r ON r.user_id = u.id AND r.status = 'active' AND r.role IN ('vendor_owner','vendor_staff')
             JOIN vendor v ON v.id = r.vendor_id AND v.active
             LEFT JOIN admin_profile ap ON ap.user_id = u.id
@@ -112,10 +113,14 @@ export default async function chatRoutes(app) {
     if (!AUDIENCES.includes(audience)) throw BadRequest('audience must be staff, partners or cafes');
     mayReach(a, audience);
     const term = String(req.query?.q || '').trim().slice(0, 60);
+    /* Cafés: owners and counter staff can be reached separately. */
+    const role = req.query?.role ? String(req.query.role) : null;
+    if (role && (audience !== 'cafes' || !['owner', 'staff'].includes(role))) throw BadRequest('role is owner or staff, for cafés only');
     const { rows } = await q(
-      `SELECT id, name, detail, vendor_id AS "vendorId" FROM (${PEOPLE_SQL[audience]}) p
+      `SELECT DISTINCT ON (p.name, p.id) id, name, detail, vendor_id AS "vendorId", kind FROM (${PEOPLE_SQL[audience]}) p
         WHERE p.id <> $1 AND ($2 = '' OR p.name ILIKE '%' || $2 || '%' OR p.detail ILIKE '%' || $2 || '%')
-        ORDER BY p.name LIMIT 50`, [a.id, term]);
+          AND ($3::text IS NULL OR p.kind = $3)
+        ORDER BY p.name, p.id LIMIT 50`, [a.id, term, role]);
     return { people: rows };
   });
 

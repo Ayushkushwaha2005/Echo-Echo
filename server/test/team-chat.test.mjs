@@ -116,6 +116,11 @@ test('a café conversation stays inside one café', async () => {
   const aStaff = await cafeStaff('Tulips Staff', a.id, 'vendor_staff');
   const bOwner = await cafeStaff('Chai Owner', b.id);
   const co = await as(o);
+  const ids = async (qs) => (await co.get(`/chat/people?audience=cafes${qs}`)).body.people.map((p) => p.id).sort();
+  assert.deepEqual(await ids('&role=owner'), [aOwner.id, bOwner.id].sort(), 'owners only');
+  assert.deepEqual(await ids('&role=staff'), [aStaff.id], 'counter staff only');
+  assert.equal((await ids('')).length, 3);
+  assert.equal((await co.get('/chat/people?audience=partners&role=owner')).status, 400, 'the role filter is for cafés');
 
   assert.equal((await co.post('/chat/conversations', { audience: 'cafes', title: 'Mixed', memberIds: [aOwner.id, bOwner.id] })).status, 400);
   const g = await co.post('/chat/conversations', { audience: 'cafes', title: 'Tulips counter', memberIds: [aOwner.id, aStaff.id] });
