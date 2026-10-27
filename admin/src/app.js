@@ -19,6 +19,7 @@ import { lockup, mark } from '../../brand/logo.js';
 import { API_BASE, ApiError } from '../../packages/data/client.js';
 import { ORDER_TABS, TAB_STATE, orderActions, avatarFor, chartGeometry } from '../../packages/ui/order-view.js';
 import { qrSvg, groupKey } from '../../packages/ui/admin-enrol.js';
+import { passwordStrength } from '../../packages/ui/password-strength.js';
 
 const root = document.getElementById('app');
 restoreAdminTheme();
@@ -50,7 +51,7 @@ const NAV_GROUPS = [
     ['reports', 'Reports', 'chart'],
   ]],
   ['Access & system', [
-    ['admins', 'Access Management', 'key'], ['sessions', 'Sessions', 'device'],
+    ['profile', 'My Profile', 'user'], ['admins', 'Access Management', 'key'], ['sessions', 'Sessions', 'device'],
     ['audit', 'Audit Logs', 'log'], ['reliability', 'System Health', 'pulse'], ['platform', 'Platform settings', 'cog'],
   ]],
 ];
@@ -94,6 +95,7 @@ const ICON = {
   log: '<path d="M6 3.5h9l3 3v14H6z"/><path d="M15 3.5v3h3M9 11h6M9 14.5h6M9 18h3"/>',
   pulse: '<path d="M3 12h4l2.5-6 4 12 2.5-6h5"/>',
   cog: '<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M20.5 12h-2.2M5.7 12H3.5M18 6l-1.6 1.6M7.6 16.4L6 18M18 18l-1.6-1.6M7.6 7.6L6 6"/>',
+  user: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 19.5c1-3.4 3.8-5 7-5s6 1.6 7 5"/>',
   bell: '<path d="M6 16.5V11a6 6 0 0112 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 004 0"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>',
   out: '<path d="M14 4.5h4.5v15H14M10 8l-4 4 4 4M6 12h9.5"/>',
@@ -128,7 +130,7 @@ function render() {
   try { collapsed = localStorage.getItem('cc-rail') === 'collapsed'; } catch { /* storage blocked */ }
   /* One source for the signed-in administrator's name: My Profile's display
      name from /auth/me, falling back to the account's own name. */
-  const name = session.me.adminProfile?.displayName || session.me.user.name || session.me.user.email || 'Administrator';
+  const name = myName();
   const role = session.roles.map((r) => ROLE_LABEL[r]).filter(Boolean)[0] || 'Staff';
   root.innerHTML = `
     <div class="cc${collapsed ? ' cc-collapsed' : ''}">
@@ -162,13 +164,13 @@ function render() {
               <button type="button" class="cc-iconbtn" data-act="notifications" aria-label="Notifications" aria-haspopup="true">${icon('bell')}<span class="cc-dot" id="notif-dot" hidden></span></button>
               <div class="cc-profile">
                 <button type="button" class="cc-profile-btn" data-act="profileMenu" aria-haspopup="true" aria-expanded="false">
-                  <span class="cc-avatar">${esc(initialsOf(name))}</span>
-                  <span class="cc-profile-text"><span class="cc-profile-name">${esc(name)}</span><span class="cc-profile-role">${esc(role)}</span></span>
+                  <span data-me-avatar data-size="38">${AvatarOf()}</span>
+                  <span class="cc-profile-text"><span class="cc-profile-name" data-me-name>${esc(name)}</span><span class="cc-profile-role">${esc(role)}</span></span>
                 </button>
                 <div class="cc-menu" id="profile-menu" hidden>
-                  <div class="cc-menu-head"><b>${esc(name)}</b><span class="t-xs muted">${esc(session.me.user.email || '')}</span>
+                  <div class="cc-menu-head"><b data-me-name>${esc(name)}</b><span class="t-xs muted">${esc(session.me.user.studentEmail || '')}</span>
                     <span class="t-xs muted">${esc(session.roles.map((r) => ROLE_LABEL[r] || r).join(' · '))} · password and authenticator session</span></div>
-                  <button type="button" class="cc-menu-item" data-route="admins">${icon('key', 17)} Your sign-in and access</button>
+                  <button type="button" class="cc-menu-item" data-route="profile">${icon('user', 17)} My Profile</button>
                   <button type="button" class="cc-menu-item" data-act="theme">${icon('moon', 17)} Light or dark</button>
                   <button type="button" class="cc-menu-item danger" data-act="signout">${icon('out', 17)} Sign out</button>
                 </div>
@@ -178,7 +180,7 @@ function render() {
           <div class="cc-panel">
             <div class="cc-pagehead">
               <div class="cc-pagehead-text">
-                <nav class="cc-crumbs" aria-label="Breadcrumb"><span>Campus Control</span><span aria-hidden="true">/</span><span id="crumb-page">${esc(navLabel(S.route))}</span></nav>
+                <nav class="cc-crumbs" aria-label="Breadcrumb"><span>Admin</span><span aria-hidden="true">/</span><span id="crumb-page">${esc(navLabel(S.route))}</span></nav>
                 <h1 class="cc-title" id="page-title"></h1>
                 <p class="cc-sub" id="page-sub"></p>
               </div>
@@ -252,7 +254,7 @@ const SCREENS = {
   locations: scrLocations, support: scrSupport, finance: scrFinance,
   platform: scrPlatform, audit: scrAudit,
   payments: scrPayments, reliability: scrReliability, reports: scrReports,
-  website: scrWebsite, deliveries: scrDeliveries, sessions: scrSessions, order: scrOrderDetail,
+  website: scrWebsite, deliveries: scrDeliveries, sessions: scrSessions, order: scrOrderDetail, profile: scrProfile,
 };
 
 /* The current page is marked with aria-current / aria-pressed, which is what
@@ -1002,27 +1004,120 @@ async function scrAdmins() {
 
 /* Permission picker, grouped as the server's catalogue is. Owner-only
    permissions are shown locked so nothing is silently missing. */
-function permissionPicker(catalog, selected = []) {
-  return `
-    <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">
-      <span class="t-xs muted">Start from:</span>
-      ${catalog.presets.map((p) => `<button type="button" class="btn btn-ghost btn-sm" data-act="applyPreset" data-perms="${esc(p.permissions.join(','))}">${esc(p.label)}</button>`).join('')}
-      <button type="button" class="btn btn-ghost btn-sm" data-act="applyPreset" data-perms="">None</button>
+/* What each assignable role carries, stated from the server's own rules
+   (auth/rbac.js CAPS). A café role's abilities come WITH the role and are
+   fixed; an administrator's come only from the permissions ticked for them. */
+const ROLE_CARDS = [
+  { role: 'vendor_owner', title: 'Café owner', scope: 'cafe',
+    body: 'Runs one café at the counter.',
+    inherits: ['Edit the menu, prices, availability and photos', 'Open, pause and close the café', 'See and move this café\'s orders',
+      'Add and remove this café\'s staff', 'See this café\'s own takings and settlements'] },
+  { role: 'vendor_staff', title: 'Café staff', scope: 'cafe',
+    body: 'Works one café\'s counter.',
+    inherits: ['See and move this café\'s orders', 'Mark menu items available or sold out'] },
+  { role: 'platform_admin', title: 'Administrator', scope: 'platform', ownerOnly: true,
+    body: 'Campus Control, with exactly the permissions you tick. Nothing is ticked to start with.' },
+  { role: 'support', title: 'Support', scope: 'platform', ownerOnly: true,
+    body: 'Campus Control for answering students, with exactly the permissions you tick.' },
+];
+
+async function assignRoleDialog() {
+  let vendors = [];
+  try { vendors = (await quad.vendors()).vendors || []; } catch { /* listed below as unavailable */ }
+  const owner = session.isOwner;
+  const m = modal('Assign a role', `
+    <fieldset class="role-pick" aria-label="Role">
+      ${ROLE_CARDS.map((r, i) => {
+        const locked = r.ownerOnly && !owner;
+        return `<label class="role-opt${locked ? ' is-locked' : ''}">
+          <input type="radio" name="role" value="${r.role}" ${i === 0 ? 'checked' : ''} ${locked ? 'disabled' : ''}>
+          <span class="role-opt-body"><span class="role-opt-title">${esc(r.title)}${locked ? ' <span class="badge">owner only</span>' : ''}</span>
+            <span class="role-opt-text">${esc(r.body)}</span></span></label>`;
+      }).join('')}
+    </fieldset>
+    <div class="role-cafe">
+      <div class="formrow">
+        <label class="field"><span class="t-label">Full name</span><input class="input" name="name" autocomplete="off" maxlength="80"></label>
+        <label class="field"><span class="t-label">Mobile number</span><input class="input" name="phone" type="tel" inputmode="tel" placeholder="98765 43210" required></label>
+      </div>
+      <label class="field"><span class="t-label">Café</span>
+        <select class="input" name="vendorId" required>
+          <option value="">Choose the café…</option>
+          ${vendors.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}</option>`).join('')}
+        </select>${vendors.length ? '' : '<span class="field-help">No cafés could be listed for you; this needs “View cafés”.</span>'}</label>
+      <div class="role-inherits"><span class="t-label">Comes with the role</span><ul id="role-inherits"></ul>
+        <p class="field-help">These are fixed for every café role and apply to the chosen café only. They sign in at the counter with their mobile number.</p></div>
     </div>
-    <input class="input perm-search" type="search" placeholder="Search permissions" aria-label="Search permissions" data-perm-search>
-    <div class="stack" style="gap:12px;max-height:56vh;overflow:auto">
+    <div class="role-admin" hidden>
+      <p class="t-sm">Administrators sign in to Campus Control with their university email, a password and an authenticator app,
+        so they are added by invitation. The next step asks for their email and the exact permissions they get.</p>
+    </div>
+    <p class="field-error" role="alert" id="role-error" hidden></p>`,
+  async (d) => {
+    const err = document.getElementById('role-error');
+    const card = ROLE_CARDS.find((r) => r.role === d.role);
+    if (card.scope === 'platform') {
+      setTimeout(() => ACTIONS.newAdminInvite({ role: d.role }), 0);
+      return true;
+    }
+    const digits = String(d.phone || '').replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+    const problem = !/^\d{10}$/.test(digits) ? 'Enter a 10-digit mobile number.' : !d.vendorId ? 'Choose the café.' : '';
+    if (problem) { err.hidden = false; err.textContent = problem; throw new Error(problem); }
+    const out = await quad.grantRole({ role: d.role, phone: digits, name: d.name || undefined, vendorId: d.vendorId });
+    toast(out.onboarding?.message || 'Role assigned');
+    return out;
+  });
+  const form = m.querySelector('form');
+  /* Our own messages, in the dialog, instead of the browser's bubbles. */
+  form.noValidate = true;
+  const submit = form.querySelector('[type=submit]');
+  const sync = () => {
+    const r = ROLE_CARDS.find((c) => c.role === form.role.value);
+    const cafe = r.scope === 'cafe';
+    form.querySelector('.role-cafe').hidden = !cafe;
+    form.querySelector('.role-admin').hidden = cafe;
+    form.phone.required = cafe; form.vendorId.required = cafe;
+    submit.textContent = cafe ? 'Assign role' : 'Continue to invitation';
+    document.getElementById('role-inherits').innerHTML = (r.inherits || []).map((x) => `<li>${esc(x)}</li>`).join('');
+  };
+  form.addEventListener('change', (e) => { if (e.target.name === 'role') sync(); });
+  sync();
+}
+
+/* Permission editor. Grouped as the server's catalogue is; owner-only
+   permissions are shown locked; what every administrator has anyway is
+   listed so the picture is complete; and when an administrator currently
+   holds their role's DEFAULT list (no explicit list yet), that is said, so
+   saving is understood as making the list explicit. */
+function permissionPicker(catalog, selected = [], { source = null } = {}) {
+  const chosen = new Set(selected);
+  return `
+    ${source === 'role_default' ? `<p class="perm-note">This administrator has no explicit list yet: they hold their role's default
+      (${selected.length} permissions, ticked below). Saving makes exactly the ticked ones their explicit list.</p>`
+      : source === 'explicit' ? '<p class="perm-note">Ticked permissions are explicit grants made by the owner. Nothing else is inherited.</p>' : ''}
+    <div class="perm-tools">
+      <input class="input perm-search" type="search" placeholder="Search permissions" aria-label="Search permissions" data-perm-search>
+      <span class="perm-presets"><span class="t-xs muted">Start from:</span>
+        ${catalog.presets.map((p) => `<button type="button" class="btn btn-ghost btn-sm" data-act="applyPreset" data-perms="${esc(p.permissions.join(','))}">${esc(p.label)}</button>`).join('')}
+        <button type="button" class="btn btn-ghost btn-sm" data-act="applyPreset" data-perms="">None</button></span>
+      <span class="perm-count" data-perm-count>${chosen.size} selected</span>
+    </div>
+    <div class="perm-groups">
+      ${(catalog.alwaysAvailable || []).length ? `<fieldset class="perm-group perm-always"><legend>Always available</legend>
+        ${catalog.alwaysAvailable.map((a) => `<div class="perm-row is-fixed" data-perm-row="${esc(`${a.group} ${a.label}`.toLowerCase())}">
+          <span class="perm-check" aria-hidden="true">✓</span><span><b>${esc(a.group)}</b> · ${esc(a.label)}</span></div>`).join('')}</fieldset>` : ''}
       ${catalog.groups.map((g) => `
-        <fieldset data-perm-group style="border:1px solid var(--line);border-radius:10px;padding:8px 12px">
-          <legend class="t-label">${esc(g.name)}</legend>
+        <fieldset class="perm-group" data-perm-group><legend>${esc(g.name)}</legend>
           ${g.permissions.map((p) => `
-            <label class="row" data-perm-row="${esc(`${g.name} ${p.label} ${p.key}`.toLowerCase())}" style="gap:8px;align-items:flex-start;padding:3px 0">
-              <input type="checkbox" name="perm" value="${esc(p.key)}" ${selected.includes(p.key) ? 'checked' : ''} ${p.ownerOnly ? 'disabled' : ''}>
-              <span class="t-sm">${esc(p.label)}
-                <span class="t-xs faint">${esc(p.key)}${p.ownerOnly ? ' · owner only' : ''}${p.personalData ? ' · shows personal data' : ''}</span></span>
+            <label class="perm-row" data-perm-row="${esc(`${g.name} ${p.label} ${p.key}`.toLowerCase())}">
+              <input type="checkbox" name="perm" value="${esc(p.key)}" ${chosen.has(p.key) ? 'checked' : ''} ${p.ownerOnly ? 'disabled' : ''}>
+              <span><span class="perm-label">${esc(p.label)}</span>
+                <span class="perm-key">${esc(p.key)}${p.ownerOnly ? ' · owner only, never grantable' : ''}${p.personalData ? ' · shows personal data' : ''}</span></span>
             </label>`).join('')}
         </fieldset>`).join('')}
     </div>`;
 }
+
 const pickedPermissions = (form) => [...form.querySelectorAll('input[name=perm]:checked')].map((i) => i.value);
 
 async function scrReviews() {
@@ -1752,6 +1847,7 @@ function onFormSubmit(e) {
   const form = e.target.closest('form[data-form]');
   if (!form || form.closest('.modalwrap')) return;
   e.preventDefault();
+  if (form.dataset.form.startsWith('pf')) { pfSubmit(form); return; }
   if (form.dataset.form === 'search') {
     const q = String(new FormData(form).get('q') || '').trim();
     if (!session.can('orders.view')) return toast('Searching orders needs the orders.view permission.', 'bad');
@@ -1820,6 +1916,12 @@ document.addEventListener('keydown', (e) => {
 
 /* The date chips and the Graph View's metric apply as soon as they change. */
 document.addEventListener('change', (e) => {
+  if (e.target.matches?.('[data-pf-photo]')) { pfPhotoChosen(e.target); return; }
+  if (e.target.matches?.('input[name="perm"]')) {
+    const f = e.target.closest('form');
+    const c = f?.querySelector('[data-perm-count]');
+    if (c) c.textContent = `${f.querySelectorAll('input[name=perm]:checked').length} selected`;
+  }
   const d = e.target.closest?.('.oh-dates input');
   if (d) {
     S.orderFilter = { ...S.orderFilter, [d.name]: d.value || undefined };
@@ -1953,15 +2055,15 @@ const ACTIONS = {
     (d) => quad.hideReview(t.dataset.id, true, d.reason)),
 
   /* ---- administrators ---- */
-  newAdminInvite: async () => {
+  newAdminInvite: async (t) => {
     const catalog = await quad.accessCatalog();
-    modal('Invite an administrator', `
-      ${field('name', 'Name')}
-      ${field('email', 'University email', '', 'email')}
-      ${select('role', 'Role ceiling', [['platform_admin', 'Administrator'], ['support', 'Support']])}
+    const want = t?.role || t?.dataset?.role || 'platform_admin';
+    const m = modal('Invite an administrator', `
+      <div class="formrow">${field('name', 'Full name')}${field('email', 'University email', '', 'email')}</div>
+      ${select('role', 'Role', [['platform_admin', 'Administrator'], ['support', 'Support']])}
       <p class="t-xs faint">They sign in with this mailbox, enter the one-time code from the invitation email, then set a password and an authenticator app.
         The code expires in ${catalog.inviteTtlHours} hours and works once.${catalog.emailDelivery ? '' : ' Email is not configured, so the code will be shown to you once instead.'}</p>
-      ${permissionPicker(catalog)}`,
+      ${permissionPicker(catalog, [], { source: 'explicit' })}`,
     async (d, form) => {
       const out = await quad.inviteAdministrator({ name: d.name, email: d.email, role: d.role, permissions: pickedPermissions(form) });
       if (out.inviteCode) {
@@ -1970,11 +2072,15 @@ const ACTIONS = {
           <p class="t-xs faint" style="margin-top:10px">Expires ${esc(new Date(out.expiresAt).toLocaleString('en-IN'))}. Shown only now.</p>`, DONE), 0);
       } else toast('Invitation emailed');
       return out;
-    });
+    }, '', { drawer: true });
+    m.querySelector('select[name=role]').value = want;
   },
   applyPreset: (t) => {
     const want = new Set((t.dataset.perms || '').split(',').filter(Boolean));
-    t.closest('form').querySelectorAll('input[name=perm]:not([disabled])').forEach((i) => { i.checked = want.has(i.value); });
+    const f = t.closest('form');
+    f.querySelectorAll('input[name=perm]:not([disabled])').forEach((i) => { i.checked = want.has(i.value); });
+    const c = f.querySelector('[data-perm-count]');
+    if (c) c.textContent = `${f.querySelectorAll('input[name=perm]:checked').length} selected`;
   },
   editAdminPermissions: async (t) => {
     const [catalog, detail] = await Promise.all([quad.accessCatalog(), quad.accessAdmin(t.dataset.id)]);
@@ -1982,7 +2088,7 @@ const ACTIONS = {
     modal(`Permissions · ${t.dataset.name}`, `
       <p class="t-sm muted">${esc(detail.administrator.email || '')} · ${esc(detail.administrator.status)} ·
         ${detail.sessions.length} open session(s). A change applies to their open sessions on the next request.</p>
-      ${permissionPicker(catalog, before)}
+      ${permissionPicker(catalog, before, { source: detail.administrator.effective.source })}
       ${field('reason', 'Reason for the change (kept in the audit log)')}
       ${detail.history.length ? `<h3 class="t-label" style="margin-top:6px">Permission history</h3>
         ${table(['When', 'Change', 'By'], detail.history.slice(0, 12).map((h) => [when(h.at), esc(h.action.replace(/^admin\./, '').replace(/_/g, ' ')), esc(h.actor_name || '—')]))}` : ''}`,
@@ -2249,22 +2355,7 @@ ${added.length ? `Grant: ${added.join(', ')}
   /* ---- users ---- */
   searchUsers: () => paintUsers(document.getElementById('user-q').value.trim()),
 
-  addRole: () => modal('Assign a role', `
-    ${field('name', 'Name')}${field('phone', 'Phone number', '', 'tel')}
-    <label class="field"><span class="t-label">Role</span>
-      <select class="input" name="role">
-        <option value="vendor_owner">Cafeteria owner</option>
-        <option value="vendor_staff">Cafeteria staff</option>
-        <option value="support">Support</option>
-        <option value="platform_admin">Admin</option>
-      </select></label>
-    ${field('vendorId', 'Cafeteria id (vendor roles only)')}
-    <p class="t-xs faint">
-      platform_owner cannot be granted here — it is set from the server's
-      PLATFORM_OWNER_PHONE and no API can hand it out. Platform roles can only
-      be granted by the platform owner.
-    </p>`,
-    (d) => quad.grantRole({ ...d, vendorId: d.vendorId || undefined })),
+  addRole: () => assignRoleDialog(),
 
   inspectUser: async (t) => {
     const u = await quad.user(t.dataset.id);
@@ -3711,6 +3802,7 @@ Object.assign(ACTIONS, WZ_ACTIONS, {
 /* Narrowing the permission list as the owner types. Only hides rows; the
    checked state, and what is saved, is unaffected. */
 document.addEventListener('input', (e) => {
+  if (e.target.matches?.('[data-form="pfPassword"] input[name="password"]')) { paintMeter(e.target.value); return; }
   const box = e.target.closest?.('[data-perm-search]');
   if (!box) return;
   const want = box.value.trim().toLowerCase();
@@ -3719,3 +3811,269 @@ document.addEventListener('input', (e) => {
   form.querySelectorAll('[data-perm-group]').forEach((g) => { g.hidden = ![...g.querySelectorAll('[data-perm-row]')].some((r) => !r.hidden); });
 });
 Object.assign(ACTIONS, ORDER_ACTIONS);
+
+/* ========================================================================
+   MY PROFILE — the signed-in administrator's own account
+
+   Everything here acts on the caller only (routes/admin-profile.js and
+   /auth/admin/credential/*). Changing the password or the authenticator
+   needs the current password and a current code; ending sessions needs a
+   recent confirmation. Nothing here can reach another person's account.
+   ======================================================================== */
+const P = { data: null, photo: null, replace: null };
+const EVENT_LABEL = {
+  'auth.admin.login': 'Signed in', 'auth.admin.login.password': 'Sign-in attempt', 'auth.admin.reauth': 'Confirmed it was you',
+  'auth.logout': 'Signed out', 'admin.password.set': 'Password changed', 'admin.password.reset.request': 'Password reset requested',
+  'admin.password.reset.verify': 'Password reset code accepted', 'admin.password.reset.complete': 'Password reset',
+  'admin.authenticator.begin': 'Authenticator set-up started', 'admin.authenticator.confirm': 'Authenticator confirmed',
+  'admin.authenticator.replace': 'Authenticator replaced', 'admin.session.revoke': 'Ended a session',
+  'admin.session.revoke_others': 'Ended all other sessions', 'admin.profile.update': 'Display name changed',
+  'admin.profile.photo': 'Profile photo changed',
+};
+
+/* The signed-in administrator, as every part of the shell shows them. */
+const myName = () => session.me.adminProfile?.displayName || session.me.user.name || session.me.user.studentEmail || 'Administrator';
+const photoBust = { v: 0 };
+function AvatarOf({ size = 38, cls = 'cc-avatar' } = {}) {
+  const n = myName();
+  const img = session.me.adminProfile?.hasPhoto
+    ? `<img src="${esc(quad.adminPhotoUrl(session.me.user.id))}?v=${photoBust.v}" alt="" data-fallback="hide">` : '';
+  return `<span class="${cls}" style="width:${size}px;height:${size}px">${esc(initialsOf(n))}${img}</span>`;
+}
+/* After a profile change: update the shell in place (no re-render). */
+function refreshIdentity() {
+  const n = myName();
+  document.querySelectorAll('[data-me-name]').forEach((x) => { x.textContent = n; });
+  document.querySelectorAll('[data-me-avatar]').forEach((x) => { x.innerHTML = AvatarOf({ size: Number(x.dataset.size) || 38 }); });
+}
+
+const pwField = (name, label, auto) => `
+  <label class="field"><span class="t-label">${esc(label)}</span>
+    <span class="pw-wrap"><input class="input" type="password" name="${name}" autocomplete="${auto}" required>
+      <button type="button" class="pw-toggle" data-act="pwToggle" aria-label="Show ${esc(label.toLowerCase())}" aria-pressed="false">Show</button></span></label>`;
+const codeField = (name = 'code', label = 'Code from your authenticator app') => `
+  <label class="field"><span class="t-label">${esc(label)}</span>
+    <input class="input code-input" name="${name}" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>`;
+
+async function scrProfile() {
+  setTitle('My Profile', 'Your own account and sign-in. Only you can change these.');
+  head().innerHTML = '';
+  P.photo = null; P.replace = null;
+  await panel(view(), () => quad.myAdminProfile(), (d) => {
+    P.data = d;
+    const p = d.profile, sec = d.security;
+    return `<div class="pf">
+      <section class="card pf-card pf-identity">
+        <div class="pf-photo" id="pf-photo">${photoBlock()}</div>
+        <div class="pf-who">
+          <h2 class="pf-name" data-me-name>${esc(p.displayName)}</h2>
+          <p class="pf-email">${esc(p.email || '—')} <span class="badge badge-ok">verified</span></p>
+          <p class="pf-meta">${p.roles.map((r) => `<span class="badge badge-ink">${esc(r)}</span>`).join(' ')}
+            <span class="badge ${p.adminStatus === 'active' ? 'badge-ok' : 'badge-warn'}">${esc(p.adminStatus)}</span></p>
+        </div>
+        <dl class="pf-facts">
+          <div><dt>Account created</dt><dd>${esc(fmtDate(p.memberSince))}</dd></div>
+          ${p.adminSince ? `<div><dt>Administrator since</dt><dd>${esc(fmtDate(p.adminSince))}</dd></div>` : ''}
+          <div><dt>Access</dt><dd>${p.isOwner ? 'Everything, including owner-only settings' : `${p.permissionsCount} permission${p.permissionsCount === 1 ? '' : 's'}, set by the owner`}</dd></div>
+          <div><dt>Name on the student account</dt><dd>${esc(p.accountName || '—')}</dd></div>
+        </dl>
+      </section>
+
+      <section class="card pf-card">
+        <h2 class="pf-h">Display name</h2>
+        <p class="pf-help">The name Campus Control shows for you. Your login email, your student account and your role stay as they are.</p>
+        <form class="pf-form" data-form="pfName" novalidate>
+          <label class="field"><span class="t-label">Display name</span>
+            <input class="input" name="displayName" maxlength="40" value="${esc(p.displayName)}" autocomplete="name" required></label>
+          <p class="pf-msg" role="status" id="pf-name-msg"></p>
+          <div class="pf-actions"><button type="reset" class="btn btn-ghost btn-sm">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-sm">Save name</button></div>
+        </form>
+      </section>
+
+      <section class="card pf-card">
+        <h2 class="pf-h">Password</h2>
+        <p class="pf-help">Last changed ${esc(sec.passwordUpdatedAt ? when(sec.passwordUpdatedAt) : 'never')}. Changing it signs you out everywhere else.</p>
+        <form class="pf-form" data-form="pfPassword" novalidate>
+          ${pwField('currentPassword', 'Current password', 'current-password')}
+          ${pwField('password', 'New password', 'new-password')}
+          <div class="pw-meter" aria-hidden="true"><span id="pw-bar"></span></div>
+          <p class="pf-help" id="pw-label">At least 12 characters. A few unrelated words work well.</p>
+          ${pwField('again', 'Confirm new password', 'new-password')}
+          ${codeField()}
+          <p class="pf-msg" role="status" id="pf-pw-msg"></p>
+          <div class="pf-actions"><button type="reset" class="btn btn-ghost btn-sm">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-sm">Change password</button></div>
+        </form>
+      </section>
+
+      <section class="card pf-card">
+        <h2 class="pf-h">Two-step sign-in</h2>
+        <p class="pf-status"><span class="badge ${sec.authenticatorReady ? 'badge-ok' : 'badge-warn'}">${sec.authenticatorReady ? 'On' : 'Not confirmed'}</span>
+          ${sec.authenticatorReady ? `Authenticator app confirmed ${esc(when(sec.authenticatorConfirmedAt))}.` : 'Your authenticator has not been confirmed yet.'}
+          ${sec.replacementPending ? '<span class="badge badge-warn">replacement started</span>' : ''}</p>
+        <p class="pf-help">Every sign-in needs your password and a code from your authenticator app. It cannot be switched off.</p>
+        <div id="pf-replace">${replaceStep()}</div>
+      </section>
+
+      <section class="card pf-card pf-wide">
+        <div class="between"><h2 class="pf-h" style="margin:0">Active sessions</h2>
+          ${d.sessions.length > 1 ? '<button type="button" class="btn btn-secondary btn-sm" data-act="pfRevokeOthers">Sign out all other sessions</button>' : ''}</div>
+        ${table(['Signed in', 'Method', 'Device', 'IP', ''], d.sessions.map((s) => [
+          `${esc(when(s.issuedAt))}${s.current ? ' <span class="badge badge-ok">this session</span>' : ''}`,
+          esc(s.method), `<span class="t-xs">${esc(s.userAgent || '—')}</span>`, esc(s.ip || '—'),
+          s.current ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-act="pfRevoke" data-h="${esc(s.handle)}">End</button>`]))}
+      </section>
+
+      <section class="card pf-card pf-wide">
+        <h2 class="pf-h">Security activity</h2>
+        ${d.activity.length ? table(['When', 'Event', 'Result', 'IP'], d.activity.map((a) => [
+          esc(fmtDateTime(a.at)), esc(EVENT_LABEL[a.action] || a.action),
+          `<span class="badge ${a.outcome === 'ok' ? 'badge-ok' : 'badge-warn'}">${a.outcome === 'ok' ? 'done' : esc(a.outcome)}</span>`,
+          esc(a.ip || '—')])) : '<p class="pf-help">Nothing recorded yet.</p>'}
+      </section>
+    </div>`;
+  }, { label: 'Loading your profile' });
+}
+
+const fmtDate = (t) => (t ? new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—');
+const fmtDateTime = (t) => new Date(t).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+function photoBlock() {
+  if (P.photo) {
+    return `<span class="pf-avatar"><img src="${esc(P.photo.url)}" alt="Preview of your new photo"></span>
+      <div class="pf-photo-actions"><span class="pf-help">Preview: not saved yet.</span>
+        <button type="button" class="btn btn-primary btn-sm" data-act="pfPhotoSave">Save photo</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-act="pfPhotoCancel">Cancel</button></div>`;
+  }
+  return `<span class="pf-avatar" data-me-avatar data-size="96">${AvatarOf({ size: 96 })}</span>
+    <div class="pf-photo-actions">
+      <label class="btn btn-secondary btn-sm">${session.me.adminProfile?.hasPhoto ? 'Replace photo' : 'Upload photo'}
+        <input type="file" accept="image/jpeg,image/png,image/webp" data-pf-photo hidden></label>
+      ${session.me.adminProfile?.hasPhoto ? '<button type="button" class="btn btn-ghost btn-sm" data-act="pfPhotoRemove">Remove</button>' : ''}
+      <span class="pf-help">JPEG, PNG or WebP, at least 96 × 96 px, up to 8 MB. Seen by administrators only.</span></div>`;
+}
+
+/* Replacing the authenticator: confirm it is you, scan the new QR code,
+   confirm a code from the new entry. Until then the current one works. */
+function replaceStep() {
+  const r = P.replace;
+  if (!r) return '<button type="button" class="btn btn-secondary btn-sm" data-act="pfReplaceStart">Replace authenticator</button>';
+  if (r.step === 'confirm-me') {
+    return `<form class="pf-form" data-form="pfReplaceMe" novalidate>
+      <p class="pf-help">First confirm it is you, with your current password and a code from your <b>current</b> authenticator.</p>
+      ${pwField('password', 'Current password', 'current-password')}
+      ${codeField('code', 'Code from your current authenticator')}
+      <p class="pf-msg" role="status" id="pf-rep-msg">${esc(r.error || '')}</p>
+      <div class="pf-actions"><button type="button" class="btn btn-ghost btn-sm" data-act="pfReplaceCancel">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm">Continue</button></div></form>`;
+  }
+  return `<form class="pf-form" data-form="pfReplaceNew" novalidate>
+    <p class="pf-help">In Microsoft Authenticator choose <b>Add account → Other account</b> and scan this code.
+      Your current authenticator keeps working until you confirm the new one.</p>
+    <div class="enrol-qr">${r.qr || '<p class="pf-help">The QR code could not be drawn. Use the key below.</p>'}</div>
+    <details class="enrol-key"><summary>Can’t scan? Enter the key instead</summary>
+      <code class="enrol-secret">${esc(groupKey(r.secret))}</code></details>
+    ${codeField('code', 'Code from the NEW entry')}
+    <p class="pf-msg" role="status" id="pf-rep-msg">${esc(r.error || '')}</p>
+    <div class="pf-actions"><button type="button" class="btn btn-ghost btn-sm" data-act="pfReplaceCancel">Cancel</button>
+      <button type="submit" class="btn btn-primary btn-sm">Confirm new authenticator</button></div></form>`;
+}
+const paintReplace = () => { const b = document.getElementById('pf-replace'); if (b) b.innerHTML = replaceStep(); };
+const msg = (id, text, bad = false) => { const m = document.getElementById(id); if (m) { m.textContent = text; m.classList.toggle('bad', bad); } };
+
+async function pfSubmit(form) {
+  const kind = form.dataset.form;
+  const data = Object.fromEntries(new FormData(form));
+  const btn = form.querySelector('[type=submit]');
+  btn.disabled = true;
+  try {
+    if (kind === 'pfName') {
+      const out = await quad.saveMyAdminProfile(data.displayName);
+      session.me.adminProfile = { ...(session.me.adminProfile || {}), displayName: out.displayName };
+      form.displayName.value = out.displayName;
+      refreshIdentity();
+      msg('pf-name-msg', 'Saved.');
+    } else if (kind === 'pfPassword') {
+      if (data.password !== data.again) throw new Error('The two new passwords are not the same.');
+      if (String(data.password).length < 12) throw new Error('The new password needs at least 12 characters.');
+      await quad.setAdminPassword({ password: data.password, currentPassword: data.currentPassword, code: String(data.code || '').replace(/\D/g, '') });
+      form.reset(); paintMeter('');
+      msg('pf-pw-msg', 'Password changed. Your other sessions were signed out.');
+    } else if (kind === 'pfReplaceMe') {
+      await quad.adminReauth(data.password, String(data.code || '').replace(/\D/g, ''));
+      const out = await quad.beginAuthenticator();
+      P.replace = { step: 'scan', secret: out.secret, qr: await qrSvg(out.uri) };
+      paintReplace();
+      return;
+    } else if (kind === 'pfReplaceNew') {
+      await quad.confirmAuthenticator(String(data.code || '').replace(/\D/g, ''));
+      P.replace = null;
+      toast('New authenticator confirmed. The old one no longer works, and your other sessions were signed out.');
+      return scrProfile();
+    }
+  } catch (e) {
+    const where = { pfName: 'pf-name-msg', pfPassword: 'pf-pw-msg', pfReplaceMe: 'pf-rep-msg', pfReplaceNew: 'pf-rep-msg' }[kind];
+    msg(where, explain(e), true);
+  } finally {
+    if (document.body.contains(btn)) btn.disabled = false;
+  }
+}
+
+function paintMeter(pw) {
+  const s = passwordStrength(pw);
+  const bar = document.getElementById('pw-bar');
+  if (bar) { bar.style.width = `${s.score * 25}%`; bar.dataset.score = String(s.score); }
+  const l = document.getElementById('pw-label');
+  if (l) l.textContent = pw ? `${s.label}. At least 12 characters; not your email or a common phrase.` : 'At least 12 characters. A few unrelated words work well.';
+}
+
+async function pfPhotoChosen(input) {
+  const f = input.files?.[0];
+  input.value = '';
+  if (!f) return;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(f.type)) return toast('Choose a JPEG, PNG or WebP image.', 'bad');
+  if (f.size > 8 * 1048576) return toast('That photo is larger than 8 MB.', 'bad');
+  const url = URL.createObjectURL(f);
+  const ok = await new Promise((res) => { const i = new Image(); i.onload = () => res(i.naturalWidth >= 96 && i.naturalHeight >= 96); i.onerror = () => res(false); i.src = url; });
+  if (!ok) { URL.revokeObjectURL(url); return toast('Use an image at least 96 × 96 pixels.', 'bad'); }
+  P.photo = { file: f, url };
+  document.getElementById('pf-photo').innerHTML = photoBlock();
+}
+
+const PROFILE_ACTIONS = {
+  pwToggle: (t) => {
+    const i = t.parentElement.querySelector('input');
+    const show = i.type === 'password';
+    i.type = show ? 'text' : 'password';
+    t.textContent = show ? 'Hide' : 'Show';
+    t.setAttribute('aria-pressed', String(show));
+  },
+  pfPhotoCancel: () => { URL.revokeObjectURL(P.photo?.url); P.photo = null; document.getElementById('pf-photo').innerHTML = photoBlock(); },
+  pfPhotoSave: (t) => act(t, async () => {
+    await quad.uploadMyAdminPhoto(P.photo.file);
+    URL.revokeObjectURL(P.photo.url); P.photo = null;
+    session.me.adminProfile = { ...(session.me.adminProfile || {}), hasPhoto: true };
+    photoBust.v++;
+    document.getElementById('pf-photo').innerHTML = photoBlock();
+    refreshIdentity();
+  }, { ok: 'Photo saved' }),
+  pfPhotoRemove: (t) => {
+    if (!confirm('Remove your profile photo?')) return null;
+    return act(t, async () => {
+      await quad.removeMyAdminPhoto();
+      session.me.adminProfile = { ...(session.me.adminProfile || {}), hasPhoto: false };
+      document.getElementById('pf-photo').innerHTML = photoBlock();
+      refreshIdentity();
+    }, { ok: 'Photo removed' });
+  },
+  pfReplaceStart: () => { P.replace = { step: 'confirm-me' }; paintReplace(); document.querySelector('#pf-replace input')?.focus(); },
+  pfReplaceCancel: () => { P.replace = null; paintReplace(); },
+  pfRevoke: (t) => act(t, () => quad.revokeMySession(t.dataset.h), { ok: 'Session ended', after: scrProfile }),
+  pfRevokeOthers: (t) => {
+    if (!confirm('Sign out every other session? This one stays signed in.')) return null;
+    return act(t, () => quad.revokeMyOtherSessions(), { ok: 'Other sessions ended', after: scrProfile });
+  },
+};
+
+Object.assign(ACTIONS, PROFILE_ACTIONS);
