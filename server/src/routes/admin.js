@@ -13,6 +13,7 @@
 import { q, one, tx } from '../db/index.js';
 import { authorize, assertGrantable, ROLES, BadRequest, NotFound, Conflict, Forbidden } from '../auth/rbac.js';
 import { assertRecentPasskey } from '../auth/passkey-policy.js';
+import { validatePermissionList } from '../auth/permissions.js';
 import { normalisePhone } from '../services/otp.js';
 import { revokeAllForUser } from '../auth/session.js';
 import { allFlags, setFlag } from '../services/flags.js';
@@ -75,6 +76,17 @@ export default async function adminRoutes(app) {
     } else if (vendorId) {
       throw BadRequest(`"${role}" is not a cafeteria-scoped role`);
     }
+    /* A platform role can carry an explicit permission list, saved with the
+       role in one transaction, so the new administrator holds exactly what
+       was ticked - not the role's broad default. Owner-only permissions are
+       refused by validatePermissionList(). */
+    let explicit = null;
+    if (req.body?.permissions !== undefined) {
+      if (!['platform_admin', 'support'].includes(role)) throw BadRequest('Permissions apply to administrator roles only');
+      const v = validatePermissionList(req.body.permissions);
+      if (!v.ok) throw BadRequest(v.problem);
+      explicit = v.permissions;
+    }
 
     const phone = normalisePhone(req.body?.phone);
     const out = await tx(async (c) => {
@@ -94,11 +106,20 @@ export default async function adminRoutes(app) {
          ON CONFLICT (user_id, role, COALESCE(vendor_id,'00000000-0000-0000-0000-000000000000'::uuid))
          DO UPDATE SET status='active', revoked_at=NULL, granted_by=$4, granted_at=now()
          RETURNING *`, [u.id, role, vendorId || null, req.actor.id])).rows[0];
+      if (explicit) {
+        await c.query(
+          `INSERT INTO admin_account (user_id, status, permissions, activated_at, permissions_updated_at, permissions_updated_by)
+           VALUES ($1,'active',$2, now(), now(), $3)
+           ON CONFLICT (user_id) DO UPDATE SET permissions = $2, permissions_updated_at = now(),
+                                               permissions_updated_by = $3, updated_at = now()`,
+          [u.id, explicit, req.actor.id]);
+      }
       return { user: u, role: r, created };
     });
 
     await audit(req, { action: 'user.role.grant', resource: 'user', resourceId: out.user.id,
-                       outcome: 'ok', detail: { role, vendorId, accountCreated: out.created } });
+                       outcome: 'ok', detail: { role, vendorId, accountCreated: out.created,
+                                                ...(explicit ? { permissions: explicit } : {}) } });
     return {
       ...out,
       /* Honest about onboarding: no credential was created, because this

@@ -15,13 +15,13 @@ import {
   vendorVM, EmptyState, NotConfigured, Loading, ErrorState, signOut, when, ORDER_LABEL, adminReauth,
 } from '../../packages/ui/runtime.js';
 import { esc, toggleTheme, restoreTheme, Mark } from '../../packages/ui/kit.js';
-import { lockup } from '../../brand/logo.js';
+import { lockup, mark } from '../../brand/logo.js';
 import { API_BASE, ApiError } from '../../packages/data/client.js';
 import { ORDER_TABS, TAB_STATE, orderActions, avatarFor, chartGeometry } from '../../packages/ui/order-view.js';
 import { qrSvg, groupKey } from '../../packages/ui/admin-enrol.js';
 
 const root = document.getElementById('app');
-restoreTheme();
+restoreAdminTheme();
 
 const S = { route: 'overview', vendorId: null, userId: null, caseId: null, parentId: null,
             orderFilter: {}, orderPage: 1, payFilter: {}, payPage: 1 };
@@ -105,6 +105,18 @@ const ICON = {
   dots: '<circle cx="12" cy="5.5" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="18.5" r="1.4" fill="currentColor"/>',
   check: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/>',
 };
+/* Campus Control keeps its own light/dark choice, so switching it never
+   changes the public website's theme in the same browser. */
+const ADMIN_THEME_KEY = 'echo-admin-theme';
+function restoreAdminTheme() {
+  try { const t = localStorage.getItem(ADMIN_THEME_KEY); if (t) document.documentElement.setAttribute('data-theme', t); } catch { /* storage blocked */ }
+}
+function toggleAdminTheme() {
+  const cur = document.documentElement.getAttribute('data-theme');
+  const next = cur === 'dark' ? 'light' : cur === 'light' ? 'dark' : (matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark');
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem(ADMIN_THEME_KEY, next); } catch { /* storage blocked */ }
+}
 const icon = (k, size = 19) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k] || ''}</svg>`;
 
 const ROLE_LABEL = { platform_owner: 'Owner', platform_admin: 'Administrator', support: 'Support' };
@@ -114,15 +126,17 @@ function render() {
   if (!allowed(S.route)) S.route = 'overview';
   let collapsed = false;
   try { collapsed = localStorage.getItem('cc-rail') === 'collapsed'; } catch { /* storage blocked */ }
-  const name = session.me.user.name || session.me.user.email || session.me.user.phone || 'Administrator';
+  /* One source for the signed-in administrator's name: My Profile's display
+     name from /auth/me, falling back to the account's own name. */
+  const name = session.me.adminProfile?.displayName || session.me.user.name || session.me.user.email || 'Administrator';
   const role = session.roles.map((r) => ROLE_LABEL[r]).filter(Boolean)[0] || 'Staff';
   root.innerHTML = `
     <div class="cc${collapsed ? ' cc-collapsed' : ''}">
       <div class="cc-frame">
         <aside class="cc-rail" aria-label="Campus Control">
           <div class="cc-brand">
-            ${lockup({ height: 34 })}
-            <span class="cc-brand-sub">Campus Control</span>
+            ${mark({ size: 34 })}
+            <span class="cc-brand-name">ECHO ECHO ADMIN</span>
           </div>
           <nav class="cc-nav" aria-label="Pages">
             ${NAV_GROUPS.map(([group, items]) => {
@@ -1867,7 +1881,7 @@ const ACTIONS = {
           e.outcome && e.outcome !== 'ok' ? ` · <b>${esc(e.outcome)}</b>` : ''}${e.duplicates ? ` · ${e.duplicates} duplicate(s) ignored` : ''}${
           e.note ? `<div class="t-xs faint">${esc(e.note)}</div>` : ''}</li>`).join('') || '<li class="t-sm muted">Nothing recorded.</li>'}</ol>`, DONE, '', { drawer: true });
   },
-  theme: () => toggleTheme(),
+  theme: () => toggleAdminTheme(),
 
   /* ---- incidents, deductions, deposits ---- */
   investigate: (t) => act(t, () => quad.investigateIncident(t.dataset.id), { ok: 'Marked as investigating', after: scrTrust }),

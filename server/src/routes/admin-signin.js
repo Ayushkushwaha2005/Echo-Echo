@@ -181,8 +181,11 @@ export default async function adminSignInRoutes(app) {
       /* Replacing a working authenticator is a re-auth-level action. */
       assertRecentPasskey(req.actor, 'replacing your authenticator');
     }
-    const out = await beginAuthenticator(req.actor.id, req.actor.studentEmail);
-    await audit(req, { action: 'admin.authenticator.begin', resourceId: req.actor.id, outcome: 'ok' });
+    /* Replacing a working one is held as pending: the current authenticator
+       keeps signing in until a code from the new one is confirmed. */
+    const out = await beginAuthenticator(req.actor.id, req.actor.studentEmail, { replace: 'pending' });
+    await audit(req, { action: 'admin.authenticator.begin', resourceId: req.actor.id, outcome: 'ok',
+                       detail: { replacement: !!out.pending } });
     /* The secret and URI are returned exactly once, to the administrator
        enrolling their own device, and are never stored in the clear. */
     return out;
@@ -191,8 +194,12 @@ export default async function adminSignInRoutes(app) {
   app.post('/auth/admin/credential/authenticator/confirm', async (req) => {
     if (!req.actor) throw Forbidden('Sign in required');
     await assertEnrollable(req.actor);
-    await confirmAuthenticator(req.actor.id, req.body?.code);
-    await audit(req, { action: 'admin.authenticator.confirm', resourceId: req.actor.id, outcome: 'ok' });
+    const r = await confirmAuthenticator(req.actor.id, req.body?.code);
+    await audit(req, { action: r?.replaced ? 'admin.authenticator.replace' : 'admin.authenticator.confirm',
+                       resourceId: req.actor.id, outcome: 'ok' });
+    /* A replaced authenticator ends every OTHER session: whoever held the old
+       one is signed out. This session stays, it just proved the new one. */
+    if (r?.replaced) await revokeAllForUser(req.actor.id, { exceptTokenHash: req.actor.tokenHash });
     return credentialStatus(req.actor.id);
   });
 

@@ -24,13 +24,58 @@ export { quad, ApiError, Offline, rupees, ratingLabel };
 
 /* Re-confirming an administrator: the same two factors as signing in, asked
    for in place rather than by throwing the person back to the sign-in screen
-   and losing what they were doing. */
-export async function adminReauth() {
-  const password = prompt('Confirm it is you.\n\nYour administrator password:');
-  if (password === null) throw new Error('Confirmation cancelled.');
-  const code = prompt('The 6-digit code your authenticator app is showing now:');
-  if (code === null) throw new Error('Confirmation cancelled.');
-  return quad.adminReauth(password, String(code).replace(/\D/g, ''));
+   and losing what they were doing. A real dialog with a masked password
+   field: window.prompt() would show the password as it is typed. Resolves
+   when the server accepts both; rejects if the person cancels. */
+export function adminReauth({ reason = 'This change needs you to confirm it is you.' } = {}) {
+  return new Promise((resolve, reject) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'modalwrap reauthwrap';
+    wrap.setAttribute('role', 'dialog');
+    wrap.setAttribute('aria-modal', 'true');
+    wrap.setAttribute('aria-labelledby', 'reauth-title');
+    wrap.innerHTML = `
+      <div class="scrim-fixed" data-reauth="cancel"></div>
+      <form class="modal reauth" novalidate>
+        <div class="modal-head"><h2 class="t-h3" id="reauth-title">Confirm it is you</h2>
+          <p class="t-sm muted">${esc(reason)} Enter your password and the code your authenticator app shows now.</p></div>
+        <div class="modal-body">
+          <label class="field"><span class="t-label">Password</span>
+            <input class="input" type="password" name="password" autocomplete="current-password" required></label>
+          <label class="field"><span class="t-label">Authenticator code</span>
+            <input class="input code-input" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>
+          <p class="reauth-error" role="alert" hidden></p>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn btn-ghost" data-reauth="cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary">Confirm</button>
+        </div>
+      </form>`;
+    const close = () => { wrap.remove(); document.removeEventListener('keydown', onKey, true); };
+    const cancel = () => { close(); reject(new Error('Confirmation cancelled.')); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); cancel(); } };
+    document.addEventListener('keydown', onKey, true);
+    wrap.addEventListener('click', (e) => { if (e.target.closest('[data-reauth=cancel]')) cancel(); });
+    const form = wrap.querySelector('form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = form.querySelector('[type=submit]');
+      const err = form.querySelector('.reauth-error');
+      const password = form.password.value;
+      const code = String(form.code.value || '').replace(/\D/g, '');
+      if (!password || code.length !== 6) { err.hidden = false; err.textContent = 'Enter your password and the 6-digit code.'; return; }
+      btn.disabled = true;
+      try {
+        const out = await quad.adminReauth(password, code);
+        close(); resolve(out);
+      } catch (x) {
+        err.hidden = false; err.textContent = explain(x); btn.disabled = false;
+        form.code.value = ''; form.code.focus();
+      }
+    });
+    document.body.append(wrap);
+    form.password.focus();
+  });
 }
 
 /* ---------- session ------------------------------------------------------ */

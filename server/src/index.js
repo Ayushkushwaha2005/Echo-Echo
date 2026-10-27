@@ -38,6 +38,7 @@ import adminAccessRoutes from './routes/admin-access.js';
 import geodataRoutes from './routes/geodata.js';
 import adminOpsRoutes from './routes/admin-ops.js';
 import siteRoutes from './routes/site.js';
+import adminProfileRoutes from './routes/admin-profile.js';
 
 const boot = assertBootable();
 if (!boot.ok) {
@@ -368,6 +369,7 @@ export function build() {
     await app.register(geodataRoutes);
     await app.register(adminOpsRoutes);
     await app.register(siteRoutes);
+    await app.register(adminProfileRoutes);
 
     return app;
   })();

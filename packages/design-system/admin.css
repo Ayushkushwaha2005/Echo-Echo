@@ -482,3 +482,7 @@ body { background: var(--cc-canvas); }
   .oh-stat-value { font-size: 1.5rem; }
   .od-card { padding: 18px; }
 }
+
+.cc-brand { flex-direction: row; align-items: center; gap: 10px; }
+.cc-brand-name { font-weight: 700; font-size: .95rem; letter-spacing: .01em; color: var(--text); white-space: nowrap; }
+.cc-collapsed .cc-brand-name { display: none; }

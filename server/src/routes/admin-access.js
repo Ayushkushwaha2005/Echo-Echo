@@ -71,7 +71,8 @@ function effective(row) {
 }
 
 const ADMIN_LIST_SQL = `
-  SELECT u.id, u.name, u.student_email AS email, u.status AS account_status,
+  SELECT u.id, COALESCE(pr.display_name, u.name) AS name, u.student_email AS email, u.status AS account_status,
+         pr.photo_asset IS NOT NULL AS has_photo,
          coalesce(a.status, CASE WHEN r.roles IS NOT NULL THEN 'active' END) AS status,
          a.permissions, a.invited_at, a.activated_at, a.suspended_at, a.revoked_at, a.status_reason,
          a.permissions_updated_at, ib.name AS invited_by_name, r.roles,
@@ -80,11 +81,12 @@ const ADMIN_LIST_SQL = `
             a confirmed authenticator. Never the values themselves. */
          (SELECT ac.password_hash IS NOT NULL AND ac.totp_confirmed_at IS NOT NULL
             FROM admin_credential ac WHERE ac.user_id = u.id) AS "signInReady",
-         (SELECT max(issued_at) FROM session s WHERE s.user_id = u.id AND s.auth_method = 'passkey') AS last_sign_in_at,
+         (SELECT max(issued_at) FROM session s WHERE s.user_id = u.id AND s.auth_method IN ('passkey','admin_totp')) AS last_sign_in_at,
          (SELECT count(*)::int FROM session s WHERE s.user_id = u.id AND s.revoked_at IS NULL AND s.expires_at > now()) AS active_sessions,
          (SELECT max(at) FROM audit_log l WHERE l.actor_id = u.id) AS last_activity_at
     FROM app_user u
     LEFT JOIN admin_account a ON a.user_id = u.id
+    LEFT JOIN admin_profile pr ON pr.user_id = u.id
     LEFT JOIN app_user ib ON ib.id = a.invited_by
     LEFT JOIN LATERAL (SELECT array_agg(role ORDER BY role) AS roles FROM user_role x
                         WHERE x.user_id = u.id AND x.status = 'active'

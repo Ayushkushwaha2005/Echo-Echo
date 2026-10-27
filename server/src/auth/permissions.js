@@ -21,28 +21,28 @@
 
 export const PERMISSIONS = {
   /* ---- students ---- */
-  'students.view':      { group: 'Students', label: 'View students and verification cases', caps: ['user.read', 'verification.read'], pii: true },
-  'students.verify':    { group: 'Students', label: 'Approve or reject student verification', caps: ['verification.decide'] },
-  'students.suspend':   { group: 'Students', label: 'Suspend a student account', caps: ['user.suspend'] },
-  'students.reinstate': { group: 'Students', label: 'Reinstate a suspended account', caps: ['user.reinstate'] },
+  'students.view':      { group: 'Users', label: 'View student accounts and their verification cases', caps: ['user.read', 'verification.read'], pii: true },
+  'students.verify':    { group: 'Verification', label: 'Approve or reject student verification', caps: ['verification.decide'] },
+  'students.suspend':   { group: 'Users', label: 'Suspend a student account', caps: ['user.suspend'] },
+  'students.reinstate': { group: 'Users', label: 'Reinstate a suspended account', caps: ['user.reinstate'] },
 
   /* ---- cafeterias / menus ---- */
-  'cafeterias.view':    { group: 'Cafeterias', label: 'View cafeterias', caps: ['vendor.read'] },
-  'cafeterias.manage':  { group: 'Cafeterias', label: 'Create, edit, open/close and archive cafeterias', caps: ['vendor.create', 'vendor.update', 'vendor.archive', 'vendor.toggle'] },
-  'menus.view':         { group: 'Menus', label: 'View menus and price history', caps: ['menu.read'] },
-  'menus.manage':       { group: 'Menus', label: 'Edit menus, prices, availability and photos', caps: ['menu.create', 'menu.update', 'menu.archive', 'menu.availability', 'menu.price', 'menu.photo'] },
+  'cafeterias.view':    { group: 'Cafés', label: 'View cafés', caps: ['vendor.read'] },
+  'cafeterias.manage':  { group: 'Cafés', label: 'Create, edit, open, close and archive cafés', caps: ['vendor.create', 'vendor.update', 'vendor.archive', 'vendor.toggle'] },
+  'menus.view':         { group: 'Menu', label: 'View menus and price history', caps: ['menu.read'] },
+  'menus.manage':       { group: 'Menu', label: 'Edit menus, prices, availability and photos', caps: ['menu.create', 'menu.update', 'menu.archive', 'menu.availability', 'menu.price', 'menu.photo'] },
 
   /* ---- orders ---- */
   'orders.view':        { group: 'Orders', label: 'View every order, its items, amounts and history', caps: ['order.read', 'order.read_all', 'order.inspect'], pii: true },
   'orders.manage':      { group: 'Orders', label: 'Move orders through their normal states', caps: ['order.transition'] },
-  'orders.override':    { group: 'Orders', label: 'Override an order (admin cancel, refund)', caps: ['order.override', 'order.refund'] },
+  'orders.override':    { group: 'Payments', label: 'Refund an order, or cancel it as an administrator', caps: ['order.override', 'order.refund'] },
 
   /* ---- delivery ---- */
-  'delivery.view':              { group: 'Delivery', label: 'View live deliveries and delivery configuration', caps: ['delivery.read_all'] },
-  'delivery.manage':            { group: 'Delivery', label: 'Change delivery configuration', caps: ['delivery.config'] },
-  'delivery.assign':            { group: 'Delivery', label: 'Assign or reassign a delivery partner', caps: ['delivery.assign'] },
-  'delivery.incidents':         { group: 'Delivery', label: 'View and investigate delivery incidents', caps: ['incident.read', 'incident.manage'] },
-  'delivery.resolve_incidents': { group: 'Delivery', label: 'Resolve delivery incidents (decide responsibility)', caps: ['incident.resolve'] },
+  'delivery.view':              { group: 'Delivery tracking', label: 'View live deliveries and delivery settings', caps: ['delivery.read_all'] },
+  'delivery.manage':            { group: 'Delivery tracking', label: 'Change delivery settings', caps: ['delivery.config'] },
+  'delivery.assign':            { group: 'Delivery tracking', label: 'Assign or reassign a delivery partner', caps: ['delivery.assign'] },
+  'delivery.incidents':         { group: 'Delivery tracking', label: 'View and investigate delivery incidents', caps: ['incident.read', 'incident.manage'] },
+  'delivery.resolve_incidents': { group: 'Delivery tracking', label: 'Resolve delivery incidents and decide responsibility', caps: ['incident.resolve'] },
 
   /* ---- partners ---- */
   'partners.view':      { group: 'Partners', label: 'View partner applications and profiles', caps: ['partner.read'], pii: true },
@@ -51,12 +51,12 @@ export const PERMISSIONS = {
   'partners.reinstate': { group: 'Partners', label: 'Reinstate a suspended partner', caps: ['partner.reinstate'] },
 
   /* ---- deposits ---- */
-  'deposits.view':              { group: 'Deposits', label: 'View partner deposits, deductions and refund requests', caps: ['deposit.read'] },
-  'deposits.manage_policy':     { group: 'Deposits', label: 'Publish the deposit policy', caps: ['deposit.policy'] },
-  'deposits.record':            { group: 'Deposits', label: 'Record a deposit received', caps: ['deposit.record'] },
-  'deposits.propose_deduction': { group: 'Deposits', label: 'Propose or withdraw a deduction', caps: ['deposit.deduction.propose'] },
-  'deposits.approve_deduction': { group: 'Deposits', label: 'Decide disputes and apply deductions', caps: ['deposit.deduction.approve'] },
-  'deposits.refund':            { group: 'Deposits', label: 'Pay or reject deposit refunds', caps: ['deposit.refund'] },
+  'deposits.view':              { group: 'Partner deposits', label: 'View deposits, deductions and refund requests', caps: ['deposit.read'] },
+  'deposits.manage_policy':     { group: 'Partner deposits', label: 'Publish the deposit policy', caps: ['deposit.policy'] },
+  'deposits.record':            { group: 'Partner deposits', label: 'Record a deposit received', caps: ['deposit.record'] },
+  'deposits.propose_deduction': { group: 'Partner deposits', label: 'Propose or withdraw a deduction', caps: ['deposit.deduction.propose'] },
+  'deposits.approve_deduction': { group: 'Partner deposits', label: 'Decide disputes and apply deductions', caps: ['deposit.deduction.approve'] },
+  'deposits.refund':            { group: 'Partner deposits', label: 'Pay or reject deposit refunds', caps: ['deposit.refund'] },
 
   /* ---- reviews ---- */
   'reviews.view':            { group: 'Reviews', label: 'View reviews and reports', caps: ['review.read'] },
@@ -64,49 +64,49 @@ export const PERMISSIONS = {
   'reviews.resolve_reports': { group: 'Reviews', label: 'Resolve review reports', caps: ['review.report.resolve'] },
 
   /* ---- campuses / locations ---- */
-  'campuses.view':    { group: 'Campuses', label: 'View campuses', caps: ['campus.read'] },
-  'campuses.manage':  { group: 'Campuses', label: 'Change campus service status and details', caps: ['campus.manage', 'campus.toggle_delivery'] },
-  'locations.view':   { group: 'Campuses', label: 'View delivery locations and zones', caps: ['location.read'] },
-  'locations.manage': { group: 'Campuses', label: 'Create, edit and archive delivery locations and pickup points', caps: ['campus.create', 'campus.update', 'campus.archive'] },
-  'boundary.view':    { group: 'Campuses', label: 'View and propose campus boundaries', caps: ['boundary.read', 'boundary.propose'] },
-  'boundary.confirm': { group: 'Campuses', label: 'Confirm or retire a campus boundary (enables delivery)', caps: ['boundary.confirm'] },
+  'campuses.view':    { group: 'Campus locations', label: 'View campuses', caps: ['campus.read'] },
+  'campuses.manage':  { group: 'Campus locations', label: 'Change campus service status and details', caps: ['campus.manage', 'campus.toggle_delivery'] },
+  'locations.view':   { group: 'Campus locations', label: 'View delivery locations and zones', caps: ['location.read'] },
+  'locations.manage': { group: 'Campus locations', label: 'Create, edit and archive delivery locations and pickup points', caps: ['campus.create', 'campus.update', 'campus.archive'] },
+  'boundary.view':    { group: 'Campus locations', label: 'View and propose campus boundaries', caps: ['boundary.read', 'boundary.propose'] },
+  'boundary.confirm': { group: 'Campus locations', label: 'Confirm or retire a campus boundary (turns delivery on)', caps: ['boundary.confirm'] },
 
   /* ---- staff / counter ---- */
-  'staff.view':     { group: 'Staff', label: 'View cafeteria staff', caps: ['staff.read'] },
-  'staff.manage':   { group: 'Staff', label: 'Add or remove cafeteria staff, issue their sign-in codes', caps: ['staff.manage', 'user.enrol'] },
-  'counter.manage': { group: 'Staff', label: 'Assign cafeteria owners and staff roles', caps: ['user.role.grant', 'user.role.revoke'] },
+  'staff.view':     { group: 'Café staff', label: 'View café staff', caps: ['staff.read'] },
+  'staff.manage':   { group: 'Café staff', label: 'Add or remove café staff and issue their sign-in codes', caps: ['staff.manage', 'user.enrol'] },
+  'counter.manage': { group: 'Café staff', label: 'Assign café owner and café staff roles', caps: ['user.role.grant', 'user.role.revoke'] },
 
   /* ---- support ---- */
   'support.view':   { group: 'Support', label: 'Read support cases', caps: ['support.read'], pii: true },
   'support.manage': { group: 'Support', label: 'Reply to and close support cases', caps: ['support.manage'] },
 
   /* ---- platform ---- */
-  'platform.view':   { group: 'Platform', label: 'View feature flags and provider status', caps: ['platform.read'] },
-  'platform.manage': { group: 'Platform', label: 'Change feature flags and platform settings', caps: ['flags.update', 'config.update'] },
+  'platform.view':   { group: 'System health', label: 'View system health, feature flags and provider status', caps: ['platform.read'] },
+  'platform.manage': { group: 'Platform settings', label: 'Change feature flags and platform settings', caps: ['flags.update', 'config.update'] },
 
   /* ---- public website ---- */
-  'website.customize': { group: 'Website', label: 'Edit the website draft: theme, homepage, banners, footer, images', caps: ['site.read', 'site.draft'] },
-  'website.publish':   { group: 'Website', label: 'Publish the website draft, or roll back to an earlier version', caps: ['site.read', 'site.publish'] },
+  'website.customize': { group: 'Website customization', label: 'Edit the website draft: theme, homepage, banners, footer, images', caps: ['site.read', 'site.draft'] },
+  'website.publish':   { group: 'Website publishing', label: 'Publish the website draft, or roll back to an earlier version', caps: ['site.read', 'site.publish'] },
 
   /* ---- audit ---- */
-  'audit.view': { group: 'Audit', label: 'Read the audit log', caps: ['audit.read'] },
+  'audit.view': { group: 'Audit logs', label: 'Read the audit log', caps: ['audit.read'] },
 
   /* ---- finance ---- */
-  'finance.view':   { group: 'Finance', label: 'View the books, payouts and reconciliation', caps: ['finance.read_all'] },
-  'finance.manage': { group: 'Finance', label: 'Change pricing, run payouts, adjust balances', caps: ['pricing.manage', 'payout.manage', 'finance.adjust'] },
+  'finance.view':   { group: 'Payments', label: 'View payments, the books and reconciliation', caps: ['finance.read_all'] },
+  'finance.manage': { group: 'Settlements', label: 'Change pricing, run payouts and adjust balances', caps: ['pricing.manage', 'payout.manage', 'finance.adjust'] },
 
   /* ---- administrator access ---- */
-  'admins.view':             { group: 'Administrator access', label: 'See administrators, their permissions and activity', caps: ['admin.read'] },
-  'admins.suspend':          { group: 'Administrator access', label: 'Suspend another administrator (containment)', caps: ['admin.suspend'] },
-  'admins.invite':           { group: 'Administrator access', label: 'Invite administrators', caps: ['admin.invite'], ownerOnly: true },
-  'admins.edit_permissions': { group: 'Administrator access', label: 'Change an administrator\'s permissions', caps: ['admin.permissions'], ownerOnly: true },
-  'admins.revoke':           { group: 'Administrator access', label: 'Revoke administrator access', caps: ['admin.revoke'], ownerOnly: true },
-  'admins.restore':          { group: 'Administrator access', label: 'Restore administrator access', caps: ['admin.restore'], ownerOnly: true },
+  'admins.view':             { group: 'Access management', label: 'See administrators, their permissions and activity', caps: ['admin.read'] },
+  'admins.suspend':          { group: 'Access management', label: 'Suspend another administrator (containment)', caps: ['admin.suspend'] },
+  'admins.invite':           { group: 'Access management', label: 'Invite administrators', caps: ['admin.invite'], ownerOnly: true },
+  'admins.edit_permissions': { group: 'Access management', label: 'Change an administrator\'s permissions', caps: ['admin.permissions'], ownerOnly: true },
+  'admins.revoke':           { group: 'Access management', label: 'Revoke administrator access', caps: ['admin.revoke'], ownerOnly: true },
+  'admins.restore':          { group: 'Access management', label: 'Restore administrator access', caps: ['admin.restore'], ownerOnly: true },
 
   /* ---- security ---- */
-  'sessions.revoke':  { group: 'Security', label: 'Sign another administrator out everywhere', caps: ['session.revoke'] },
-  'passkeys.manage':  { group: 'Security', label: 'Remove another administrator\'s passkeys', caps: ['passkey.manage'], ownerOnly: true },
-  'security.manage':  { group: 'Security', label: 'Owner identity, owner recovery and security architecture', caps: ['security.manage'], ownerOnly: true },
+  'sessions.revoke':  { group: 'Sessions', label: 'Sign another administrator out everywhere', caps: ['session.revoke'] },
+  'passkeys.manage':  { group: 'Authentication & security', label: 'Remove another administrator\'s old passkeys', caps: ['passkey.manage'], ownerOnly: true },
+  'security.manage':  { group: 'Authentication & security', label: 'Owner identity, owner recovery and security architecture', caps: ['security.manage'], ownerOnly: true },
 };
 
 export const PERMISSION_KEYS = Object.keys(PERMISSIONS);
@@ -163,13 +163,30 @@ export function validatePermissionList(list) {
   return { ok: true, permissions: unique.sort() };
 }
 
+/* The order Campus Control shows the areas in. */
+export const GROUP_ORDER = ['Orders', 'Cafés', 'Menu', 'Users', 'Verification', 'Partners', 'Partner deposits',
+  'Delivery tracking', 'Payments', 'Settlements', 'Reviews', 'Campus locations', 'Café staff', 'Support',
+  'Website customization', 'Website publishing', 'Access management', 'Sessions', 'Audit logs',
+  'System health', 'Platform settings', 'Authentication & security'];
+
+/* What every administrator has without a grant, shown so the picture of an
+   administrator's access is complete. These are not permissions: there is
+   nothing to switch off. Reports follow the permissions behind each export. */
+export const ALWAYS_AVAILABLE = [
+  { group: 'Dashboard', label: 'The overview, showing only the figures their permissions allow' },
+  { group: 'Profile', label: 'Their own name, photo, password, authenticator and sessions, and nobody else\'s' },
+  { group: 'Reports', label: 'Order exports with "View every order"; money exports with "View payments"' },
+];
+
 export function catalogue() {
   const groups = {};
   for (const [key, p] of Object.entries(PERMISSIONS)) {
     (groups[p.group] ||= []).push({ key, label: p.label, ownerOnly: !!p.ownerOnly, personalData: !!p.pii });
   }
+  const rank = (g) => (GROUP_ORDER.indexOf(g) + 1) || 99;
   return {
-    groups: Object.entries(groups).map(([name, permissions]) => ({ name, permissions })),
+    groups: Object.entries(groups).sort(([a], [b]) => rank(a) - rank(b)).map(([name, permissions]) => ({ name, permissions })),
+    alwaysAvailable: ALWAYS_AVAILABLE,
     presets: Object.entries(PRESETS).map(([id, p]) => ({ id, label: p.label, permissions: p.permissions })),
   };
 }
