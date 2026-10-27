@@ -13,7 +13,7 @@ import { authorize, can, BadRequest, NotFound, Forbidden, Conflict, ProviderUnav
 import { assertRecentPasskey } from '../auth/passkey-policy.js';
 import { PAYMENTS } from '../config.js';
 import { transition, TRANSITIONS } from './orders.js';
-import { notifyAsync, inbox, markRead, channelStatus } from '../services/notify.js';
+import { notifyAsync, inbox, markRead, channelStatus, unreadCount } from '../services/notify.js';
 import { audit } from '../audit.js';
 import { snapshotFor, allocateRefund } from '../services/pricing.js';
 import { postRefund } from '../services/ledger.js';
@@ -25,13 +25,21 @@ export default async function supportRoutes(app) {
   /* ---------- notifications inbox ---------------------------------------- */
   app.get('/notifications', async (req) => {
     if (!req.actor) throw Forbidden('Sign in required');
-    return { notifications: await inbox(req.actor.id, { unreadOnly: req.query?.unread === 'true' }),
-             channels: channelStatus() };
+    const before = req.query?.before ? new Date(String(req.query.before)) : null;
+    if (before && Number.isNaN(before.getTime())) throw BadRequest('before must be a date');
+    const limit = Math.max(1, Math.min(50, Number.parseInt(req.query?.limit, 10) || 50));
+    const rows = await inbox(req.actor.id, { unreadOnly: req.query?.unread === 'true', before, limit });
+    return { notifications: rows, unread: await unreadCount(req.actor.id),
+             more: rows.length === limit, channels: channelStatus() };
   });
 
   app.post('/notifications/read', async (req) => {
     if (!req.actor) throw Forbidden('Sign in required');
-    await markRead(req.actor.id, req.body?.id);
+    const id = req.body?.id ?? null;
+    if (id !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id))) {
+      throw BadRequest('id must be a notification id, or omitted to mark all as read');
+    }
+    await markRead(req.actor.id, id);
     return { ok: true };
   });
 

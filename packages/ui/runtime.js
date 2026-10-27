@@ -16,7 +16,11 @@
    result is re-read from the server, so a reload never loses anything and
    two surfaces never disagree.
    ========================================================================== */
-import { quad, ApiError, Offline, rupees, ratingLabel } from '../data/client.js';
+import { quad, ApiError, Offline, rupees, ratingLabel, staffRequests } from '../data/client.js';
+
+/* Campus Control and the counter: a request that hangs is reported, and a
+   route the server lacks is named as such (packages/data/client.js). */
+staffRequests();
 import { esc } from './kit.js';
 import { mark as logoMark, lockup } from '../../brand/logo.js';
 
@@ -252,15 +256,22 @@ export async function panel(node, loader, view, { label, quiet = false } = {}) {
   /* A background refresh keeps what is on screen until the new data arrives,
      instead of flashing a loading state every few seconds. */
   if (!quiet) node.innerHTML = Loading(label);
+  /* Only the newest load may write into this node: leaving a page while it
+     is still loading must not paint its late answer over the next page. */
+  const seq = String((Number(node.dataset.loadSeq) || 0) + 1);
+  node.dataset.loadSeq = seq;
+  const current = () => node.dataset.loadSeq === seq && node.isConnected;
   try {
     const data = await loader();
+    if (!current()) return null;
     node.innerHTML = view(data);
     return data;
   } catch (e) {
-    if (quiet) return null;       // keep the last good board; the next tick retries
+    if (!current() || quiet) return null;   // quiet: keep the last good board; the next tick retries
     node.innerHTML = e instanceof ApiError && e.isConfiguration
       ? NotConfigured(e.message, e.detail)
-      : ErrorState(e);
+      : `${ErrorState(e)}<div class="panel-retry"><button type="button" class="btn btn-secondary btn-sm" data-panel-retry>Try again</button></div>`;
+    node.querySelector('[data-panel-retry]')?.addEventListener('click', () => panel(node, loader, view, { label }), { once: true });
     return null;
   }
 }
@@ -317,8 +328,22 @@ export const brandHeader = (sub) => `
   <div class="rail-brand">${lockup({ height: 32 })}
   ${sub ? `<span class="t-xs faint">${esc(sub)}</span>` : ''}</div>`;
 
-export function signOut() {
-  quad.logout().finally(() => location.reload());
+/* Signing out ends THIS session on the server, then shows the sign-in
+   screen. If the server could not end it, that is said - the screen does
+   not pretend. `admin` uses Campus Control's own logout. */
+export async function signOut({ admin = false, button = null } = {}) {
+  if (button) { button.disabled = true; button.textContent = 'Signing out…'; }
+  try {
+    await (admin ? quad.adminLogout() : quad.logout());
+  } catch (e) {
+    if (button) { button.disabled = false; button.textContent = 'Sign out'; }
+    toast(`Sign-out did not complete: ${explain(e)}`, 'bad');
+    return false;
+  }
+  try { sessionStorage.clear(); } catch { /* storage blocked */ }
+  /* replace(): Back does not return to the signed-in page. */
+  location.replace(location.pathname);
+  return true;
 }
 
 export const when = (ts) => {

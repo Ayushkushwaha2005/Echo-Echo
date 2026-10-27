@@ -21,6 +21,7 @@ const withStatus = (v, now = new Date()) => {
 import { q, one, tx } from '../db/index.js';
 import { authorize, can, BadRequest, NotFound, HttpError } from '../auth/rbac.js';
 import { audit } from '../audit.js';
+import { removeImage } from '../services/storage.js';
 
 /* The owning vendor of a resource is always re-read from the database.
    Trusting a vendorId from the request body would defeat the scope check. */
@@ -138,6 +139,26 @@ export default async function catalogRoutes(app) {
       map.contact_phone = raw || null;
     }
     if (b.contactPublic !== undefined) map.contact_public = !!b.contactPublic;
+    /* The café's photograph: an uploaded vendor_photo, set by someone who may
+       change this café's photos (its owner, or menus.manage). null removes it. */
+    let oldPhoto = null;
+    if (b.photoAsset !== undefined) {
+      authorize(req.actor, 'menu.photo', { vendorId: req.params.id });
+      if (b.photoAsset !== null) {
+        if (!/^[0-9a-f-]{36}$/i.test(String(b.photoAsset))) throw BadRequest('photoAsset must be an uploaded image');
+        const a = await one(`SELECT kind, owner_id FROM asset WHERE id = $1`, [b.photoAsset]);
+        if (!a || a.kind !== 'vendor_photo') throw BadRequest('Upload the café photo first');
+        /* Only an image this person uploaded (or, for platform staff, any
+           uploaded café photo), and one no other café or dish already uses:
+           replacing it later deletes it from storage. */
+        if (a.owner_id !== req.actor.id && !can(req.actor, 'menu.photo')) throw BadRequest('Upload the café photo first');
+        const used = await one(`SELECT 1 FROM vendor WHERE photo_asset = $1 AND id <> $2
+                                UNION ALL SELECT 1 FROM menu_item WHERE photo_asset = $1 LIMIT 1`, [b.photoAsset, req.params.id]);
+        if (used) throw BadRequest('That image is already used elsewhere; upload a new one');
+      }
+      oldPhoto = (await one(`SELECT photo_asset FROM vendor WHERE id = $1`, [req.params.id]))?.photo_asset || null;
+      map.photo_asset = b.photoAsset;
+    }
     /* Where orders are collected from: a location on the outlet's own campus. */
     if (b.campusNodeId) {
       const node = await one(
@@ -160,6 +181,8 @@ export default async function catalogRoutes(app) {
     vals.push(req.params.id);
     const row = await one(`UPDATE vendor SET ${set.join(', ')} WHERE id = $${vals.length} RETURNING *`, vals);
     if (!row) throw NotFound('No such cafeteria');
+    /* A replaced or removed café photo is deleted from storage. */
+    if (oldPhoto && oldPhoto !== row.photo_asset) await removeImage(oldPhoto).catch(() => {});
     await audit(req, { action: 'vendor.update', resource: 'vendor', resourceId: row.id, outcome: 'ok',
                        detail: { changed: Object.keys(map).filter((k) => map[k] !== undefined) } });
     return row;

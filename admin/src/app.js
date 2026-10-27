@@ -20,6 +20,9 @@ import { API_BASE, ApiError } from '../../packages/data/client.js';
 import { ORDER_TABS, TAB_STATE, orderActions, avatarFor, chartGeometry } from '../../packages/ui/order-view.js';
 import { qrSvg, groupKey } from '../../packages/ui/admin-enrol.js';
 import { passwordStrength } from '../../packages/ui/password-strength.js';
+import { cropImage } from '../../packages/ui/image-crop.js';
+import { mountChat } from '../../packages/ui/team-chat.js';
+import { CafPhoto, DishTile, dishImage, onImageError } from '../../packages/ui/photo-tiles.js';
 
 const root = document.getElementById('app');
 restoreAdminTheme();
@@ -44,6 +47,7 @@ const NAV_GROUPS = [
     ['partners', 'Delivery Partners', 'bike'], ['verification', 'Verification', 'id'],
     ['users', 'Users', 'users'], ['trust', 'Incidents & deposits', 'shield'],
     ['reviews', 'Reviews', 'star'], ['locations', 'Locations', 'pin'], ['support', 'Support', 'chat'],
+    ['chat', 'Team Chat', 'message'],
   ]],
   ['Website', [['website', 'Website Customization', 'brush']]],
   ['Money', [
@@ -95,6 +99,7 @@ const ICON = {
   log: '<path d="M6 3.5h9l3 3v14H6z"/><path d="M15 3.5v3h3M9 11h6M9 14.5h6M9 18h3"/>',
   pulse: '<path d="M3 12h4l2.5-6 4 12 2.5-6h5"/>',
   cog: '<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M20.5 12h-2.2M5.7 12H3.5M18 6l-1.6 1.6M7.6 16.4L6 18M18 18l-1.6-1.6M7.6 7.6L6 6"/>',
+  message: '<path d="M3.5 7a2.5 2.5 0 012.5-2.5h8A2.5 2.5 0 0116.5 7v5a2.5 2.5 0 01-2.5 2.5H9l-3.5 3v-3H6A2.5 2.5 0 013.5 12z"/><path d="M16.5 9H18a2.5 2.5 0 012.5 2.5v4A2.5 2.5 0 0118 18h-.5v2.5L14.5 18H12a2.5 2.5 0 01-2-1"/>',
   user: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 19.5c1-3.4 3.8-5 7-5s6 1.6 7 5"/>',
   bell: '<path d="M6 16.5V11a6 6 0 0112 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 004 0"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>',
@@ -161,7 +166,7 @@ function render() {
             <div class="cc-top-right">
               <span id="site-status"></span>
               <a class="cc-iconbtn" href="/web/" target="_blank" rel="noopener" title="Open the public website" aria-label="Open the public website">${icon('globe')}</a>
-              <button type="button" class="cc-iconbtn" data-act="notifications" aria-label="Notifications" aria-haspopup="true">${icon('bell')}<span class="cc-dot" id="notif-dot" hidden></span></button>
+              <div class="cc-bell"><button type="button" class="cc-iconbtn" data-act="notifications" aria-label="Notifications" aria-haspopup="dialog" aria-expanded="false">${icon('bell')}<span class="cc-dot cc-count" id="notif-dot" hidden></span></button></div>
               <div class="cc-profile">
                 <button type="button" class="cc-profile-btn" data-act="profileMenu" aria-haspopup="true" aria-expanded="false">
                   <span data-me-avatar data-size="38">${AvatarOf()}</span>
@@ -202,10 +207,7 @@ const initialsOf = (n) => String(n).split(/[\s@.]+/).filter(Boolean).map((w) => 
 /* The bell's unread dot and the website's live version, refreshed with each
    page. Both are optional: a failure leaves them blank, never an error. */
 async function refreshTopbar() {
-  quad.notifications('true').then((r) => {
-    const dot = document.getElementById('notif-dot');
-    if (dot) dot.hidden = !(r.notifications || []).length;
-  }).catch(() => {});
+  refreshUnread();
   const box = document.getElementById('site-status');
   if (!box || !allowed('website')) return;
   try {
@@ -220,7 +222,7 @@ async function refreshTopbar() {
 function closeMenusOutside(e) {
   /* An order row's menu closes on any click except the button that opened it. */
   if (!e.target.closest('.oh-dots')) document.querySelector('.oh-menu')?.remove();
-  if (e.target.closest('.cc-profile, .cc-notifs, [data-act="notifications"]')) return;
+  if (e.target.closest('.cc-profile, .cc-bell')) return;
   document.querySelectorAll('.cc-menu:not(.oh-menu)').forEach((m) => { m.hidden = true; });
   document.querySelector('.cc-profile-btn')?.setAttribute('aria-expanded', 'false');
   document.querySelector('.cc-notifs')?.remove();
@@ -255,6 +257,7 @@ const SCREENS = {
   platform: scrPlatform, audit: scrAudit,
   payments: scrPayments, reliability: scrReliability, reports: scrReports,
   website: scrWebsite, deliveries: scrDeliveries, sessions: scrSessions, order: scrOrderDetail, profile: scrProfile,
+  chat: scrChat,
 };
 
 /* The current page is marked with aria-current / aria-pressed, which is what
@@ -286,8 +289,8 @@ async function scrOverview() {
       when_(session.can('students.view'), async () => (await quad.verificationQueue('pending')).cases),
       when_(session.can('partners.view'), async () => (await quad.partners('pending')).partners),
       when_(session.can('platform.view'), () => quad.flags()),
-      when_(session.can('finance.view'), async () => ({
-        today: await quad.financeSummary({ from: startOfToday() }), all: await quad.financeSummary() })),
+      when_(session.can('finance.view'), () => Promise.all([quad.financeSummary({ from: startOfToday() }), quad.financeSummary()])
+        .then(([today, all]) => ({ today, all }))),
       /* A reliability failure must not blank the overview: it is shown as
          unavailable instead. */
       when_(session.can('platform.view'), () => quad.reliability().catch(() => null)),
@@ -379,16 +382,14 @@ async function scrFinance() {
     <button class="btn btn-primary btn-sm" data-act="buildBatch" data-kind="partner">
       Settle partners now</button>`;
 
-  await panel(view(), async () => ({
-    today: await quad.financeSummary({ from: startOfToday() }),
-    all: await quad.financeSummary(),
-    cafeterias: (await quad.financeCafeterias()).cafeterias,
-    partners: (await quad.financePartners()).partners,
-    payouts: await quad.payouts(),
-    recon: await quad.reconciliation(),
-    pricing: await quad.pricing(),
-    schedule: await quad.settlementSchedule(),
-  }), (d) => {
+  /* Eight independent reads, in parallel: the page waits for the slowest
+     one instead of the sum of all eight. */
+  await panel(view(), async () => {
+    const [today, all, cafeterias, partners, payouts, recon, pricing, schedule] = await Promise.all([
+      quad.financeSummary({ from: startOfToday() }), quad.financeSummary(), quad.financeCafeterias(),
+      quad.financePartners(), quad.payouts(), quad.reconciliation(), quad.pricing(), quad.settlementSchedule()]);
+    return { today, all, cafeterias: cafeterias.cafeterias, partners: partners.partners, payouts, recon, pricing, schedule };
+  }, (d) => {
     const t = d.today, a = d.all;
     const platform = d.pricing.live.find((p) => !p.vendor_id);
     const unconfigured = platform && !platform.commission_bps &&
@@ -597,44 +598,86 @@ const startOfToday = () => {
    CAFETERIAS
    ======================================================================== */
 async function scrCafeterias() {
-  setTitle('Cafeterias', 'Add outlets, assign owners, control trading.');
-  head().innerHTML = `<button class="btn btn-primary btn-sm" data-act="newVendor">Add cafeteria</button>`;
+  setTitle('Cafés', 'Every café on the platform, with its photo, hours and status, and what you can do for it.');
+  head().innerHTML = session.can('cafeterias.manage') ? `<button class="btn btn-primary btn-sm" data-act="newVendor">Add café</button>` : '';
   await panel(view(), () => quad.vendors({ includeArchived: 'true' }), (d) => {
     if (!d.vendors.length) {
-      return EmptyState('No cafeterias yet.', 'Add the first one to start the platform.');
+      return EmptyState('No cafés yet.', 'Add the first café to start taking orders.');
     }
-    return `<div class="stack">${d.vendors.map((raw) => {
+    const manage = session.can('cafeterias.manage');
+    const photos = session.can('menus.manage') || manage;
+    return `<div class="cafe-grid">${d.vendors.map((raw) => {
       const v = vendorVM(raw);
+      const status = !raw.active ? ['Archived', 'badge-warn'] : v.open ? ['Open', 'badge-open'] : raw.is_open ? ['Orders paused', 'badge-warn'] : ['Closed', 'badge-closed'];
       return `
-        <section class="card card-pad ${raw.active ? '' : 'faint'}">
-          <div class="between">
-            <div class="row" style="gap:12px">
-              ${Mark(v, 44)}
-              <div><b class="t-h3">${esc(v.name)}</b>
-                <div class="t-xs faint">${esc(v.kind || '')} ·
-                  ${v.ratingText.empty ? 'No ratings yet'
-                    : `★ ${v.ratingText.text} (${v.ratingText.count})`}</div></div>
+        <article class="cafe-card card${raw.active ? '' : ' is-archived'}">
+          ${cafeImage(raw)}
+          <div class="cafe-body">
+            <div class="between" style="gap:8px;align-items:flex-start">
+              <div style="min-width:0"><h2 class="cafe-name">${esc(v.name)}</h2>
+                <p class="cafe-kind">${esc(v.kind || 'Café')}${raw.campus_name ? ` · ${esc(raw.campus_name)}` : ''}</p></div>
+              <span class="badge ${status[1]}">${status[0]}</span>
             </div>
-            <div class="row" style="gap:8px">
-              <span class="badge ${raw.active ? (v.open ? 'badge-open' : 'badge-closed') : 'badge-warn'}">
-                ${!raw.active ? 'Archived' : v.open ? 'Open' : raw.is_open ? 'Orders paused' : 'Closed'}</span>
+            <dl class="cafe-facts">
+              <div><dt>Hours</dt><dd>${raw.opens_at && raw.closes_at ? `${esc(String(raw.opens_at).slice(0, 5))}–${esc(String(raw.closes_at).slice(0, 5))}` : 'Not set'}</dd></div>
+              <div><dt>Prep time</dt><dd>${raw.prep_minutes ? `${raw.prep_minutes} min` : '—'}</dd></div>
+              <div><dt>Delivery</dt><dd>${raw.delivery_enabled ? 'Offered' : 'Pickup only'}</dd></div>
+              <div><dt>Rating</dt><dd>${v.ratingText.empty ? 'No ratings yet' : `★ ${esc(v.ratingText.text)} (${v.ratingText.count})`}</dd></div>
+            </dl>
+            <div class="cafe-actions">
+              ${manage ? `<button class="btn btn-secondary btn-sm" data-act="editVendor" data-id="${v.id}">Edit</button>` : ''}
+              <button class="btn btn-secondary btn-sm" data-act="menuFor" data-id="${v.id}">Menu</button>
+              ${session.can('orders.view') ? `<button class="btn btn-secondary btn-sm" data-act="cafeOrders" data-id="${v.id}">Orders</button>` : ''}
+              ${photos ? `<label class="btn btn-ghost btn-sm">${raw.photo_asset ? 'Replace photo' : 'Add photo'}<input type="file" accept="image/jpeg,image/png,image/webp" data-cafe-photo="${v.id}" hidden></label>` : ''}
+              ${photos && raw.photo_asset ? `<button class="btn btn-ghost btn-sm" data-act="cafePhotoRemove" data-id="${v.id}">Remove photo</button>` : ''}
+              ${session.can('counter.manage') ? `<button class="btn btn-ghost btn-sm" data-act="assignOwner" data-id="${v.id}">Assign owner</button>
+                <button class="btn btn-ghost btn-sm" data-act="assignStaff" data-id="${v.id}">Add staff</button>` : ''}
+              ${manage ? `<button class="btn btn-ghost btn-sm" data-act="toggleOpen" data-id="${v.id}" data-v="${v.open ? '0' : '1'}">${v.open ? 'Close' : 'Open'}</button>
+              ${raw.is_open ? `<button class="btn btn-ghost btn-sm" data-act="toggleAccepting" data-id="${v.id}" data-v="${raw.accepting ? '0' : '1'}">${raw.accepting ? 'Pause new orders' : 'Resume new orders'}</button>` : ''}
+              <button class="btn btn-ghost btn-sm" data-act="archiveVendor" data-id="${v.id}" data-v="${raw.active ? '0' : '1'}">${raw.active ? 'Archive' : 'Restore'}</button>` : ''}
             </div>
           </div>
-          <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
-            <button class="btn btn-secondary btn-sm" data-act="editVendor" data-id="${v.id}">Edit</button>
-            <button class="btn btn-secondary btn-sm" data-act="menuFor" data-id="${v.id}">Menu</button>
-            <button class="btn btn-secondary btn-sm" data-act="assignOwner" data-id="${v.id}">Assign owner</button>
-            <button class="btn btn-secondary btn-sm" data-act="assignStaff" data-id="${v.id}">Add staff</button>
-            <button class="btn btn-ghost btn-sm" data-act="toggleOpen" data-id="${v.id}" data-v="${v.open ? '0' : '1'}">
-              ${v.open ? 'Close' : 'Open'}</button>
-            ${raw.is_open ? `<button class="btn btn-ghost btn-sm" data-act="toggleAccepting" data-id="${v.id}"
-              data-v="${raw.accepting ? '0' : '1'}">${raw.accepting ? 'Pause new orders' : 'Resume new orders'}</button>` : ''}
-            <button class="btn btn-ghost btn-sm" data-act="archiveVendor" data-id="${v.id}" data-v="${raw.active ? '0' : '1'}">
-              ${raw.active ? 'Archive' : 'Restore'}</button>
-          </div>
-        </section>`;
+        </article>`;
     }).join('')}</div>`;
-  }, { label: 'Loading cafeterias' });
+  }, { label: 'Loading cafés' });
+}
+
+/* The café's own photograph: an uploaded one if the café has it, else the
+   campus photograph the public site uses, else its tinted monogram. The
+   same sources as the student site, never a stock picture. */
+function cafeImage(raw) {
+  const v = vendorVM(raw);
+  if (raw.photo_asset) {
+    return `<div class="cafe-img" style="background:${v.markBg}"><span class="cafmark" aria-hidden="true">${esc(v.mark)}</span>
+      <img src="${esc(quad.assetUrl(raw.photo_asset))}" alt="${esc(`${raw.name}, the café`)}" loading="lazy" decoding="async" data-fallback></div>`;
+  }
+  return CafPhoto({ ...raw, heroBg: v.markBg, markBg: v.markBg, mark: v.mark }, { slot: 16 / 9, sizes: [100, 50, 33], cls: 'cafe-img' });
+}
+
+const CAFE_ACTIONS = {
+  cafeOrders: (t) => { S.orderFilter = { vendorId: t.dataset.id }; S.orderTab = 'all'; S.orderPage = 1; S.route = 'orders'; route(); },
+  cafePhotoRemove: (t) => {
+    if (!confirm('Remove this café\'s photo? The campus photograph or its monogram is shown instead.')) return null;
+    return act(t, () => quad.updateVendor(t.dataset.id, { photoAsset: null }), { ok: 'Photo removed', after: route });
+  },
+};
+
+async function cafePhotoChosen(input) {
+  const file = input.files?.[0];
+  const id = input.dataset.cafePhoto;
+  input.value = '';
+  if (!file) return;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return toast('Choose a JPEG, PNG or WebP image.', 'bad');
+  let blob;
+  try { blob = await cropImage(file, { title: 'Frame the café photo', aspects: ['wide'], minSide: 480, output: { maxSide: 1600, type: 'image/jpeg', quality: 0.88 } }); }
+  catch (e) { return toast(e.message, 'bad'); }
+  if (!blob) return;
+  try {
+    const up = await quad.uploadPhoto(blob, 'vendor_photo');
+    await quad.updateVendor(id, { photoAsset: up.id });
+    toast('Café photo saved');
+    route();
+  } catch (e) { toast(explain(e), 'bad'); }
 }
 
 /* ========================================================================
@@ -659,9 +702,8 @@ async function paintMenu() {
     if (!d.items.length) return EmptyState('No items yet.', 'Add the first dish for this cafeteria.');
     return `<div class="stack">${d.items.map((i) => `
       <div class="item ${i.active ? '' : 'faint'}">
-        ${i.photo_asset
-          ? `<img class="thumb-photo" src="${quad.assetUrl(i.photo_asset)}" alt="">`
-          : `<div class="item-thumbwrap"><div class="item-thumb"></div></div>`}
+        <div class="item-thumbwrap">${DishTile(i, quad.assetUrl)}
+          ${!i.photo_asset && dishImage(i, quad.assetUrl) ? '<span class="thumb-note">illustrative</span>' : ''}</div>
         <div class="grow">
           <b>${esc(i.name)}</b>
           <div class="t-xs faint">${esc(i.category || 'Uncategorised')} ·
@@ -874,12 +916,11 @@ const DED_BADGE = { proposed: 'badge-warn', disputed: 'badge-warn', upheld: 'bad
 async function scrTrust() {
   setTitle('Incidents & deposits', 'Delivery problems, partner security deposits and deductions.');
   head().innerHTML = `<button class="btn btn-secondary btn-sm" data-act="editDepositPolicy">Deposit policy</button>`;
-  await panel(view(), async () => ({
-    incidents: await quad.incidents('unresolved'),
-    deductions: (await quad.deductions('open')).deductions,
-    refunds: (await quad.depositRefunds('requested')).requests,
-    policy: (await quad.partnerPolicy()).policy,
-  }), (d) => `
+  await panel(view(), async () => {
+    const [incidents, deductions, refunds, policy] = await Promise.all([
+      quad.incidents('unresolved'), quad.deductions('open'), quad.depositRefunds('requested'), quad.partnerPolicy()]);
+    return { incidents, deductions: deductions.deductions, refunds: refunds.requests, policy: policy.policy };
+  }, (d) => `
     <div class="grid-kpi">
       ${kpi('Open incidents', d.incidents.incidents.length, 'reported, not yet resolved')}
       ${kpi('Deductions in progress', d.deductions.length, 'proposed, disputed or upheld')}
@@ -944,11 +985,11 @@ async function scrAdmins() {
     ${session.isOwner ? '<button class="btn btn-primary btn-sm" data-act="newAdminInvite">Invite administrator</button>' : ''}
     <button class="btn btn-secondary btn-sm" data-act="changeAdminPassword">Change my password</button>
     <button class="btn btn-secondary btn-sm" data-act="replaceAuthenticator">Replace my authenticator</button>`;
-  await panel(view(), async () => ({
-    admins: await quad.accessAdmins(),
-    invitations: session.can('admins.view') ? await quad.accessInvitations() : { invitations: [] },
-    me: await quad.adminCredential(),
-  }), (d) => {
+  await panel(view(), async () => {
+    const [admins, invitations, me] = await Promise.all([quad.accessAdmins(),
+      session.can('admins.view') ? quad.accessInvitations() : { invitations: [] }, quad.adminCredential()]);
+    return { admins, invitations, me };
+  }, (d) => {
     const open = d.invitations.invitations.filter((i) => i.state === 'waiting');
     return `
     <section class="card card-pad">
@@ -1608,7 +1649,7 @@ async function scrOrderDetail() {
           <table class="od-items">
             <thead><tr><th>Items summary</th><th>QTY</th><th class="num">Price</th><th class="num">Total Price</th></tr></thead>
             <tbody>${o.items.map((i) => `<tr>
-              <td><span class="od-item">${Avatar(i.name_snapshot, 30)}${esc(i.name_snapshot)}</span></td>
+              <td><span class="od-item">${odDishThumb(i)}${esc(i.name_snapshot)}</span></td>
               <td>× ${i.qty}</td><td class="num">${rupees(i.unit_paise_snapshot)}</td><td class="num">${rupees(i.line_paise)}</td></tr>`).join('')}</tbody>
           </table>
         </section>
@@ -1917,6 +1958,7 @@ document.addEventListener('keydown', (e) => {
 /* The date chips and the Graph View's metric apply as soon as they change. */
 document.addEventListener('change', (e) => {
   if (e.target.matches?.('[data-pf-photo]')) { pfPhotoChosen(e.target); return; }
+  if (e.target.matches?.('[data-cafe-photo]')) { cafePhotoChosen(e.target); return; }
   if (e.target.matches?.('input[name="perm"]')) {
     const f = e.target.closest('form');
     const c = f?.querySelector('[data-perm-count]');
@@ -2210,7 +2252,7 @@ ${added.length ? `Grant: ${added.join(', ')}
       (d) => quad.setCampus(t.dataset.id, { serviceStatus: d.status, statusMessage: d.message }));
     m.querySelector('select[name=status]').value = t.dataset.status;
   },
-  signout: () => signOut(),
+  signout: (t) => signOut({ admin: true, button: t }),
   closeModal,
 
   /* ---- cafeterias ---- */
@@ -2284,7 +2326,10 @@ ${added.length ? `Grant: ${added.join(', ')}
       <input class="input" type="file" name="photo" accept="image/*"></label>`,
     async (d, form) => {
       const file = form.querySelector('input[name=photo]').files[0];
-      const photoAsset = file ? (await quad.uploadPhoto(file, 'food_photo')).id : undefined;
+      const framed = file ? await cropImage(file, { title: 'Frame the dish photo', aspects: ['square', 'card'], minSide: 300,
+        output: { maxSide: 1200, type: 'image/jpeg', quality: 0.88 } }) : null;
+      if (file && !framed) throw new Error('The photo was not saved: framing was cancelled.');
+      const photoAsset = framed ? (await quad.uploadPhoto(framed, 'food_photo')).id : undefined;
       return quad.createItem(S.vendorId, {
         name: d.name, description: d.description, price: d.price,
         prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
@@ -2311,7 +2356,10 @@ ${added.length ? `Grant: ${added.join(', ')}
       </p>`,
       async (d, form) => {
         const file = form.querySelector('input[name=photo]').files[0];
-        const photoAsset = file ? (await quad.uploadPhoto(file, 'food_photo')).id : undefined;
+        const framed = file ? await cropImage(file, { title: 'Frame the dish photo', aspects: ['square', 'card'], minSide: 300,
+          output: { maxSide: 1200, type: 'image/jpeg', quality: 0.88 } }) : null;
+        if (file && !framed) throw new Error('The photo was not saved: framing was cancelled.');
+        const photoAsset = framed ? (await quad.uploadPhoto(framed, 'food_photo')).id : undefined;
         return quad.updateItem(i.id, {
           name: d.name, description: d.description, price: d.price,
           prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
@@ -3477,13 +3525,24 @@ function refreshSiteChipDirty() {
    server); the bytes are checked there by their magic number, size and
    dimensions. The checks here only save a pointless upload. */
 async function wzUpload(input) {
-  const file = input.files?.[0];
+  let file = input.files?.[0];
   const path = input.dataset.upload;
   input.value = '';
   if (!file) return;
   const allowed = W.limits?.allowedMime || ['image/jpeg', 'image/png', 'image/webp'];
   if (!allowed.includes(file.type)) return toast('Choose a JPEG, PNG or WebP image.', 'bad');
   if (W.limits?.maxBytes && file.size > W.limits.maxBytes) return toast(`That image is larger than ${Math.round(W.limits.maxBytes / 1048576)} MB.`, 'bad');
+  /* Frame it first, in the shape this slot needs. A logo keeps transparency
+     (PNG); photographs are re-encoded as JPEG without EXIF. */
+  const FRAME = {
+    'brand.logoAsset': { title: 'Frame the logo', aspects: ['free', 'wide', 'banner', 'square'], output: { maxSide: 800, type: 'image/png' } },
+    'brand.faviconAsset': { title: 'Frame the favicon', aspects: ['square'], output: { maxSide: 256, type: 'image/png' } },
+    'hero.imageAsset': { title: 'Frame the hero photograph', aspects: ['wide', 'card'], output: { maxSide: 2000, type: 'image/jpeg', quality: 0.86 } },
+  }[path] || { title: 'Frame the banner image', aspects: ['square', 'card', 'wide'], output: { maxSide: 1200, type: 'image/jpeg', quality: 0.88 } };
+  let framed;
+  try { framed = await cropImage(file, FRAME); } catch (e) { return toast(e.message, 'bad'); }
+  if (!framed) return;
+  file = framed;
   const dims = await imageSize(file).catch(() => null);
   if (!dims) return toast('That file could not be read as an image.', 'bad');
   const minimum = path === 'brand.faviconAsset' ? [64, 64] : path === 'brand.logoAsset' ? [0, 120] : path === 'hero.imageAsset' ? [1200, 0] : [200, 200];
@@ -3784,18 +3843,6 @@ Object.assign(ACTIONS, WZ_ACTIONS, {
     t.setAttribute('aria-expanded', String(!m.hidden));
     if (!m.hidden) m.querySelector('button')?.focus();
   },
-  notifications: async (t) => {
-    if (document.querySelector('.cc-notifs')) { document.querySelector('.cc-notifs').remove(); return; }
-    const box = el('<div class="cc-menu cc-notifs" role="dialog" aria-label="Notifications"><p class="t-sm muted" style="padding:12px">Loading…</p></div>');
-    t.parentElement.append(box);
-    try {
-      const { notifications } = await quad.notifications();
-      box.innerHTML = `<div class="cc-menu-head"><b>Notifications</b></div>${notifications.length ? notifications.slice(0, 12).map((n) => `
-        <div class="cc-notif${n.read_at ? '' : ' unread'}"><span class="t-sm">${esc(n.title || n.kind || 'Notice')}</span>
-          ${n.body ? `<span class="t-xs muted">${esc(n.body)}</span>` : ''}<span class="t-xs faint">${when(n.created_at)}</span></div>`).join('')
-        : '<p class="t-sm muted" style="padding:12px">Nothing new.</p>'}`;
-    } catch (e) { box.innerHTML = `<p class="t-sm" style="padding:12px">${esc(explain(e))}</p>`; }
-  },
   deliveriesRefresh: () => scrDeliveries(),
 });
 
@@ -4034,10 +4081,12 @@ async function pfPhotoChosen(input) {
   if (!f) return;
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(f.type)) return toast('Choose a JPEG, PNG or WebP image.', 'bad');
   if (f.size > 8 * 1048576) return toast('That photo is larger than 8 MB.', 'bad');
-  const url = URL.createObjectURL(f);
-  const ok = await new Promise((res) => { const i = new Image(); i.onload = () => res(i.naturalWidth >= 96 && i.naturalHeight >= 96); i.onerror = () => res(false); i.src = url; });
-  if (!ok) { URL.revokeObjectURL(url); return toast('Use an image at least 96 × 96 pixels.', 'bad'); }
-  P.photo = { file: f, url };
+  /* Frame it first: square, at least 96 px, re-encoded without EXIF. */
+  let framed;
+  try { framed = await cropImage(f, { title: 'Frame your photo', aspects: ['square'], minSide: 96, output: { maxSide: 640, type: 'image/jpeg', quality: 0.9 } }); }
+  catch (e) { return toast(e.message, 'bad'); }
+  if (!framed) return;
+  P.photo = { file: framed, url: URL.createObjectURL(framed) };
   document.getElementById('pf-photo').innerHTML = photoBlock();
 }
 
@@ -4077,3 +4126,143 @@ const PROFILE_ACTIONS = {
 };
 
 Object.assign(ACTIONS, PROFILE_ACTIONS);
+
+/* ========================================================================
+   NOTIFICATIONS — the bell
+
+   The signed-in administrator's own in-app notifications (/notifications is
+   scoped to the caller on the server). An unread count on the bell, a
+   pop-over with read and unread items, mark one or all as read, older pages
+   on demand, and a link to the related record when this administrator may
+   open it. The count refreshes once a minute while the tab is visible:
+   there is no push channel, so it is a polite poll, not a socket.
+   ======================================================================== */
+const NOTES = { items: [], unread: 0, more: false, loading: false };
+const NOTE_POLL_MS = 60_000;
+
+/* Where a notification leads, if anywhere this administrator may go. */
+function noteTarget(n) {
+  const d = n.data || {};
+  if (d.orderId && session.can('orders.view')) return { route: 'order', id: d.orderId };
+  if (/^support/.test(n.kind) && session.can('support.view')) return { route: 'support' };
+  if (/deposit|incident/.test(n.kind) && session.can('deposits.view', 'delivery.incidents')) return { route: 'trust' };
+  if (/payout/.test(n.kind) && session.can('finance.view')) return { route: 'finance' };
+  if (/verification|suspended/.test(n.kind) && session.can('students.view')) return { route: 'verification' };
+  return null;
+}
+
+function paintBellCount() {
+  const dot = document.getElementById('notif-dot');
+  if (!dot) return;
+  dot.hidden = !NOTES.unread;
+  dot.textContent = NOTES.unread > 99 ? '99+' : String(NOTES.unread || '');
+  document.querySelector('[data-act="notifications"]')?.setAttribute('aria-label',
+    NOTES.unread ? `Notifications, ${NOTES.unread} unread` : 'Notifications');
+}
+
+async function refreshUnread() {
+  try { NOTES.unread = (await quad.notifications('true', { limit: 1 })).unread || 0; paintBellCount(); }
+  catch { /* the bell keeps its last count; the next tick tries again */ }
+}
+setInterval(() => { if (document.visibilityState === 'visible' && document.querySelector('.cc-frame')) refreshUnread(); }, NOTE_POLL_MS);
+
+function notesHtml(error = '') {
+  return `<div class="cc-notifs-head"><b>Notifications</b>
+      ${NOTES.unread ? '<button type="button" class="btn btn-ghost btn-sm" data-act="notesReadAll">Mark all as read</button>' : ''}</div>
+    <div class="cc-notifs-list" role="list">
+      ${error ? `<p class="cc-notifs-empty" role="alert">${esc(error)} <button type="button" class="btn btn-ghost btn-sm" data-act="notesReload">Try again</button></p>`
+        : NOTES.loading && !NOTES.items.length ? '<p class="cc-notifs-empty">Loading…</p>'
+        : !NOTES.items.length ? '<p class="cc-notifs-empty">Nothing yet. Notices about your account and the orders you handle appear here.</p>'
+        : NOTES.items.map((n) => {
+          const to = noteTarget(n);
+          return `<div class="cc-notif${n.read_at ? '' : ' unread'}" role="listitem">
+            <button type="button" class="cc-notif-main" data-act="noteOpen" data-id="${esc(n.id)}" ${to ? '' : 'aria-disabled="true"'}>
+              <span class="cc-notif-title">${esc(n.title || 'Notice')}</span>
+              ${n.body ? `<span class="cc-notif-body">${esc(n.body)}</span>` : ''}
+              <span class="cc-notif-time">${esc(when(n.created_at))}${to ? ' · open' : ''}</span>
+            </button>
+            ${n.read_at ? '' : `<button type="button" class="cc-notif-read" data-act="noteRead" data-id="${esc(n.id)}" title="Mark as read" aria-label="Mark as read">●</button>`}
+          </div>`; }).join('')}
+      ${NOTES.more && !error ? '<button type="button" class="btn btn-ghost btn-sm cc-notifs-more" data-act="notesMore">Show older</button>' : ''}
+    </div>`;
+}
+const paintNotes = (error) => { const box = document.querySelector('.cc-notifs'); if (box) box.innerHTML = notesHtml(error); };
+
+async function loadNotes({ older = false } = {}) {
+  NOTES.loading = true; paintNotes();
+  try {
+    const before = older && NOTES.items.length ? NOTES.items[NOTES.items.length - 1].created_at : undefined;
+    const r = await quad.notifications(undefined, { limit: 15, before });
+    NOTES.items = older ? [...NOTES.items, ...r.notifications] : r.notifications;
+    NOTES.unread = r.unread || 0; NOTES.more = !!r.more;
+    NOTES.loading = false; paintNotes(); paintBellCount();
+  } catch (e) { NOTES.loading = false; paintNotes(explain(e)); }
+}
+
+const BELL_ACTIONS = {
+  notifications: (t) => {
+    const open = document.querySelector('.cc-notifs');
+    if (open) { open.remove(); t.setAttribute('aria-expanded', 'false'); return; }
+    const box = el('<div class="cc-menu cc-notifs" role="dialog" aria-label="Notifications"></div>');
+    t.closest('.cc-bell').append(box);
+    t.setAttribute('aria-expanded', 'true');
+    box.addEventListener('click', onClick);
+    loadNotes();
+  },
+  notesReload: () => loadNotes(),
+  notesMore: () => loadNotes({ older: true }),
+  noteRead: async (t) => {
+    try {
+      await quad.markRead(t.dataset.id);
+      const n = NOTES.items.find((x) => x.id === t.dataset.id);
+      if (n && !n.read_at) { n.read_at = new Date().toISOString(); NOTES.unread = Math.max(0, NOTES.unread - 1); }
+      paintNotes(); paintBellCount();
+    } catch (e) { toast(explain(e), 'bad'); }
+  },
+  notesReadAll: async () => {
+    try {
+      await quad.markAllRead();
+      NOTES.items.forEach((n) => { n.read_at ||= new Date().toISOString(); });
+      NOTES.unread = 0; paintNotes(); paintBellCount();
+    } catch (e) { toast(explain(e), 'bad'); }
+  },
+  noteOpen: async (t) => {
+    const n = NOTES.items.find((x) => x.id === t.dataset.id);
+    if (!n) return;
+    if (!n.read_at) await BELL_ACTIONS.noteRead({ dataset: { id: n.id } });
+    const to = noteTarget(n);
+    if (!to) return;
+    document.querySelector('.cc-notifs')?.remove();
+    if (to.route === 'order') S.orderId = to.id;
+    S.route = to.route; route();
+  },
+};
+
+Object.assign(ACTIONS, BELL_ACTIONS);
+
+/* Back after signing out must not show a signed-in page from the browser's
+   page cache: a restored page asks the server again. */
+if (typeof window.addEventListener === 'function') window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
+Object.assign(ACTIONS, CAFE_ACTIONS);
+
+/* A photo that fails to load is removed, leaving the monogram under it. */
+document.addEventListener('error', onImageError, true);
+
+/* The dish's photo on the order page: the matched photograph by name (an
+   order line keeps the name it was sold under), else its initials. */
+function odDishThumb(i) {
+  const ph = dishImage({ name: i.name_snapshot, photo_asset: null }, quad.assetUrl);
+  return ph ? `<img class="od-thumb" src="${esc(ph.src)}" alt="" width="36" height="36" loading="lazy" decoding="async" data-fallback>`
+    : Avatar(i.name_snapshot, 36);
+}
+
+/* ========================================================================
+   TEAM CHAT — staff, delivery partners and cafés (packages/ui/team-chat.js)
+   ======================================================================== */
+function scrChat() {
+  setTitle('Team Chat', 'Message the ECHO ECHO team, delivery partners and cafés. Only the people in a conversation can read it.');
+  head().innerHTML = '';
+  const box = el('<div class="chat-root"></div>');
+  view().replaceChildren(box);
+  mountChat(box, { quad, staff: true, toast, explain, can: (p) => session.can(p) });
+}

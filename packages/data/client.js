@@ -41,8 +41,16 @@ export class ApiError extends Error {
 }
 
 export class Offline extends Error {
-  constructor() { super('Cannot reach the ECHO ECHO server'); this.code = 'offline'; }
+  constructor(message = 'Cannot reach the ECHO ECHO server', code = 'offline') { super(message); this.code = code; }
 }
+
+/* How long any one request may take before the screen says so instead of
+   spinning forever. Long enough for a cold server start (about 15 s).
+   Staff screens only (Campus Control and the counter turn it on through
+   staffRequests()); the student site keeps its requests exactly as before. */
+export const REQUEST_TIMEOUT_MS = 25_000;
+let STAFF = false;
+export const staffRequests = () => { STAFF = true; };
 
 /* What a non-API response means, said plainly and without a request id. */
 function hostError(status) {
@@ -64,17 +72,27 @@ const slashed = (path) => {
 
 async function call(method, path, body, opts = {}) {
   let res;
+  const ctl = new AbortController();
+  const limit = opts.timeoutMs || (STAFF ? REQUEST_TIMEOUT_MS : 0);
+  const timer = limit ? setTimeout(() => ctl.abort('timeout'), limit) : null;
+  opts.signal?.addEventListener?.('abort', () => ctl.abort('cancelled'), { once: true });
   try {
     res = await fetch(API_BASE + slashed(path), {
       method,
       credentials: 'include',
       headers: body instanceof FormData ? {} : { 'Content-Type': 'application/json' },
       body: body == null ? undefined : (body instanceof FormData ? body : JSON.stringify(body)),
-      signal: opts.signal,
+      signal: ctl.signal,
     });
   } catch {
+    clearTimeout(timer);
+    if (ctl.signal.reason === 'timeout') {
+      throw new Offline('The ECHO ECHO server took too long to answer', 'timeout');
+    }
+    if (ctl.signal.reason === 'cancelled') throw new Offline('Request cancelled', 'cancelled');
     throw new Offline();
   }
+  clearTimeout(timer);
   const text = await res.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* non-JSON */ }
@@ -85,6 +103,14 @@ async function call(method, path, body, opts = {}) {
        portal - and its body is an internal error page, sometimes carrying a
        request id. Echoing that puts infrastructure wording in front of a
        student, so it is replaced with what it actually means to them. */
+    /* The server answered "no such route": this screen is newer than the
+       server it is talking to (a preview pointed at an older API, or a
+       deploy that has not finished). Said plainly, not as "Not Found". */
+    if (STAFF && res.status === 404 && /^Route \w+:\S+ not found$/.test(json?.message || '')) {
+      throw new ApiError(404, { error: 'This feature needs a newer ECHO ECHO server',
+        code: 'route_missing',
+        detail: `The server this page is connected to does not have ${path.split('?')[0]} yet. It becomes available when the matching server release is deployed.` });
+    }
     throw new ApiError(res.status, json || { error: hostError(res.status) });
   }
   return json;
@@ -109,6 +135,7 @@ export const quad = {
   verifyEmailCode: (email, code) => post('/auth/email/verify', { email, code }),
   setContactPhone: (phone) => post('/auth/me/contact-phone', { phone }),
   logout: () => post('/auth/logout'),
+  adminLogout: () => post('/auth/admin/logout'),
   /* The provider-free sign-in path: an administrator issues the code out of
      band, so this works with no SMS gateway configured. */
   enrolAvailable: () => get('/auth/enrol/available'),
@@ -426,7 +453,18 @@ export const quad = {
   runSettlement: () => post('/admin/settlement/run'),
 
   /* ---------- support, notifications, refunds ----------------------------- */
-  notifications: (unread) => get('/notifications' + qs({ unread })),
+  notifications: (unread, opts = {}) => get('/notifications' + qs({ unread, before: opts.before, limit: opts.limit })),
+  markAllRead: () => post('/notifications/read', {}),
+
+  /* Team Chat: membership is checked on the server for every call. */
+  chatPeople: (audience, q) => get('/chat/people' + qs({ audience, q: q || undefined })),
+  chatConversations: (audience) => get('/chat/conversations' + qs({ audience })),
+  chatStart: (body) => post('/chat/conversations', body),
+  chatMessages: (id, o = {}) => get(`/chat/conversations/${encodeURIComponent(id)}/messages` + qs({ after: o.after, before: o.before, limit: o.limit })),
+  chatSend: (id, body) => post(`/chat/conversations/${encodeURIComponent(id)}/messages`, body),
+  chatRead: (id) => post(`/chat/conversations/${encodeURIComponent(id)}/read`, {}),
+  chatAddMembers: (id, userIds) => post(`/chat/conversations/${encodeURIComponent(id)}/members`, { userIds }),
+  chatUnread: () => get('/chat/unread'),
   markRead: (id) => post('/notifications/read', { id }),
   createSupport: (data) => post('/support/cases', data),
   supportCases: (state) => get('/support/cases' + qs({ state })),

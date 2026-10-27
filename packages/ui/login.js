@@ -15,6 +15,7 @@
    ========================================================================== */
 import { quad, ApiError, Offline } from '../data/client.js';
 import { logo, BRAND_NAME } from '../../brand/logo.js';
+import { animatedShell } from './login-art.js';
 
 /* The sign-in cards open with the whole approved logo. */
 const BrandHead = () => `<div class="auth-brand">${logo({ size: 88, eager: true })}<span class="brand-name">${BRAND_NAME}</span></div>`;
@@ -60,9 +61,12 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
 
   render(surface === 'admin' ? 'admin' : 'enrol');
 
+  /* Campus Control's steps use the animated layout; the counter's enrolment
+     screen keeps the plain card. */
   function render(step, ctx = {}) {
     root.innerHTML = '';
-    root.append((SCREENS[step] || adminStep)(ctx));
+    const node = (SCREENS[step] || adminStep)(ctx);
+    root.append(surface === 'admin' && step !== 'enrol' ? animatedShell(node) : node);
   }
 
   /* ---------- Campus Control ----------------------------------------------

@@ -124,15 +124,21 @@ export async function notify(userId, kind, { body, data, title } = {}) {
 export const notifyAsync = (userId, kind, opts) =>
   notify(userId, kind, opts).catch(() => {});
 
-export async function inbox(userId, { unreadOnly = false } = {}) {
+/* One page of the inbox, newest first. `before` is the created_at of the
+   last row already shown, so older pages load without repeats. */
+export async function inbox(userId, { unreadOnly = false, before = null, limit = 50 } = {}) {
   const { rows } = await q(
     `SELECT id, kind, title, body, data, created_at, read_at
        FROM notification
       WHERE user_id = $1 AND channel = 'inapp'
         AND ($2::boolean IS NOT TRUE OR read_at IS NULL)
-      ORDER BY created_at DESC LIMIT 50`, [userId, unreadOnly]);
+        AND ($3::timestamptz IS NULL OR created_at < $3)
+      ORDER BY created_at DESC LIMIT $4`, [userId, unreadOnly, before, Math.max(1, Math.min(50, limit))]);
   return rows;
 }
+
+export const unreadCount = async (userId) => Number((await one(
+  `SELECT count(*)::int AS n FROM notification WHERE user_id = $1 AND channel = 'inapp' AND read_at IS NULL`, [userId])).n);
 
 export const markRead = (userId, id) =>
   q(`UPDATE notification SET read_at = now()
