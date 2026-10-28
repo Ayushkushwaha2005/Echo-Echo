@@ -252,7 +252,13 @@ export const ErrorState = (e, retryAct = '') => `
 
 /* Renders whichever of the three states applies. Used by every panel so the
    distinction is made consistently rather than per-screen. */
-export async function panel(node, loader, view, { label, quiet = false } = {}) {
+/* Panels started while a background refresh is running (quietly()) are quiet. */
+let QUIET = false;
+export async function quietly(start) {
+  QUIET = true;
+  try { const p = start(); QUIET = false; return await p; } finally { QUIET = false; }
+}
+export async function panel(node, loader, view, { label, quiet = QUIET } = {}) {
   /* A background refresh keeps what is on screen until the new data arrives,
      instead of flashing a loading state every few seconds. */
   if (!quiet) node.innerHTML = Loading(label);
