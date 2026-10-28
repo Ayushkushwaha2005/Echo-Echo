@@ -31,6 +31,11 @@ const REFUSED = [
      none of them is the production build. */
   'https://echo-echo-git-feature-ayushkushwaha2005s-projects.vercel.app',
   'https://echo-echo-it6c4453i-ayushkushwaha2005s-projects.vercel.app',
+  /* Reported 28 Oct 2026: the production deployment's own address and the
+     PR #24 preview. Both stay refused; the build sends the first to the
+     ECHO ECHO address instead (tools/site-origins.mjs). */
+  'https://echo-echo-hs6un7rqm-ayushkushwaha2005s-projects.vercel.app',
+  'https://echo-echo-rad2lyw9g-ayushkushwaha2005s-projects.vercel.app',
   'https://echo-echo-git-main-ayushkushwaha2005s-projects.vercel.app.evil.example',
   'http://echo-echo-git-main-ayushkushwaha2005s-projects.vercel.app',
   'null',
@@ -105,4 +110,22 @@ test('an unlisted origin is still refused, and is never echoed back', async () =
     const p = await preflight(origin);
     assert.equal(p.headers['access-control-allow-origin'], undefined, `${origin} not echoed`);
   }
+});
+
+/* The display-name save that failed on the deployment URL: from the ECHO
+   ECHO address it is saved and reads back; from the deployment URL it is
+   refused and the stored name is untouched. */
+test('My Profile saves from www.echoecho.tech and is refused from a deployment URL', async () => {
+  const owner = await makeUser(pool, { phone: '+919200000092', name: 'Owner Origin', roles: ['platform_owner'] });
+  const token = await sessionFor(pool, owner.id, { method: 'admin_totp' });
+  const send = (origin, method, payload) => app.inject({ method, url: '/admin/me',
+    headers: { 'content-type': 'application/json', origin, cookie: `quad_session=${token}` }, payload });
+  const saved = await send('https://www.echoecho.tech', 'PATCH', { displayName: 'Origin Check' });
+  assert.equal(saved.statusCode, 200, saved.body);
+  const refused = await send('https://echo-echo-hs6un7rqm-ayushkushwaha2005s-projects.vercel.app', 'PATCH', { displayName: 'Should Not Save' });
+  assert.equal(refused.statusCode, 403);
+  const back = JSON.parse((await send('https://www.echoecho.tech', 'GET')).body);
+  assert.equal(back.profile.displayName, 'Origin Check');
+  const row = (await pool.query(`SELECT display_name FROM admin_profile WHERE user_id = $1`, [owner.id])).rows[0];
+  assert.equal(row.display_name, 'Origin Check', 'what the database holds');
 });

@@ -12,7 +12,7 @@
    ========================================================================== */
 import {
   quad, session, gate, el, panel, toast, act, explain, rupees, ratingLabel,
-  vendorVM, EmptyState, NotConfigured, Loading, ErrorState, signOut, when, ORDER_LABEL, adminReauth,
+  vendorVM, EmptyState, NotConfigured, Loading, ErrorState, signOut, when, ORDER_LABEL, adminReauth, quietly,
 } from '../../packages/ui/runtime.js';
 import { esc, toggleTheme, restoreTheme, Mark } from '../../packages/ui/kit.js';
 import { lockup, mark } from '../../brand/logo.js';
@@ -164,6 +164,7 @@ function render() {
               <input class="cc-search-in" name="q" type="search" placeholder="Search orders: code, student or café" aria-label="Search orders" autocomplete="off">
             </form>
             <div class="cc-top-right">
+              <span id="live-status" class="cc-live" role="status" aria-live="polite"></span>
               <span id="site-status"></span>
               <a class="cc-iconbtn" href="/web/" target="_blank" rel="noopener" title="Open the public website" aria-label="Open the public website">${icon('globe')}</a>
               <div class="cc-bell"><button type="button" class="cc-iconbtn" data-act="notifications" aria-label="Notifications" aria-haspopup="dialog" aria-expanded="false">${icon('bell')}<span class="cc-dot cc-count" id="notif-dot" hidden></span></button></div>
@@ -201,6 +202,7 @@ function render() {
   document.addEventListener('click', closeMenusOutside);
   refreshUnread();
   route();
+  liveTick();
 }
 
 const initialsOf = (n) => String(n).split(/[\s@.]+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || 'A';
@@ -208,7 +210,8 @@ const initialsOf = (n) => String(n).split(/[\s@.]+/).filter(Boolean).map((w) => 
 /* The topbar's website status (optional: a failure leaves it blank). Moving between pages reuses an answer from
    the last minute instead of asking again on every click; a save, publish
    or rollback forces a fresh one, and the Website page paints it from the
-   data it has just loaded. (The unread count has its own minute poll.) */
+   data it has just loaded. The live check forces one when the website's
+   stamp moves. */
 const SITE_CHIP_TTL_MS = 60_000;
 let siteChipAt = 0;
 async function refreshTopbar({ force = false } = {}) {
@@ -3644,7 +3647,7 @@ async function wzPublish(btn) {
   const groups = changedGroups(W.config, live);
   modal('Publish the website?', `
     <p class="t-sm">Visitors will see this draft (revision ${W.revision}) as version ${(W.data.live?.version || 0) + 1}.
-      Open pages pick it up within about half a minute, without reloading.</p>
+      Open pages pick it up within about 15 seconds, without reloading.</p>
     <p class="t-sm"><b>Changed since the live version:</b> ${groups.length ? groups.map(esc).join(', ') : 'nothing; this publishes the same settings again'}.</p>
     ${field('note', 'Note for the history (optional)')}
     <p class="t-xs faint">You may be asked for your password and authenticator code. The previous version stays in the history and can be restored.</p>`,
@@ -3652,9 +3655,17 @@ async function wzPublish(btn) {
     const t0 = performance.now();
     const out = await quad.publishSite(W.revision, d.note || '');
     toast(`Published version ${out.version}. Checking the public website…`);
+    announcePublished(out.version);
     measurePublic(out.version, t0);
     return out;
   });
+}
+
+/* The public website open in other tabs of THIS browser hears about a
+   publish at once (packages/data/site-config.js listens); every other
+   visitor's page finds it on its next check. */
+function announcePublished(version) {
+  try { const ch = new BroadcastChannel('echo-site'); ch.postMessage({ type: 'published', version }); ch.close(); } catch { /* no BroadcastChannel */ }
 }
 
 /* How long until the PUBLIC endpoint, through the CDN, returns the new
@@ -3664,7 +3675,7 @@ async function measurePublic(version, t0) {
     try {
       const r = await fetch(`${API_BASE}/site/version/?t=${Date.now()}`, { credentials: 'omit', cache: 'no-store' }).then((x) => x.json());
       if (r.version >= version) {
-        toast(`Version ${version} is live on the public website (${((performance.now() - t0) / 1000).toFixed(1)} s after publishing). Open pages update within 30 s.`);
+        toast(`Version ${version} is live on the public website (${((performance.now() - t0) / 1000).toFixed(1)} s after publishing). Open pages update within 15 s.`);
         return;
       }
     } catch { /* keep trying */ }
@@ -3678,7 +3689,7 @@ function wzRollback(t) {
   modal(`Roll back to version ${v}?`, `
     <p class="t-sm">Version ${v}'s settings become the live website again, as a new version. Nothing is deleted, and your draft is left as it is.</p>
     ${field('note', 'Reason (kept in the history)')}`,
-  (d) => quad.rollbackSite(v, d.note || '').then((out) => { toast(`Rolled back: version ${out.version} is live`); measurePublic(out.version, performance.now()); return out; }));
+  (d) => quad.rollbackSite(v, d.note || '').then((out) => { toast(`Rolled back: version ${out.version} is live`); announcePublished(out.version); measurePublic(out.version, performance.now()); return out; }));
 }
 
 async function wzPreviewVersion(t) {
@@ -4146,11 +4157,11 @@ Object.assign(ACTIONS, PROFILE_ACTIONS);
    scoped to the caller on the server). An unread count on the bell, a
    pop-over with read and unread items, mark one or all as read, older pages
    on demand, and a link to the related record when this administrator may
-   open it. The count refreshes once a minute while the tab is visible:
-   there is no push channel, so it is a polite poll, not a socket.
+   open it. The count arrives with the live check (LIVE, below) every few
+   seconds while the tab is visible: there is no push channel, so it is a
+   polite poll, not a socket.
    ======================================================================== */
 const NOTES = { items: [], unread: 0, more: false, loading: false };
-const NOTE_POLL_MS = 60_000;
 
 /* Where a notification leads, if anywhere this administrator may go. */
 function noteTarget(n) {
@@ -4176,7 +4187,95 @@ async function refreshUnread() {
   try { NOTES.unread = (await quad.notifications('true', { limit: 1 })).unread || 0; paintBellCount(); }
   catch { /* the bell keeps its last count; the next tick tries again */ }
 }
-setInterval(() => { if (document.visibilityState === 'visible' && document.querySelector('.cc-frame')) refreshUnread(); }, NOTE_POLL_MS);
+/* The unread count follows the live check below (liveTick). */
+
+/* ========================================================================
+   LIVE — the page in front of the administrator follows the database
+   Every LIVE_POLL_MS while the tab is visible, one small request asks the
+   server for a stamp per area (server/src/routes/live.js). When the stamp
+   behind the current page moves - an order placed on the student site, a
+   café closed at the counter, another administrator's edit - the page is
+   reloaded from the API in place, keeping the scroll position and without
+   a loading flash. It waits while the administrator is typing, has a
+   dialog or menu open, or the page has unsaved work. The same answer
+   carries the unread count, so the bell needs no poll of its own.
+   ======================================================================== */
+const LIVE_POLL_MS = 5_000;
+const LIVE_MAX_BACKOFF_MS = 60_000;
+/* Which areas each page shows. Pages not listed load fresh when opened. */
+const LIVE_AREAS = {
+  overview: ['orders', 'cafes', 'users', 'partners'], cafeterias: ['cafes'], menu: ['menu', 'cafes'],
+  orders: ['orders'], order: ['orders'], deliveries: ['orders'],
+  users: ['users'], verification: ['users'], partners: ['partners'],
+};
+const LIVE = { stamps: null, syncedAt: 0, failures: 0, timer: null, busy: false, pending: false };
+
+/* Somebody is in the middle of something: a background reload would lose it. */
+function liveBlocked() {
+  if (document.querySelector('.modal, .oh-menu, .cc-notifs')) return true;
+  if (S.route === 'website' && wDirty()) return true;
+  const a = document.activeElement;
+  if (a && view()?.contains(a) && a.matches('input, textarea, select, [contenteditable="true"]')) return true;
+  return !!String(globalThis.getSelection?.() || '');
+}
+
+async function liveReload() {
+  if (liveBlocked()) { LIVE.pending = true; return; }
+  LIVE.pending = false;
+  const y = window.scrollY;
+  const panelBox = document.querySelector('.cc-panel');
+  const py = panelBox?.scrollTop || 0;
+  await quietly(() => route());
+  window.scrollTo(0, y);
+  if (panelBox) panelBox.scrollTop = py;
+}
+
+function paintLive() {
+  const box = document.getElementById('live-status');
+  if (!box) return;
+  if (LIVE.failures) {
+    box.className = 'cc-live is-off';
+    box.textContent = LIVE.failures > 1 ? 'Offline · retrying' : 'Reconnecting…';
+    box.title = 'The live connection to the ECHO ECHO server failed; it retries on its own.';
+    return;
+  }
+  if (!LIVE.syncedAt) { box.textContent = ''; return; }
+  const s = Math.round((Date.now() - LIVE.syncedAt) / 1000);
+  box.className = 'cc-live';
+  box.textContent = s < 10 ? 'Live · just now' : `Live · ${s < 60 ? `${s} s` : `${Math.round(s / 60)} min`} ago`;
+  box.title = `Last checked with the server at ${new Date(LIVE.syncedAt).toLocaleTimeString()}`;
+}
+
+async function liveTick() {
+  clearTimeout(LIVE.timer);
+  const visible = document.visibilityState === 'visible';
+  if (visible && document.querySelector('.cc-frame') && !LIVE.busy) {
+    LIVE.busy = true;
+    const routeAtStart = S.route;
+    try {
+      const d = await quad.adminChanges();
+      LIVE.failures = 0;
+      LIVE.syncedAt = Date.now();
+      if (d.unread !== NOTES.unread) { NOTES.unread = d.unread || 0; paintBellCount(); }
+      const before = LIVE.stamps;
+      LIVE.stamps = d.stamps || {};
+      const moved = before ? Object.keys(LIVE.stamps).filter((k) => before[k] !== LIVE.stamps[k]) : [];
+      if (moved.includes('site')) refreshTopbar({ force: true });
+      /* A page left while this was in flight is not reloaded on its behalf. */
+      if (S.route === routeAtStart && (LIVE.pending || moved.some((k) => (LIVE_AREAS[S.route] || []).includes(k)))) {
+        await liveReload();
+      }
+    } catch {
+      LIVE.failures += 1;
+    } finally { LIVE.busy = false; }
+  }
+  paintLive();
+  if (!visible) return;   // visibilitychange restarts it
+  const wait = LIVE.failures ? Math.min(LIVE_MAX_BACKOFF_MS, LIVE_POLL_MS * 2 ** LIVE.failures) : LIVE_POLL_MS;
+  LIVE.timer = setTimeout(liveTick, wait);
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') liveTick(); });
+globalThis.addEventListener?.('online', () => { LIVE.failures = 0; liveTick(); });
 
 function notesHtml(error = '') {
   return `<div class="cc-notifs-head"><b>Notifications</b>

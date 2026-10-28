@@ -40,6 +40,7 @@ import adminOpsRoutes from './routes/admin-ops.js';
 import siteRoutes from './routes/site.js';
 import adminProfileRoutes from './routes/admin-profile.js';
 import chatRoutes from './routes/chat.js';
+import liveRoutes from './routes/live.js';
 
 const boot = assertBootable();
 if (!boot.ok) {
@@ -372,6 +373,7 @@ export function build() {
     await app.register(siteRoutes);
     await app.register(adminProfileRoutes);
     await app.register(chatRoutes);
+    await app.register(liveRoutes);
 
     return app;
   })();

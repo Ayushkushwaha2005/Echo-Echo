@@ -11,8 +11,11 @@
        as #RRGGBB, a bounded number or an enum before it was published, and
        is re-checked here, so nothing but a token value reaches the page
      · keeps an open page current: it asks for the version number when the
-       tab comes back into view and every 30 seconds while it is visible,
-       and fetches the settings only when that number moves
+       tab comes back into view and every 10 seconds while it is visible,
+       and fetches the settings only when that number moves. A publish from
+       Campus Control in the same browser is heard at once (BroadcastChannel
+       'echo-site'); the CDN holds the version for 5 s (vercel.json), so any
+       other visitor sees a publish within about 15 s
      · in Campus Control's preview frame, takes an unpublished draft from
        the parent window (same origin only) and never from anywhere else
 
@@ -172,7 +175,7 @@ export function applyToDocument(cfg, { assetUrl } = {}) {
 
 /* ---------- keeping an open page current ---------------------------------- */
 const CACHE_KEY = 'echo.site';
-export const POLL_MS = 30_000;
+export const POLL_MS = 10_000;
 
 /**
  * Starts the sync loop. `onChange(state)` runs whenever the settings in
@@ -226,11 +229,34 @@ export function startSiteSync({ api, onChange, previewFrom = null, now = () => D
     } finally { busy = false; }
   }
 
+  /* Told of a publish: ask for that version by name, which is its own CDN
+     cache entry, so the answer is not the copy cached a moment before. */
+  async function chase(v) {
+    for (let i = 0; i < 4 && state.version !== v; i++) {
+      try {
+        const r = await api.siteConfig(v);
+        if (r.version === v) {
+          try { globalThis.localStorage?.setItem(CACHE_KEY, JSON.stringify({ version: r.version, config: r.config, featuredItems: r.featuredItems })); } catch { /* storage full or blocked */ }
+          set({ version: r.version, config: effective(r.config), featuredItems: r.featuredItems || [], preview: false });
+          lastCheck = now();
+          return;
+        }
+      } catch { /* try again shortly */ }
+      await new Promise((res) => setTimeout(res, 1000));
+    }
+  }
+
   pull(true);
   const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
   setInterval(() => { if (visible()) pull(); }, POLL_MS);
   globalThis.document?.addEventListener?.('visibilitychange', () => { if (visible() && now() - lastCheck > 5000) pull(); });
   globalThis.addEventListener?.('focus', () => { if (now() - lastCheck > 5000) pull(); });
+  try {
+    new BroadcastChannel('echo-site').addEventListener('message', (e) => {
+      const v = Number(e.data?.version);
+      if (e.data?.type === 'published' && Number.isInteger(v) && v !== state.version) chase(v);
+    });
+  } catch { /* no BroadcastChannel: the regular check still finds it */ }
   return state;
 }
 

@@ -12,6 +12,7 @@ import { readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, readdirSync, st
 import { createHash } from 'node:crypto';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeOrigins, configJs } from './tools/site-origins.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const dist = join(root, 'dist');
@@ -45,6 +46,12 @@ if (PRODUCTION && !SAME_ORIGIN && !PREFIX && !/^https:\/\//.test(API_BASE)) {
   console.error(`✗ QUAD_API_BASE must be https, a /path prefix, or "same-origin" in production (got ${API_BASE}).`);
   process.exit(1);
 }
+
+/* Which kind of deployment this is (Vercel sets VERCEL_ENV for the build:
+   production, preview or development) and where the server accepts changes
+   from (render.yaml WEB_ORIGIN): see tools/site-origins.mjs. */
+const DEPLOY_ENV = process.env.VERCEL_ENV || 'local';
+const WRITE_ORIGINS = writeOrigins(readFileSync(join(root, 'render.yaml'), 'utf8'));
 
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
@@ -147,9 +154,7 @@ for (const surface of SURFACES) {
   if (!inline.test(html)) { console.error(`✗ ${surface}/index.html: the API-base script block was not found`); process.exit(1); }
   html = html.replace(inline, '<script src="./config.js"></script>');
   writeFileSync(join(dist, surface, 'config.js'),
-    `/* Written by build.mjs. Nothing secret is ever placed here. */
-window.QUAD_API_BASE = ${JSON.stringify(API_BASE)};
-`);
+    configJs({ apiBase: API_BASE, surface, env: DEPLOY_ENV, origins: WRITE_ORIGINS }));
   const base = `../_v/${VERSION}`;
   html = html.replaceAll('href="../packages/', `href="${base}/packages/`)
              .replace('src="./src/app.js"', `src="${base}/${surface}/src/app.js"`);
@@ -306,6 +311,7 @@ for (const file of walk(dist).filter((f) => /\.(js|mjs|html)$/.test(f))) {
 
 console.log(`\nQuad build — ${PRODUCTION ? 'PRODUCTION' : 'development'}`);
 console.log(`API base: ${API_BASE}`);
+console.log(`Deployment: ${DEPLOY_ENV}`);
 console.log(`${files.length} files in dist/`);
 
 if (findings.length) {

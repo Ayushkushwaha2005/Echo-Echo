@@ -111,6 +111,19 @@ async function call(method, path, body, opts = {}) {
         code: 'route_missing',
         detail: `The server this page is connected to does not have ${path.split('?')[0]} yet. It becomes available when the matching server release is deployed.` });
     }
+    /* The server accepts changes only from the ECHO ECHO addresses it
+       lists. A preview, or a deployment's own *.vercel.app address, reads
+       live data but can never change it: say where changes can be made. */
+    if (STAFF && res.status === 403 && json?.error === 'Cross-origin request rejected') {
+      const d = globalThis.QUAD_DEPLOY || {};
+      const here = typeof location !== 'undefined' ? location : null;
+      const where = d.canonical && here ? `${d.canonical}${here.pathname}` : 'the ECHO ECHO website';
+      throw new ApiError(403, { error: 'Changes cannot be saved from this address',
+        code: 'origin_not_allowed',
+        detail: d.env === 'preview'
+          ? `This is a preview deployment (${here?.origin}). It can show live data but never change it. Make the change at ${where}.`
+          : `This page is open at ${here?.origin}, which the server does not accept changes from. Make the change at ${where}.` });
+    }
     throw new ApiError(res.status, json || { error: hostError(res.status) });
   }
   return json;
@@ -511,7 +524,9 @@ export const quad = {
      The public pair returns only what is PUBLISHED. The admin calls are
      permission-checked by the server; `revision` is the draft revision the
      editor loaded, so a stale save is refused instead of overwriting. */
-  siteConfig: () => get('/site/config'),
+  /* `v` names a version just announced as published: a separate CDN cache
+     entry, so the answer is fresh. The server ignores it otherwise. */
+  siteConfig: (v) => get('/site/config' + qs({ v })),
   siteVersion: () => get('/site/version'),
   adminSite: () => get('/admin/site'),
   validateSite: (config) => post('/admin/site/validate', { config }),
@@ -521,6 +536,8 @@ export const quad = {
   rollbackSite: (version, note) => post('/admin/site/rollback', { version, note }),
   siteVersions: () => get('/admin/site/versions'),
   siteVersionConfig: (v) => get(`/admin/site/versions/${v}`),
+  /* Campus Control's live check: a stamp per area, see server/src/routes/live.js. */
+  adminChanges: (opts = {}) => call('GET', '/admin/changes', null, { timeoutMs: 10_000, ...opts }),
 
   /* ---------- assistant --------------------------------------------------- */
   aiStatus: () => get('/ai/status'),

@@ -147,6 +147,12 @@ body { background: var(--cc-canvas); }
 }
 .cc-sitechip::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #2E9E6A; margin-right: 7px; vertical-align: 1px; }
 .cc-sitechip.is-draft::before { background: #D79A1E; }
+/* Live check status: quiet text, a coloured dot only when it is off. */
+.cc-live { font-size: var(--t-xs); color: var(--text-muted); white-space: nowrap; }
+.cc-live:empty { display: none; }
+.cc-live.is-off { color: var(--cc-red); font-weight: var(--w-semibold); }
+.cc-live.is-off::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--cc-red); margin-right: 6px; vertical-align: 1px; }
+@media (max-width: 720px) { .cc-live:not(.is-off) { display: none; } }
 .cc-profile { position: relative; }
 .cc-profile-btn { display: flex; align-items: center; gap: 10px; border: 0; background: none; cursor: pointer; padding: 4px 6px; border-radius: 12px; font: inherit; color: var(--text); }
 .cc-profile-btn:hover { background: var(--bg-sunken); }
