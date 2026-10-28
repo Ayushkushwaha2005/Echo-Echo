@@ -32,6 +32,8 @@ export class ApiError extends Error {
     this.status = status;
     this.code = body?.code;
     this.detail = body?.detail;
+    /* Field-level problems, when the server checked a form (website settings). */
+    this.problems = Array.isArray(body?.problems) ? body.problems : null;
   }
   /* True when the failure is "an external service is not connected" rather
      than "you did something wrong" — surfaces render these differently. */
@@ -39,8 +41,16 @@ export class ApiError extends Error {
 }
 
 export class Offline extends Error {
-  constructor() { super('Cannot reach the ECHO ECHO server'); this.code = 'offline'; }
+  constructor(message = 'Cannot reach the ECHO ECHO server', code = 'offline') { super(message); this.code = code; }
 }
+
+/* How long any one request may take before the screen says so instead of
+   spinning forever. Long enough for a cold server start (about 15 s).
+   Staff screens only (Campus Control and the counter turn it on through
+   staffRequests()); the student site keeps its requests exactly as before. */
+export const REQUEST_TIMEOUT_MS = 25_000;
+let STAFF = false;
+export const staffRequests = () => { STAFF = true; };
 
 /* What a non-API response means, said plainly and without a request id. */
 function hostError(status) {
@@ -62,17 +72,27 @@ const slashed = (path) => {
 
 async function call(method, path, body, opts = {}) {
   let res;
+  const ctl = new AbortController();
+  const limit = opts.timeoutMs || (STAFF ? REQUEST_TIMEOUT_MS : 0);
+  const timer = limit ? setTimeout(() => ctl.abort('timeout'), limit) : null;
+  opts.signal?.addEventListener?.('abort', () => ctl.abort('cancelled'), { once: true });
   try {
     res = await fetch(API_BASE + slashed(path), {
       method,
       credentials: 'include',
       headers: body instanceof FormData ? {} : { 'Content-Type': 'application/json' },
       body: body == null ? undefined : (body instanceof FormData ? body : JSON.stringify(body)),
-      signal: opts.signal,
+      signal: ctl.signal,
     });
   } catch {
+    clearTimeout(timer);
+    if (ctl.signal.reason === 'timeout') {
+      throw new Offline('The ECHO ECHO server took too long to answer', 'timeout');
+    }
+    if (ctl.signal.reason === 'cancelled') throw new Offline('Request cancelled', 'cancelled');
     throw new Offline();
   }
+  clearTimeout(timer);
   const text = await res.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* non-JSON */ }
@@ -83,6 +103,14 @@ async function call(method, path, body, opts = {}) {
        portal - and its body is an internal error page, sometimes carrying a
        request id. Echoing that puts infrastructure wording in front of a
        student, so it is replaced with what it actually means to them. */
+    /* The server answered "no such route": this screen is newer than the
+       server it is talking to (a preview pointed at an older API, or a
+       deploy that has not finished). Said plainly, not as "Not Found". */
+    if (STAFF && res.status === 404 && /^Route \w+:\S+ not found$/.test(json?.message || '')) {
+      throw new ApiError(404, { error: 'This feature needs a newer ECHO ECHO server',
+        code: 'route_missing',
+        detail: `The server this page is connected to does not have ${path.split('?')[0]} yet. It becomes available when the matching server release is deployed.` });
+    }
     throw new ApiError(res.status, json || { error: hostError(res.status) });
   }
   return json;
@@ -107,6 +135,7 @@ export const quad = {
   verifyEmailCode: (email, code) => post('/auth/email/verify', { email, code }),
   setContactPhone: (phone) => post('/auth/me/contact-phone', { phone }),
   logout: () => post('/auth/logout'),
+  adminLogout: () => post('/auth/admin/logout'),
   /* The provider-free sign-in path: an administrator issues the code out of
      band, so this works with no SMS gateway configured. */
   enrolAvailable: () => get('/auth/enrol/available'),
@@ -130,6 +159,14 @@ export const quad = {
   adminReauth: (password, code) => post('/auth/admin/reauth', { password, code }),
   adminLogout: () => post('/auth/admin/logout'),
   adminCredential: () => get('/auth/admin/credential'),
+  /* ---------- My Profile: the signed-in administrator only ------------- */
+  myAdminProfile: () => get('/admin/me'),
+  saveMyAdminProfile: (displayName) => patch('/admin/me', { displayName }),
+  uploadMyAdminPhoto: (file) => { const fd = new FormData(); fd.append('photo', file); return call('POST', '/admin/me/photo', fd); },
+  removeMyAdminPhoto: () => del('/admin/me/photo'),
+  adminPhotoUrl: (userId) => `${API_BASE}/admin/photos/${userId}/`,
+  revokeMySession: (handle) => post('/admin/me/sessions/revoke', { handle }),
+  revokeMyOtherSessions: () => post('/admin/me/sessions/revoke', { others: true }),
   setAdminPassword: (body) => post('/auth/admin/credential/password', body),
   beginAuthenticator: () => post('/auth/admin/credential/authenticator/begin'),
   confirmAuthenticator: (code) => post('/auth/admin/credential/authenticator/confirm', { code }),
@@ -168,6 +205,7 @@ export const quad = {
   /* ---------- Campus Control operations (server-paged, server-checked) ---- */
   adminOrders: (opts) => get('/admin/orders' + qs(opts)),
   orderTimeline: (id) => get(`/admin/orders/${id}/timeline`),
+  adminOrderSummary: (opts) => get('/admin/orders/summary' + qs(opts)),
   adminPayments: (opts) => get('/admin/payments' + qs(opts)),
   adminWebhooks: (days) => get('/admin/webhooks' + qs({ days })),
   reliability: () => get('/admin/reliability'),
@@ -415,7 +453,18 @@ export const quad = {
   runSettlement: () => post('/admin/settlement/run'),
 
   /* ---------- support, notifications, refunds ----------------------------- */
-  notifications: (unread) => get('/notifications' + qs({ unread })),
+  notifications: (unread, opts = {}) => get('/notifications' + qs({ unread, before: opts.before, limit: opts.limit })),
+  markAllRead: () => post('/notifications/read', {}),
+
+  /* Team Chat: membership is checked on the server for every call. */
+  chatPeople: (audience, q, role) => get('/chat/people' + qs({ audience, q: q || undefined, role })),
+  chatConversations: (audience) => get('/chat/conversations' + qs({ audience })),
+  chatStart: (body) => post('/chat/conversations', body),
+  chatMessages: (id, o = {}) => get(`/chat/conversations/${encodeURIComponent(id)}/messages` + qs({ after: o.after, before: o.before, limit: o.limit })),
+  chatSend: (id, body) => post(`/chat/conversations/${encodeURIComponent(id)}/messages`, body),
+  chatRead: (id) => post(`/chat/conversations/${encodeURIComponent(id)}/read`, {}),
+  chatAddMembers: (id, userIds) => post(`/chat/conversations/${encodeURIComponent(id)}/members`, { userIds }),
+  chatUnread: () => get('/chat/unread'),
   markRead: (id) => post('/notifications/read', { id }),
   createSupport: (data) => post('/support/cases', data),
   supportCases: (state) => get('/support/cases' + qs({ state })),
@@ -456,6 +505,22 @@ export const quad = {
     return call('POST', '/assets', fd);
   },
   assetUrl: (id) => id ? `${API_BASE}/assets/${id}` : null,
+  assetLimits: () => get('/assets/limits'),
+
+  /* ---------- website settings --------------------------------------------
+     The public pair returns only what is PUBLISHED. The admin calls are
+     permission-checked by the server; `revision` is the draft revision the
+     editor loaded, so a stale save is refused instead of overwriting. */
+  siteConfig: () => get('/site/config'),
+  siteVersion: () => get('/site/version'),
+  adminSite: () => get('/admin/site'),
+  validateSite: (config) => post('/admin/site/validate', { config }),
+  saveSiteDraft: (config, revision) => put('/admin/site/draft', { config, revision }),
+  resetSiteDraft: (revision) => post('/admin/site/draft/reset', { revision }),
+  publishSite: (revision, note) => post('/admin/site/publish', { revision, note }),
+  rollbackSite: (version, note) => post('/admin/site/rollback', { version, note }),
+  siteVersions: () => get('/admin/site/versions'),
+  siteVersionConfig: (v) => get(`/admin/site/versions/${v}`),
 
   /* ---------- assistant --------------------------------------------------- */
   aiStatus: () => get('/ai/status'),

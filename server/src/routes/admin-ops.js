@@ -20,7 +20,7 @@
    a session; personal data is limited to what orders.view already shows.
    ========================================================================== */
 import { q, one } from '../db/index.js';
-import { authorize, BadRequest, NotFound } from '../auth/rbac.js';
+import { authorize, can, BadRequest, NotFound } from '../auth/rbac.js';
 import { audit } from '../audit.js';
 import { webhookHealth } from '../services/reconciliation.js';
 
@@ -80,8 +80,12 @@ function orderFilter(query) {
     const n = params.length;
     where.push(`(o.code ILIKE $${n} OR u.name ILIKE $${n} OR u.phone ILIKE $${n} OR v.name ILIKE $${n})`);
   }
-  const state = oneOf(query?.state, ORDER_STATES, 'state');
-  if (state) add('o.state = ?', state);
+  /* One state, or several separated by commas (Cancelled = cancelled and
+     refunded). Every one is checked against the known states. */
+  const states = String(query?.state || '').split(',').map((x) => x.trim()).filter(Boolean);
+  for (const s of states) oneOf(s, ORDER_STATES, 'state');
+  if (states.length === 1) add('o.state = ?', states[0]);
+  else if (states.length > 1) add('o.state::text = ANY(?::text[])', states);
   const fulfilment = oneOf(query?.fulfilment, ['pickup', 'delivery'], 'fulfilment');
   if (fulfilment) add('o.fulfilment = ?', fulfilment);
   const payment = oneOf(query?.payment, PAYMENT_STATES, 'payment');
@@ -120,19 +124,82 @@ export default async function adminOpsRoutes(app) {
               v.id AS vendor_id, v.name AS vendor_name, u.name AS customer_name,
               p.status AS payment_status, p.provider AS payment_provider,
               f.platform_fee_paise,
-              (SELECT count(*)::int FROM order_item oi WHERE oi.order_id = o.id) AS item_count
+              (SELECT count(*)::int FROM order_item oi WHERE oi.order_id = o.id) AS item_count,
+              (o.partner_id IS NOT NULL) AS has_partner,
+              (SELECT pu.name FROM app_user pu WHERE pu.id = o.partner_id) AS partner_name
          ${ORDER_FROM} ${f.sql}
         ORDER BY o.created_at DESC
         LIMIT ${pageSize} OFFSET ${offset}`, f.params);
-    return { orders: rows, total, page, pageSize };
+    /* Who is carrying an order is partner data: named only to an
+       administrator who may see partner profiles. */
+    const partners = can(req.actor, 'partner.read');
+    return { orders: rows.map((r) => (partners ? r : { ...r, partner_name: null })), total, page, pageSize };
+  });
+
+  /* ---------- order summary: the figures and the Graph View ------------
+     Over a date range (India time, inclusive): how many orders were placed,
+     how they split between delivery and pickup, how many completed or were
+     cancelled, and the value of sales, plus the same per day (or per month
+     for a range over 62 days) for the chart.
+
+     "Placed" means the payment was confirmed: the order reached confirmed
+     or a later state. Drafts and orders still awaiting payment were never
+     orders. "Sales" is what customers paid for placed orders that were not
+     cancelled or refunded. Every figure is computed here from food_order. */
+  app.get('/admin/orders/summary', async (req) => {
+    authorize(req.actor, 'order.read_all');
+    const today = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+    const toDay = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query?.to || '')) ? String(req.query.to) : today;
+    const fromDefault = new Date(Date.parse(`${toDay}T00:00:00Z`) - 29 * 86400000).toISOString().slice(0, 10);
+    const fromDay = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query?.from || '')) ? String(req.query.from) : fromDefault;
+    const from = dateParam(fromDay, 'from');
+    const to = new Date(dateParam(toDay, 'to').getTime() + 86400000);
+    if (!(from < to)) throw BadRequest('from must be on or before to');
+    const days = Math.round((to - from) / 86400000);
+    if (days > 731) throw BadRequest('The range can be at most two years');
+    const bucket = days > 62 ? 'month' : 'day';
+    const PLACED = `o.state NOT IN ('draft','awaiting_payment')`;
+    const SOLD = `o.state NOT IN ('draft','awaiting_payment','cancelled','refunded')`;
+    const t = await one(
+      `SELECT count(*) FILTER (WHERE ${PLACED})::int AS orders,
+              count(*) FILTER (WHERE ${PLACED} AND o.fulfilment = 'delivery')::int AS delivery,
+              count(*) FILTER (WHERE ${PLACED} AND o.fulfilment = 'pickup')::int AS pickup,
+              count(*) FILTER (WHERE o.state = 'delivered')::int AS completed,
+              count(*) FILTER (WHERE ${PLACED} AND o.state IN ('cancelled','refunded'))::int AS cancelled,
+              COALESCE(sum(o.total_paise) FILTER (WHERE ${SOLD}), 0)::bigint AS sales_paise
+         FROM food_order o WHERE o.created_at >= $1 AND o.created_at < $2`, [from, to]);
+    const { rows } = await q(
+      `WITH b AS (
+         SELECT generate_series(date_trunc('${bucket}', $1::timestamptz AT TIME ZONE 'Asia/Kolkata'),
+                                date_trunc('${bucket}', ($2::timestamptz - interval '1 second') AT TIME ZONE 'Asia/Kolkata'),
+                                interval '1 ${bucket}') AS at)
+       SELECT to_char(b.at, 'YYYY-MM-DD') AS at,
+              count(o.id) FILTER (WHERE ${PLACED})::int AS orders,
+              COALESCE(sum(o.total_paise) FILTER (WHERE ${SOLD}), 0)::bigint AS sales_paise
+         FROM b LEFT JOIN food_order o
+           ON date_trunc('${bucket}', o.created_at AT TIME ZONE 'Asia/Kolkata') = b.at
+          AND o.created_at >= $1 AND o.created_at < $2
+        GROUP BY b.at ORDER BY b.at`, [from, to]);
+    const sales = Number(t.sales_paise);
+    const sold = t.orders - t.cancelled;
+    return {
+      from: fromDay, to: toDay, bucket,
+      totals: { ...t, sales_paise: sales, average_paise: sold > 0 ? Math.round(sales / sold) : 0 },
+      series: rows.map((r) => ({ at: r.at, orders: r.orders, salesPaise: Number(r.sales_paise) })),
+    };
   });
 
   app.get('/admin/orders/:id/timeline', async (req) => {
     authorize(req.actor, 'order.read_all');
-    const o = await one(`SELECT o.id, o.code, o.state, o.fulfilment, o.total_paise, o.created_at, v.name AS vendor_name
-                           FROM food_order o JOIN vendor v ON v.id = o.vendor_id WHERE o.id = $1::uuid`,
+    const o = await one(`SELECT o.id, o.code, o.state, o.fulfilment, o.total_paise, o.created_at, v.name AS vendor_name,
+                                cu.name AS customer_name, pu.name AS partner_name
+                           FROM food_order o JOIN vendor v ON v.id = o.vendor_id
+                           JOIN app_user cu ON cu.id = o.customer_id
+                           LEFT JOIN app_user pu ON pu.id = o.partner_id WHERE o.id = $1::uuid`,
                         [req.params.id]).catch(() => null);
     if (!o) throw NotFound('No such order');
+    /* Partner data only for someone who may see partner profiles. */
+    if (!can(req.actor, 'partner.read')) o.partner_name = null;
     const [events, payments, refunds, webhooks, auditRows, financials] = await Promise.all([
       q(`SELECT e.from_state, e.to_state, e.actor_role, e.note, e.at FROM order_event e
           WHERE e.order_id = $1 ORDER BY e.at, e.id`, [o.id]),

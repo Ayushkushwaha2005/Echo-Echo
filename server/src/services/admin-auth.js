@@ -184,6 +184,9 @@ export async function credentialStatus(userId) {
     passwordUpdatedAt: c?.password_updated_at || null,
     authenticatorReady: !!c?.totp_confirmed_at,
     authenticatorConfirmedAt: c?.totp_confirmed_at || null,
+    /* A replacement started but not yet confirmed; the current one still works. */
+    replacementPending: !!(c?.totp_pending_enc && c?.totp_pending_at
+      && Date.now() - new Date(c.totp_pending_at).getTime() < PENDING_MINUTES * 60000),
     lockedUntil: c?.locked_until && new Date(c.locked_until) > new Date() ? c.locked_until : null,
     lastLoginAt: c?.last_login_at || null,
   };
@@ -201,18 +204,34 @@ export async function setPassword(userId, password, { email = '' } = {}) {
   return true;
 }
 
+/* How long a started replacement can be confirmed. */
+export const PENDING_MINUTES = 15;
+
 /**
  * Begin authenticator enrolment. Returns the secret and its otpauth URI ONCE;
- * nothing is confirmed until confirmAuthenticator() sees a code from it, so
- * an abandoned enrolment cannot lock an administrator out of a working one.
+ * nothing is confirmed until confirmAuthenticator() sees a code from it.
+ *
+ * With `replace: 'pending'` and a confirmed authenticator already in place,
+ * the new secret is held as PENDING: sign-in keeps using the current one
+ * until a code from the new one is confirmed, so a replacement abandoned
+ * half-way (wrong phone, closed tab) cannot lock anybody out. The server
+ * shell's `admin:setup` uses the default, which replaces at once: that is
+ * the recovery path for a lost or exposed authenticator.
  */
-export async function beginAuthenticator(userId, email) {
+export async function beginAuthenticator(userId, email, { replace = 'immediate' } = {}) {
   const secret = newTotpSecret();
+  const current = replace === 'pending' ? await credentialOf(userId) : null;
+  if (current?.totp_confirmed_at) {
+    await q(`UPDATE admin_credential SET totp_pending_enc = $2, totp_pending_at = now(), updated_at = now()
+              WHERE user_id = $1`, [userId, encryptSecret(secret)]);
+    return { secret, uri: otpauthUri(secret, { email }), issuer: ADMIN_AUTH.totpIssuer,
+             periodSeconds: ADMIN_AUTH.totpPeriodSeconds, digits: 6, algorithm: 'SHA1', pending: true };
+  }
   await q(
     `INSERT INTO admin_credential (user_id, totp_secret_enc, totp_confirmed_at, totp_last_step)
      VALUES ($1,$2,NULL,NULL)
      ON CONFLICT (user_id) DO UPDATE SET totp_secret_enc = $2, totp_confirmed_at = NULL,
-       totp_last_step = NULL, updated_at = now()`,
+       totp_last_step = NULL, totp_pending_enc = NULL, totp_pending_at = NULL, updated_at = now()`,
     [userId, encryptSecret(secret)]);
   return { secret, uri: otpauthUri(secret, { email }), issuer: ADMIN_AUTH.totpIssuer,
            periodSeconds: ADMIN_AUTH.totpPeriodSeconds, digits: 6, algorithm: 'SHA1' };
@@ -220,6 +239,21 @@ export async function beginAuthenticator(userId, email) {
 
 export async function confirmAuthenticator(userId, code) {
   const c = await credentialOf(userId);
+  /* A pending replacement: confirm against the NEW secret and swap it in. */
+  if (c?.totp_pending_enc) {
+    if (!c.totp_pending_at || Date.now() - new Date(c.totp_pending_at).getTime() >= PENDING_MINUTES * 60000) {
+      await q(`UPDATE admin_credential SET totp_pending_enc = NULL, totp_pending_at = NULL WHERE user_id = $1`, [userId]);
+      throw BadRequest('That replacement has expired', 'Start again. Your current authenticator still works.');
+    }
+    const step = verifyTotp(decryptSecret(c.totp_pending_enc), code);
+    if (step === null) throw BadRequest('That code is not right', 'Enter the six digits the NEW entry in your authenticator app shows.');
+    const done = await one(
+      `UPDATE admin_credential SET totp_secret_enc = totp_pending_enc, totp_pending_enc = NULL, totp_pending_at = NULL,
+              totp_confirmed_at = now(), totp_last_step = $2, updated_at = now()
+        WHERE user_id = $1 AND totp_pending_enc = $3 RETURNING user_id`, [userId, step, c.totp_pending_enc]);
+    if (!done) throw BadRequest('That replacement changed while you were confirming it', 'Start again.');
+    return { replaced: true };
+  }
   if (!c?.totp_secret_enc) throw BadRequest('Set up your authenticator first');
   const step = verifyTotp(decryptSecret(c.totp_secret_enc), code, { afterStep: c.totp_last_step });
   if (step === null) throw BadRequest('That code is not right', 'Check the six digits currently shown in your authenticator app.');

@@ -855,3 +855,86 @@ textarea.input { resize: vertical; min-height: 72px; }
 .timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .timeline li { padding: 8px 0 8px 12px; border-left: 2px solid var(--line); font-size: var(--t-sm); }
 .timeline li .chip { margin: 0 6px; }
+
+/* ---------- published website settings (Campus Control) ------------------
+   The announcement bar, featured dishes, banners, a hero photograph and an
+   uploaded logo. Each reads the same tokens as the rest of the site, so a
+   published theme recolours them with everything else. */
+.site-announce {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 12px;
+  padding: 9px var(--s-4); font-size: var(--t-sm); text-align: center;
+  background: var(--accent-faint); color: var(--text); border-bottom: 1px solid var(--line);
+}
+.site-announce.tone-promo { background: var(--accent-soft); }
+.site-announce.tone-alert { background: var(--warn-bg); }
+.site-announce .announce-link {
+  color: var(--accent-text); font-weight: var(--w-semibold); font-size: inherit;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.poster.has-hero-img { min-height: 340px; }
+.poster.has-hero-img .hero-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
+.poster.has-hero-img::after {
+  content: ''; position: absolute; inset: 0; z-index: 1;
+  background: linear-gradient(0deg, var(--surface-blush) 38%, color-mix(in srgb, var(--surface-blush) 62%, transparent));
+}
+.poster.has-hero-img > .stack { z-index: 2; }
+.brand-logo-custom { width: auto; object-fit: contain; display: block; }
+.site-foot .brand-logo-custom { display: inline-block; vertical-align: middle; }
+.site-foot .foot-links { display: block; margin-top: var(--s-2); }
+.featured-dishes { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.featured-dish { display: flex; align-items: center; gap: var(--s-3); width: 100%; text-align: left; }
+.featured-dish-img { width: 64px; height: 64px; border-radius: var(--r-sm); object-fit: cover; flex: none; }
+.banner-row { display: grid; gap: var(--s-3); }
+.site-banner { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; background: var(--surface-blush); border-color: transparent; }
+.site-banner-img { width: 72px; height: 72px; border-radius: var(--r-sm); object-fit: cover; flex: none; }
+@media (min-width: 1024px) { .banner-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ---------- Welcome to ECHO ECHO: Student or Employee ----------------------
+   Two equal cards side by side, stacked on a phone. The whole card is the
+   control: one button (Student) and one link (Employee), keyboard-reachable
+   with a visible focus ring. Choosing grants nothing; it only opens that
+   audience's own sign-in. */
+.role-screen { min-height: calc(100dvh - 140px); display: grid; place-items: center; padding: var(--s-7) var(--s-4) var(--s-9); }
+.role-wrap { width: 100%; max-width: 760px; display: grid; gap: var(--s-7); }
+.role-head { text-align: center; display: grid; gap: var(--s-2); }
+.role-heading { font-size: var(--t-display); font-weight: var(--w-bold); letter-spacing: -0.01em; line-height: var(--lh-snug); margin: 0; }
+.role-sub { color: var(--text-muted); font-size: var(--t-body); margin: 0; }
+.role-grid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; }
+@media (min-width: 640px) { .role-grid { grid-template-columns: 1fr 1fr; } }
+.role-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-2); text-align: left;
+  padding: var(--s-6); min-height: 230px; width: 100%;
+  background: var(--surface); color: var(--text); text-decoration: none;
+  border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--shadow-1);
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+  cursor: pointer; font: inherit;
+}
+.role-card:hover { border-color: var(--accent); box-shadow: var(--shadow-2); }
+.role-card:active { transform: translateY(1px); box-shadow: var(--shadow-press); }
+.role-card:focus-visible { outline: 3px solid var(--accent-ring); outline-offset: 3px; border-color: var(--accent); }
+.role-icon { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: var(--accent-faint); color: var(--accent-text); margin-bottom: var(--s-2); }
+.role-icon svg { width: 24px; height: 24px; }
+.role-title { font-size: var(--t-h2); font-weight: var(--w-bold); }
+.role-body { color: var(--text-muted); font-size: var(--t-sm); line-height: var(--lh-body); flex: 1; }
+.role-cta {
+  display: inline-flex; align-items: center; gap: 8px; margin-top: var(--s-3);
+  padding: 10px 16px; border-radius: var(--r-btn); background: var(--accent); color: var(--text-on-rose);
+  font-weight: var(--w-semibold); font-size: var(--t-sm);
+}
+.role-arrow { transition: transform .16s ease; }
+.role-card:hover .role-arrow, .role-card:focus-visible .role-arrow { transform: translateX(3px); }
+.role-foot { text-align: center; color: var(--text-muted); font-size: var(--t-xs); margin: 0; }
+.role-foot a { color: var(--accent-text); font-weight: var(--w-semibold); }
+@media (prefers-reduced-motion: reduce) { .role-card, .role-arrow { transition: none; } }
+
+/* ---------- Campus Control authenticator enrolment ------------------------
+   The QR code and the typed-out key, shown once to the signed-in account. */
+.enrol-card { max-width: 420px; }
+.enrol-qr { display: grid; place-items: center; padding: 14px; margin: 6px auto; background: #fff; border-radius: 14px;
+  border: 1px solid var(--line); width: 232px; max-width: 100%; }
+.enrol-qr svg { width: 200px; height: 200px; display: block; }
+.enrol-key summary { cursor: pointer; font-size: var(--t-sm); color: var(--accent-text); font-weight: var(--w-semibold); }
+.enrol-secret, .enrolcode { display: block; font-family: var(--font-mono); font-size: 1rem; letter-spacing: .08em;
+  word-break: break-all; background: var(--bg-sunken); border-radius: 10px; padding: 10px 12px; user-select: all; }
+.enrol-recovery { margin-top: 14px; }
+.enrol-recovery code { font-family: var(--font-mono); font-size: .85em; }

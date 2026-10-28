@@ -68,12 +68,17 @@ test('the archived-café list needs staff, and the edge rule never applies to it
 
 test('the edge never holds the list longer than the page itself would (60 s)', () => {
   const caching = VERCEL.headers.flatMap((h) => h.headers.filter((x) => /cdn-cache-control/i.test(x.key)).map((x) => [h.source, x.value]));
-  assert.equal(caching.length, 1, `exactly one edge-cached route: ${JSON.stringify(caching)}`);
-  const [, value] = caching[0];
-  const n = (k) => Number(new RegExp(`${k}=(\\d+)`).exec(value)?.[1] ?? 0);
-  assert.ok(n('max-age') > 0);
-  assert.ok(n('max-age') + n('stale-while-revalidate') <= 60, value);
-  assert.doesNotMatch(value, /stale-if-error/, 'an outage must not stretch how old a list can be');
+  /* Only public, identical-for-everyone answers are held at the edge: the café
+     list and the PUBLISHED website settings (never a draft, which lives under
+     /admin/site and needs a session). */
+  assert.deepEqual(caching.map(([src]) => src).sort(), ['/api/site/config/', '/api/site/version/', '/api/vendors/'],
+    `edge-cached routes: ${JSON.stringify(caching)}`);
+  for (const [src, value] of caching) {
+    const n = (k) => Number(new RegExp(`${k}=(\\d+)`).exec(value)?.[1] ?? 0);
+    assert.ok(n('max-age') > 0, src);
+    assert.ok(n('max-age') + n('stale-while-revalidate') <= 60, `${src}: ${value}`);
+    assert.doesNotMatch(value, /stale-if-error/, 'an outage must not stretch how old an answer can be');
+  }
 });
 
 test('the browser client asks for slashed paths, and the API serves them', async () => {

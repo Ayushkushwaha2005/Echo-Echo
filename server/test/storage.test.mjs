@@ -323,8 +323,40 @@ test('an ID image is never presigned — it streams through the authorization ch
   assert.match(src, /verification\.image\.view/, 'viewing an ID document is audited');
 
   const assets = fs.readFileSync(new URL('../src/routes/assets.js', import.meta.url), 'utf8');
-  assert.match(assets, /PUBLIC_KINDS = \['food_photo', 'vendor_photo'\]/,
-    'only food and vendor photos are public kinds');
+  const kinds = assets.match(/PUBLIC_KINDS = \[([^\]]*)\]/)[1];
+  assert.deepEqual(kinds.split(',').map((k) => k.trim().replace(/'/g, '')),
+    ['food_photo', 'vendor_photo', 'site_image'],
+    'only menu photography and website images are public kinds');
+  assert.doesNotMatch(kinds, /id_front|id_back|partner_photo/, 'an ID or partner photo is never a public kind');
+});
+
+test('a website image needs website.customize: a student and a café owner are refused', async () => {
+  const multipart = (kind) => {
+    const b = '----quadsite' + Date.now();
+    const head = Buffer.from(
+      `--${b}\r\nContent-Disposition: form-data; name="kind"\r\n\r\n${kind}\r\n` +
+      `--${b}\r\nContent-Disposition: form-data; name="photo"; filename="x.png"\r\n` +
+      `Content-Type: image/png\r\n\r\n`);
+    return { body: Buffer.concat([head, PNG, Buffer.from(`\r\n--${b}--\r\n`)]),
+             type: `multipart/form-data; boundary=${b}` };
+  };
+  const send = async (token) => {
+    const m = multipart('site_image');
+    return app.inject({ method: 'POST', url: '/assets', payload: m.body,
+      headers: { origin: 'http://localhost:3000', cookie: `quad_session=${token}`, 'content-type': m.type } });
+  };
+  const stu = await makeUser(pool, { phone: '+919800000021', name: 'Site Student' });
+  const st = await send(await sessionFor(pool, stu.id));
+  assert.equal(st.statusCode, 403, st.body);
+  const v = await makeVendor(pool, { name: 'G', slug: 'g-site' });
+  const cafe = await makeUser(pool, { phone: '+919800000022', name: 'Cafe Owner', roles: ['vendor_owner'], vendorId: v.id });
+  assert.equal((await send(await sessionFor(pool, cafe.id))).statusCode, 403, 'menu rights are not website rights');
+  const owner = await makeUser(pool, { phone: '+919800000023', name: 'Platform Owner', roles: ['platform_owner'] });
+  const ok = await send(await sessionFor(pool, owner.id, { method: 'admin_totp' }));
+  assert.equal(ok.statusCode, 200, ok.body);
+  const id = JSON.parse(ok.body).id;
+  assert.equal((await pool.query(`SELECT kind FROM asset WHERE id = $1`, [id])).rows[0].kind, 'site_image');
+  assert.ok([200, 302].includes((await app.inject({ method: 'GET', url: `/assets/${id}` })).statusCode), 'public once uploaded');
 });
 
 test('only cafeteria staff and admins can upload menu photography', async () => {

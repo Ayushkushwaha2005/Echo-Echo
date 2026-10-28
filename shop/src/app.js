@@ -17,6 +17,7 @@ import {
 } from '../../packages/ui/runtime.js';
 import { esc, toggleTheme, restoreTheme, Mark, VegMark } from '../../packages/ui/kit.js';
 import { lockup } from '../../brand/logo.js';
+import { mountChat } from '../../packages/ui/team-chat.js';
 
 const root = document.getElementById('app');
 restoreTheme();
@@ -49,7 +50,7 @@ async function boot(me) {
    for a cafeteria owner (or a platform role), which is the same set the
    server grants `finance.read` to. Staff asking for the route directly get
    a 403 from the API, so this is a courtesy, not the enforcement. */
-const NAV = [['orders', 'Orders'], ['menu', 'Menu'], ['outlet', 'Outlet']];
+const NAV = [['orders', 'Orders'], ['menu', 'Menu'], ['outlet', 'Outlet'], ['messages', 'Messages']];
 const navFor = () => (S.canPrice ? [...NAV, ['finance', 'Finance']] : NAV);
 
 let wired = false;
@@ -139,7 +140,7 @@ function markNav() {
     b.setAttribute('aria-pressed', String(b.dataset.route === S.route)));
 }
 const route = () => { markNav(); return ({ orders: scrOrders, menu: scrMenu, outlet: scrOutlet,
-                       finance: scrFinance }[S.route] || scrOrders)(); };
+                       finance: scrFinance, messages: scrMessages }[S.route] || scrOrders)(); };
 
 /* ========================================================================
    FINANCE — this cafeteria's money, and only this cafeteria's
@@ -645,3 +646,13 @@ const ACTIONS = {
         deliveryEnabled: !!d.deliveryEnabled }));
   },
 };
+
+/* Messages from ECHO ECHO staff: the conversations this person was added to,
+   with replies. Starting conversations is a Campus Control action. */
+function scrMessages() {
+  setTitle('Messages', 'Conversations with the ECHO ECHO team. Only the people in a conversation can read it.');
+  head().innerHTML = '';
+  const box = el('<div class="chat-root"></div>');
+  view().replaceChildren(box);
+  mountChat(box, { quad, staff: false, toast, explain });
+}

@@ -9,7 +9,7 @@
    "select Admin and get admin" is not expressible on any request here.
    ========================================================================== */
 import { issueSession, revokeSession, cookieOptions } from '../auth/session.js';
-import { landingSurface, SURFACE_ROLES, Forbidden, HttpError, verificationView } from '../auth/rbac.js';
+import { landingSurface, SURFACE_ROLES, Forbidden, HttpError, verificationView, isPlatformRole } from '../auth/rbac.js';
 import { q, one, tx } from '../db/index.js';
 import { SESSION, PLATFORM_OWNER, providerStatus, RATE_LIMITS, STUDENT_EMAIL, ADMIN } from '../config.js';
 import { audit } from '../audit.js';
@@ -207,6 +207,13 @@ export default async function authRoutes(app) {
          surfaces use them to hide controls; the server enforces them. */
       permissions: req.actor.permissions || [],
       isOwner: !!req.actor.isOwner,
+      /* The name and photo this person chose for Campus Control (My Profile),
+         for an account that holds a platform role. One source for every
+         place the admin screens show the signed-in administrator. */
+      adminProfile: [...req.actor.roles, ...(req.actor.withheldRoles || [])].some(isPlatformRole)
+        ? await one(`SELECT COALESCE(p.display_name, u.name) AS "displayName", p.photo_asset IS NOT NULL AS "hasPhoto"
+                       FROM app_user u LEFT JOIN admin_profile p ON p.user_id = u.id WHERE u.id = $1`, [req.actor.id])
+        : null,
       vendorIds: req.actor.vendorIds,
       surface: landingSurface(req.actor.roles),
       surfaces: Object.entries(SURFACE_ROLES)

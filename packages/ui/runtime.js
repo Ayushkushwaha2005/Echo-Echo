@@ -16,7 +16,11 @@
    result is re-read from the server, so a reload never loses anything and
    two surfaces never disagree.
    ========================================================================== */
-import { quad, ApiError, Offline, rupees, ratingLabel } from '../data/client.js';
+import { quad, ApiError, Offline, rupees, ratingLabel, staffRequests } from '../data/client.js';
+
+/* Campus Control and the counter: a request that hangs is reported, and a
+   route the server lacks is named as such (packages/data/client.js). */
+staffRequests();
 import { esc } from './kit.js';
 import { mark as logoMark, lockup } from '../../brand/logo.js';
 
@@ -24,13 +28,58 @@ export { quad, ApiError, Offline, rupees, ratingLabel };
 
 /* Re-confirming an administrator: the same two factors as signing in, asked
    for in place rather than by throwing the person back to the sign-in screen
-   and losing what they were doing. */
-export async function adminReauth() {
-  const password = prompt('Confirm it is you.\n\nYour administrator password:');
-  if (password === null) throw new Error('Confirmation cancelled.');
-  const code = prompt('The 6-digit code your authenticator app is showing now:');
-  if (code === null) throw new Error('Confirmation cancelled.');
-  return quad.adminReauth(password, String(code).replace(/\D/g, ''));
+   and losing what they were doing. A real dialog with a masked password
+   field: window.prompt() would show the password as it is typed. Resolves
+   when the server accepts both; rejects if the person cancels. */
+export function adminReauth({ reason = 'This change needs you to confirm it is you.' } = {}) {
+  return new Promise((resolve, reject) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'modalwrap reauthwrap';
+    wrap.setAttribute('role', 'dialog');
+    wrap.setAttribute('aria-modal', 'true');
+    wrap.setAttribute('aria-labelledby', 'reauth-title');
+    wrap.innerHTML = `
+      <div class="scrim-fixed" data-reauth="cancel"></div>
+      <form class="modal reauth" novalidate>
+        <div class="modal-head"><h2 class="t-h3" id="reauth-title">Confirm it is you</h2>
+          <p class="t-sm muted">${esc(reason)} Enter your password and the code your authenticator app shows now.</p></div>
+        <div class="modal-body">
+          <label class="field"><span class="t-label">Password</span>
+            <input class="input" type="password" name="password" autocomplete="current-password" required></label>
+          <label class="field"><span class="t-label">Authenticator code</span>
+            <input class="input code-input" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>
+          <p class="reauth-error" role="alert" hidden></p>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn btn-ghost" data-reauth="cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary">Confirm</button>
+        </div>
+      </form>`;
+    const close = () => { wrap.remove(); document.removeEventListener('keydown', onKey, true); };
+    const cancel = () => { close(); reject(new Error('Confirmation cancelled.')); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); cancel(); } };
+    document.addEventListener('keydown', onKey, true);
+    wrap.addEventListener('click', (e) => { if (e.target.closest('[data-reauth=cancel]')) cancel(); });
+    const form = wrap.querySelector('form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = form.querySelector('[type=submit]');
+      const err = form.querySelector('.reauth-error');
+      const password = form.password.value;
+      const code = String(form.code.value || '').replace(/\D/g, '');
+      if (!password || code.length !== 6) { err.hidden = false; err.textContent = 'Enter your password and the 6-digit code.'; return; }
+      btn.disabled = true;
+      try {
+        const out = await quad.adminReauth(password, code);
+        close(); resolve(out);
+      } catch (x) {
+        err.hidden = false; err.textContent = explain(x); btn.disabled = false;
+        form.code.value = ''; form.code.focus();
+      }
+    });
+    document.body.append(wrap);
+    form.password.focus();
+  });
 }
 
 /* ---------- session ------------------------------------------------------ */
@@ -72,14 +121,18 @@ export async function gate(root, surface, render) {
   }
   session.me = me;
 
-  /* An administrator signed in without a passkey (email code, or a recovery
-     code): the surface opens only after the passkey step. The server holds
-     the role back until then, so this is the honest next screen rather than
-     a wall of 403s. */
-  if (!me.surfaces.includes(surface) &&
-      (me.passkey?.adminSurfacesPending?.includes(surface) || me.passkey?.recoverySession)) {
+  /* An administrator signed in with only their student email code: the
+     server holds the platform role back from that session, so the honest
+     next screen is setting up (or going to) the real Campus Control sign-in
+     - password plus authenticator code - rather than a wall of 403s. A
+     legacy passkey recovery session keeps the passkey step it was made for. */
+  if (!me.surfaces.includes(surface) && me.passkey?.recoverySession) {
     const { mountPasskeyStep } = await import('./passkey.js');
     return mountPasskeyStep(root, { onDone: () => location.reload() });
+  }
+  if (!me.surfaces.includes(surface) && me.passkey?.adminSurfacesPending?.includes(surface)) {
+    const { mountAdminEnrol } = await import('./admin-enrol.js');
+    return mountAdminEnrol(root);
   }
 
   if (!me.surfaces.includes(surface)) {
@@ -203,15 +256,22 @@ export async function panel(node, loader, view, { label, quiet = false } = {}) {
   /* A background refresh keeps what is on screen until the new data arrives,
      instead of flashing a loading state every few seconds. */
   if (!quiet) node.innerHTML = Loading(label);
+  /* Only the newest load may write into this node: leaving a page while it
+     is still loading must not paint its late answer over the next page. */
+  const seq = String((Number(node.dataset.loadSeq) || 0) + 1);
+  node.dataset.loadSeq = seq;
+  const current = () => node.dataset.loadSeq === seq && node.isConnected;
   try {
     const data = await loader();
+    if (!current()) return null;
     node.innerHTML = view(data);
     return data;
   } catch (e) {
-    if (quiet) return null;       // keep the last good board; the next tick retries
+    if (!current() || quiet) return null;   // quiet: keep the last good board; the next tick retries
     node.innerHTML = e instanceof ApiError && e.isConfiguration
       ? NotConfigured(e.message, e.detail)
-      : ErrorState(e);
+      : `${ErrorState(e)}<div class="panel-retry"><button type="button" class="btn btn-secondary btn-sm" data-panel-retry>Try again</button></div>`;
+    node.querySelector('[data-panel-retry]')?.addEventListener('click', () => panel(node, loader, view, { label }), { once: true });
     return null;
   }
 }
@@ -268,8 +328,22 @@ export const brandHeader = (sub) => `
   <div class="rail-brand">${lockup({ height: 32 })}
   ${sub ? `<span class="t-xs faint">${esc(sub)}</span>` : ''}</div>`;
 
-export function signOut() {
-  quad.logout().finally(() => location.reload());
+/* Signing out ends THIS session on the server, then shows the sign-in
+   screen. If the server could not end it, that is said - the screen does
+   not pretend. `admin` uses Campus Control's own logout. */
+export async function signOut({ admin = false, button = null } = {}) {
+  if (button) { button.disabled = true; button.textContent = 'Signing out…'; }
+  try {
+    await (admin ? quad.adminLogout() : quad.logout());
+  } catch (e) {
+    if (button) { button.disabled = false; button.textContent = 'Sign out'; }
+    toast(`Sign-out did not complete: ${explain(e)}`, 'bad');
+    return false;
+  }
+  try { sessionStorage.clear(); } catch { /* storage blocked */ }
+  /* replace(): Back does not return to the signed-in page. */
+  location.replace(location.pathname);
+  return true;
 }
 
 export const when = (ts) => {

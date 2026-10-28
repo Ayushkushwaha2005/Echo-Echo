@@ -12,13 +12,20 @@
    ========================================================================== */
 import {
   quad, session, gate, el, panel, toast, act, explain, rupees, ratingLabel,
-  vendorVM, EmptyState, NotConfigured, Loading, ErrorState, signOut, when, ORDER_LABEL,
+  vendorVM, EmptyState, NotConfigured, Loading, ErrorState, signOut, when, ORDER_LABEL, adminReauth,
 } from '../../packages/ui/runtime.js';
 import { esc, toggleTheme, restoreTheme, Mark } from '../../packages/ui/kit.js';
-import { lockup } from '../../brand/logo.js';
+import { lockup, mark } from '../../brand/logo.js';
+import { API_BASE, ApiError } from '../../packages/data/client.js';
+import { ORDER_TABS, TAB_STATE, orderActions, avatarFor, chartGeometry } from '../../packages/ui/order-view.js';
+import { qrSvg, groupKey } from '../../packages/ui/admin-enrol.js';
+import { passwordStrength } from '../../packages/ui/password-strength.js';
+import { cropImage } from '../../packages/ui/image-crop.js';
+import { mountChat } from '../../packages/ui/team-chat.js';
+import { CafPhoto, DishTile, dishImage, onImageError } from '../../packages/ui/photo-tiles.js';
 
 const root = document.getElementById('app');
-restoreTheme();
+restoreAdminTheme();
 
 const S = { route: 'overview', vendorId: null, userId: null, caseId: null, parentId: null,
             orderFilter: {}, orderPage: 1, payFilter: {}, payPage: 1 };
@@ -30,14 +37,29 @@ const ENROLLABLE = ['platform_admin', 'support', 'vendor_owner', 'vendor_staff']
 
 gate(root, 'admin', render);
 
-const NAV = [
-  ['overview', 'Overview'], ['cafeterias', 'Cafeterias'], ['menu', 'Menu'],
-  ['orders', 'Orders'], ['users', 'Users'], ['verification', 'Verification'],
-  ['partners', 'Partners'], ['trust', 'Incidents & deposits'], ['reviews', 'Reviews'],
-  ['locations', 'Locations'], ['support', 'Support'],
-  ['payments', 'Payments'], ['finance', 'Settlements & finance'], ['reports', 'Reports'],
-  ['reliability', 'Reliability'], ['admins', 'Administrators'], ['platform', 'Platform'], ['audit', 'Audit'],
+/* The sidebar, in the groups an administrator thinks in. Every page still
+   reads its own API, which checks its own permission; hiding an entry here
+   is a courtesy so nobody stares at a page of refusals. */
+const NAV_GROUPS = [
+  ['Operations', [
+    ['overview', 'Overview', 'grid'], ['orders', 'Order History', 'bag'], ['deliveries', 'Live Deliveries', 'route'],
+    ['cafeterias', 'Cafés', 'store'], ['menu', 'Menu Management', 'menu'],
+    ['partners', 'Delivery Partners', 'bike'], ['verification', 'Verification', 'id'],
+    ['users', 'Users', 'users'], ['trust', 'Incidents & deposits', 'shield'],
+    ['reviews', 'Reviews', 'star'], ['locations', 'Locations', 'pin'], ['support', 'Support', 'chat'],
+    ['chat', 'Team Chat', 'message'],
+  ]],
+  ['Website', [['website', 'Website Customization', 'brush']]],
+  ['Money', [
+    ['finance', 'Payments & Settlements', 'wallet'], ['payments', 'Gateway payments', 'card'],
+    ['reports', 'Reports', 'chart'],
+  ]],
+  ['Access & system', [
+    ['profile', 'My Profile', 'user'], ['admins', 'Access Management', 'key'], ['sessions', 'Sessions', 'device'],
+    ['audit', 'Audit Logs', 'log'], ['reliability', 'System Health', 'pulse'], ['platform', 'Platform settings', 'cog'],
+  ]],
 ];
+const NAV = NAV_GROUPS.flatMap(([, items]) => items);
 
 /* Which permission opens each page. Hiding is a courtesy: every panel's API
    call is checked by the server regardless. */
@@ -48,48 +70,172 @@ const NAV_PERM = {
   locations: ['locations.view', 'boundary.view', 'campuses.view'], support: ['support.view'],
   finance: ['finance.view'], admins: ['admins.view'], platform: ['platform.view'], audit: ['audit.view'],
   payments: ['finance.view'], reports: ['orders.view', 'finance.view'], reliability: ['platform.view'],
+  website: ['website.customize', 'website.publish'], deliveries: ['orders.view'],
+  sessions: ['admins.view'], order: ['orders.view'],
 };
-const allowedNav = () => NAV.filter(([r]) => !NAV_PERM[r] || session.can(...NAV_PERM[r]));
+const allowed = (r) => !NAV_PERM[r] || session.can(...NAV_PERM[r]);
+const allowedNav = () => NAV.filter(([r]) => allowed(r));
+
+/* Line icons for the sidebar: one stroke weight, one 24px grid. */
+const ICON = {
+  grid: '<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>',
+  bag: '<path d="M5 8h14l-1 12H6z"/><path d="M9 8V6a3 3 0 016 0v2"/>',
+  route: '<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 000-6H9a3 3 0 010-6h6.5"/>',
+  store: '<path d="M4 9.5L5.5 4h13L20 9.5"/><path d="M4 9.5a2.7 2.7 0 005.3 0 2.7 2.7 0 005.4 0 2.7 2.7 0 005.3 0"/><path d="M5.5 11.5V20h13v-8.5M10 20v-5h4v5"/>',
+  menu: '<path d="M5 4.5h14v15H5z"/><path d="M8.5 9h7M8.5 12.5h7M8.5 16h4"/>',
+  bike: '<circle cx="5.5" cy="17" r="3.2"/><circle cx="18.5" cy="17" r="3.2"/><path d="M8 17h7l-3-8h-3M12 9l2-4h3"/>',
+  id: '<rect x="3.5" y="5.5" width="17" height="13" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M6.5 15.5c.6-1.3 1.5-2 2.5-2s1.9.7 2.5 2M14 10h4M14 13.5h3"/>',
+  users: '<circle cx="9" cy="8.5" r="3"/><path d="M3.5 19c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5"/><path d="M15.5 5.8a3 3 0 010 5.4M17 14.7c1.6.6 2.8 2 3.4 4.3"/>',
+  shield: '<path d="M12 3.5l7 2.8v5.2c0 4.4-2.9 7.6-7 9-4.1-1.4-7-4.6-7-9V6.3z"/><path d="M9 12l2 2 4-4"/>',
+  star: '<path d="M12 4l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16.4 7.2 18.9l.9-5.4-3.9-3.8 5.4-.8z"/>',
+  pin: '<path d="M12 20.5s6-5.6 6-10.5a6 6 0 00-12 0c0 4.9 6 10.5 6 10.5z"/><circle cx="12" cy="10" r="2.2"/>',
+  chat: '<path d="M4.5 6.5A2.5 2.5 0 017 4h10a2.5 2.5 0 012.5 2.5v7A2.5 2.5 0 0117 16h-6.2L6.5 19.5V16H7a2.5 2.5 0 01-2.5-2.5z"/>',
+  brush: '<path d="M14.5 4.5l5 5-7.8 7.8-5-5z"/><path d="M6.7 12.3c-2 0-3.2 1.6-3.2 3.7 0 1.4-.5 2.4-1 3 3.6.3 6.8-.6 7.6-3.6"/>',
+  wallet: '<rect x="3.5" y="6" width="17" height="13" rx="2.5"/><path d="M3.5 9.5h17M16 14h1.5"/><path d="M6 6l9-2.5L16.5 6"/>',
+  card: '<rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/>',
+  chart: '<path d="M4 20V4M4 20h16"/><path d="M8 16v-4M12 16V8M16 16v-6"/>',
+  key: '<circle cx="8" cy="15" r="3.5"/><path d="M10.5 12.5L19 4M16 7l2.5 2.5M14 9l2 2"/>',
+  device: '<rect x="3.5" y="4.5" width="17" height="11" rx="2"/><path d="M9 19.5h6M12 15.5v4"/>',
+  log: '<path d="M6 3.5h9l3 3v14H6z"/><path d="M15 3.5v3h3M9 11h6M9 14.5h6M9 18h3"/>',
+  pulse: '<path d="M3 12h4l2.5-6 4 12 2.5-6h5"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M20.5 12h-2.2M5.7 12H3.5M18 6l-1.6 1.6M7.6 16.4L6 18M18 18l-1.6-1.6M7.6 7.6L6 6"/>',
+  message: '<path d="M3.5 7a2.5 2.5 0 012.5-2.5h8A2.5 2.5 0 0116.5 7v5a2.5 2.5 0 01-2.5 2.5H9l-3.5 3v-3H6A2.5 2.5 0 013.5 12z"/><path d="M16.5 9H18a2.5 2.5 0 012.5 2.5v4A2.5 2.5 0 0118 18h-.5v2.5L14.5 18H12a2.5 2.5 0 01-2-1"/>',
+  user: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 19.5c1-3.4 3.8-5 7-5s6 1.6 7 5"/>',
+  bell: '<path d="M6 16.5V11a6 6 0 0112 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 004 0"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>',
+  out: '<path d="M14 4.5h4.5v15H14M10 8l-4 4 4 4M6 12h9.5"/>',
+  globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.4 3.5 5.2 3.5 8.5s-1.1 6.1-3.5 8.5c-2.4-2.4-3.5-5.2-3.5-8.5s1.1-6.1 3.5-8.5z"/>',
+  moon: '<path d="M19.5 14.5A7.5 7.5 0 019.5 4.5a7.5 7.5 0 1010 10z"/>',
+  collapse: '<path d="M14.5 6l-6 6 6 6"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4M7.5 13.5h2M11 13.5h2M14.5 13.5h2M7.5 17h2M11 17h2"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  dots: '<circle cx="12" cy="5.5" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="18.5" r="1.4" fill="currentColor"/>',
+  check: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/>',
+};
+/* Campus Control keeps its own light/dark choice, so switching it never
+   changes the public website's theme in the same browser. */
+const ADMIN_THEME_KEY = 'echo-admin-theme';
+function restoreAdminTheme() {
+  try { const t = localStorage.getItem(ADMIN_THEME_KEY); if (t) document.documentElement.setAttribute('data-theme', t); } catch { /* storage blocked */ }
+}
+function toggleAdminTheme() {
+  const cur = document.documentElement.getAttribute('data-theme');
+  const next = cur === 'dark' ? 'light' : cur === 'light' ? 'dark' : (matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark');
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem(ADMIN_THEME_KEY, next); } catch { /* storage blocked */ }
+}
+const icon = (k, size = 19) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k] || ''}</svg>`;
+
+const ROLE_LABEL = { platform_owner: 'Owner', platform_admin: 'Administrator', support: 'Support' };
+const navLabel = (r) => NAV.find(([k]) => k === r)?.[1] || 'Overview';
 
 function render() {
-  if (NAV_PERM[S.route] && !session.can(...NAV_PERM[S.route])) S.route = 'overview';
+  if (!allowed(S.route)) S.route = 'overview';
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('cc-rail') === 'collapsed'; } catch { /* storage blocked */ }
+  /* One source for the signed-in administrator's name: My Profile's display
+     name from /auth/me, falling back to the account's own name. */
+  const name = myName();
+  const role = session.roles.map((r) => ROLE_LABEL[r]).filter(Boolean)[0] || 'Staff';
   root.innerHTML = `
-    <div class="appframe">
-      <aside class="rail">
-        <div class="rail-brand">${lockup({ height: 32 })}
-          <span class="t-xs faint">Campus Control</span></div>
-        <nav class="stack">
-          ${allowedNav().map(([r, l]) =>
-            `<button class="railbtn" data-route="${r}" ${S.route === r ? 'aria-current="page"' : ''}>${esc(l)}</button>`).join('')}
-        </nav>
-        <div class="rail-foot">
-          <div class="t-xs faint">${esc(session.me.user.name || session.me.user.phone)}</div>
-          <div class="t-xs faint">${session.roles.map(esc).join(' · ')}</div>
-          <button class="railbtn" data-act="theme">Theme</button>
-          <button class="railbtn" data-act="signout">Sign out</button>
-        </div>
-      </aside>
-      <main class="webmain">
-        <nav class="chiprow webnav-mobile" aria-label="Pages"
-             style="padding:var(--s-3) var(--s-4);border-bottom:1px solid var(--line)">
-          ${allowedNav().map(([r, l]) =>
-            `<button class="chip" data-route="${r}" ${S.route === r ? 'aria-pressed="true"' : ''}>${esc(l)}</button>`).join('')}
-          <button class="chip" data-act="theme">Theme</button>
-          <button class="chip" data-act="signout">Sign out</button>
-        </nav>
-        <header class="webhead">
-          <div class="webhead-title">
-            <h1 class="t-h2" id="page-title"></h1>
-            <p class="t-sm muted" id="page-sub"></p>
+    <div class="cc${collapsed ? ' cc-collapsed' : ''}">
+      <div class="cc-frame">
+        <aside class="cc-rail" aria-label="Campus Control">
+          <div class="cc-brand">
+            ${mark({ size: 34 })}
+            <span class="cc-brand-name">ECHO ECHO ADMIN</span>
           </div>
-          <div class="row" id="head-actions"></div>
-        </header>
-        <div class="webbody"><div id="view" class="wrapmax"></div></div>
-      </main>
+          <nav class="cc-nav" aria-label="Pages">
+            ${NAV_GROUPS.map(([group, items]) => {
+              const mine = items.filter(([r]) => allowed(r));
+              return mine.length ? `<div class="cc-navgroup"><div class="cc-navlabel">${esc(group)}</div>
+                ${mine.map(([r, l, ic]) => `<button type="button" class="cc-navbtn" data-route="${r}" title="${esc(l)}"
+                  ${S.route === r ? 'aria-current="page"' : ''}>${icon(ic)}<span>${esc(l)}</span></button>`).join('')}</div>` : '';
+            }).join('')}
+          </nav>
+          <div class="cc-rail-foot">
+            <button type="button" class="cc-navbtn" data-act="collapseRail" aria-label="Collapse the sidebar">${icon('collapse')}<span>Collapse</span></button>
+          </div>
+        </aside>
+        <main class="cc-main">
+          <header class="cc-top">
+            <form class="cc-search" data-form="search" role="search">
+              ${icon('search', 17)}
+              <input class="cc-search-in" name="q" type="search" placeholder="Search orders: code, student or café" aria-label="Search orders" autocomplete="off">
+            </form>
+            <div class="cc-top-right">
+              <span id="site-status"></span>
+              <a class="cc-iconbtn" href="/web/" target="_blank" rel="noopener" title="Open the public website" aria-label="Open the public website">${icon('globe')}</a>
+              <div class="cc-bell"><button type="button" class="cc-iconbtn" data-act="notifications" aria-label="Notifications" aria-haspopup="dialog" aria-expanded="false">${icon('bell')}<span class="cc-dot cc-count" id="notif-dot" hidden></span></button></div>
+              <div class="cc-profile">
+                <button type="button" class="cc-profile-btn" data-act="profileMenu" aria-haspopup="true" aria-expanded="false">
+                  <span data-me-avatar data-size="38">${AvatarOf()}</span>
+                  <span class="cc-profile-text"><span class="cc-profile-name" data-me-name>${esc(name)}</span><span class="cc-profile-role">${esc(role)}</span></span>
+                </button>
+                <div class="cc-menu" id="profile-menu" hidden>
+                  <div class="cc-menu-head"><b data-me-name>${esc(name)}</b><span class="t-xs muted">${esc(session.me.user.studentEmail || '')}</span>
+                    <span class="t-xs muted">${esc(session.roles.map((r) => ROLE_LABEL[r] || r).join(' · '))} · password and authenticator session</span></div>
+                  <button type="button" class="cc-menu-item" data-route="profile">${icon('user', 17)} My Profile</button>
+                  <button type="button" class="cc-menu-item" data-act="theme">${icon('moon', 17)} Light or dark</button>
+                  <button type="button" class="cc-menu-item danger" data-act="signout">${icon('out', 17)} Sign out</button>
+                </div>
+              </div>
+            </div>
+          </header>
+          <div class="cc-panel">
+            <div class="cc-pagehead">
+              <div class="cc-pagehead-text">
+                <nav class="cc-crumbs" aria-label="Breadcrumb"><span>Admin</span><span aria-hidden="true">/</span><span id="crumb-page">${esc(navLabel(S.route))}</span></nav>
+                <h1 class="cc-title" id="page-title"></h1>
+                <p class="cc-sub" id="page-sub"></p>
+              </div>
+              <div class="cc-head-actions" id="head-actions"></div>
+            </div>
+            <div id="view" class="cc-view"></div>
+          </div>
+        </main>
+      </div>
     </div>`;
   root.addEventListener('click', onClick);
   root.addEventListener('submit', onFormSubmit);
+  document.addEventListener('click', closeMenusOutside);
+  refreshUnread();
   route();
+}
+
+const initialsOf = (n) => String(n).split(/[\s@.]+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || 'A';
+
+/* The topbar's website status (optional: a failure leaves it blank). Moving between pages reuses an answer from
+   the last minute instead of asking again on every click; a save, publish
+   or rollback forces a fresh one, and the Website page paints it from the
+   data it has just loaded. (The unread count has its own minute poll.) */
+const SITE_CHIP_TTL_MS = 60_000;
+let siteChipAt = 0;
+async function refreshTopbar({ force = false } = {}) {
+  const box = document.getElementById('site-status');
+  if (!box || !allowed('website')) return;
+  if (!force && (S.route === 'website' || Date.now() - siteChipAt < SITE_CHIP_TTL_MS)) return;
+  try { paintSiteChip(await quad.adminSite()); } catch { box.innerHTML = ''; }
+}
+function paintSiteChip(d) {
+  const box = document.getElementById('site-status');
+  if (!box) return;
+  siteChipAt = Date.now();
+  {
+    const changed = d.draft.revision > 0 && (d.draft.baseVersion !== (d.live?.version ?? null)
+      || JSON.stringify(d.draft.config) !== JSON.stringify(d.live?.config ?? d.defaults));
+    box.innerHTML = `<button type="button" class="cc-sitechip${changed ? ' is-draft' : ''}" data-route="website"
+      title="Website settings">${d.live ? `Website v${d.live.version} live` : 'Website: built-in settings'}${changed ? ' · unpublished draft' : ''}</button>`;
+  }
+}
+
+function closeMenusOutside(e) {
+  /* An order row's menu closes on any click except the button that opened it. */
+  if (!e.target.closest('.oh-dots')) document.querySelector('.oh-menu')?.remove();
+  if (e.target.closest('.cc-profile, .cc-bell')) return;
+  document.querySelectorAll('.cc-menu:not(.oh-menu)').forEach((m) => { m.hidden = true; });
+  document.querySelector('.cc-profile-btn')?.setAttribute('aria-expanded', 'false');
+  document.querySelector('.cc-notifs')?.remove();
 }
 
 const view = () => document.getElementById('view');
@@ -97,12 +243,19 @@ const head = () => document.getElementById('head-actions');
 const setTitle = (t, sub = '') => {
   document.getElementById('page-title').textContent = t;
   document.getElementById('page-sub').textContent = sub;
+  const crumb = document.getElementById('crumb-page');
+  if (crumb) crumb.textContent = navLabel(S.route);
+  document.title = `${t} · ECHO ECHO ADMIN`;
 };
 
 async function onClick(e) {
   const t = e.target.closest('[data-route],[data-act]');
   if (!t) return;
-  if (t.dataset.route) { S.route = t.dataset.route; route(); return; }
+  if (t.dataset.route) {
+    if (S.route === 'website' && t.dataset.route !== 'website' && wDirty()
+        && !confirm('The website draft has unsaved changes. Leave without saving them?')) return;
+    S.route = t.dataset.route; route(); return;
+  }
   const fn = ACTIONS[t.dataset.act];
   if (fn) await fn(t, e);
 }
@@ -114,19 +267,21 @@ const SCREENS = {
   locations: scrLocations, support: scrSupport, finance: scrFinance,
   platform: scrPlatform, audit: scrAudit,
   payments: scrPayments, reliability: scrReliability, reports: scrReports,
+  website: scrWebsite, deliveries: scrDeliveries, sessions: scrSessions, order: scrOrderDetail, profile: scrProfile,
+  chat: scrChat,
 };
 
 /* The current page is marked with aria-current / aria-pressed, which is what
    .railbtn and .chip style. Called on every route change. */
 function markNav() {
-  root.querySelectorAll('.railbtn[data-route]').forEach((b) => {
-    if (b.dataset.route === S.route) b.setAttribute('aria-current', 'page');
+  const here = S.route === 'order' ? 'orders' : S.route;
+  root.querySelectorAll('.cc-navbtn[data-route]').forEach((b) => {
+    if (b.dataset.route === here) b.setAttribute('aria-current', 'page');
     else b.removeAttribute('aria-current');
   });
-  root.querySelectorAll('.webnav-mobile [data-route]').forEach((b) =>
-    b.setAttribute('aria-pressed', String(b.dataset.route === S.route)));
+  document.querySelectorAll('.cc-menu').forEach((m) => { m.hidden = true; });
 }
-const route = () => { markNav(); return (SCREENS[S.route] || scrOverview)(); };
+const route = () => { markNav(); refreshTopbar(); return (SCREENS[S.route] || scrOverview)(); };
 
 /* ========================================================================
    OVERVIEW — counts, and honest gaps
@@ -145,8 +300,8 @@ async function scrOverview() {
       when_(session.can('students.view'), async () => (await quad.verificationQueue('pending')).cases),
       when_(session.can('partners.view'), async () => (await quad.partners('pending')).partners),
       when_(session.can('platform.view'), () => quad.flags()),
-      when_(session.can('finance.view'), async () => ({
-        today: await quad.financeSummary({ from: startOfToday() }), all: await quad.financeSummary() })),
+      when_(session.can('finance.view'), () => Promise.all([quad.financeSummary({ from: startOfToday() }), quad.financeSummary()])
+        .then(([today, all]) => ({ today, all }))),
       /* A reliability failure must not blank the overview: it is shown as
          unavailable instead. */
       when_(session.can('platform.view'), () => quad.reliability().catch(() => null)),
@@ -209,10 +364,10 @@ async function scrOverview() {
   }, { label: 'Loading platform state' });
 }
 
-const kpi = (label, value, note) => `
-  <div class="kpi"><div class="t-label">${esc(label)}</div>
-  <div class="statval">${esc(String(value))}</div>
-  <div class="t-xs faint">${esc(note)}</div></div>`;
+const KPI_ICON = { Cafeterias: 'store', 'Live orders': 'bag', 'ID reviews waiting': 'id', 'Partner applications': 'bike',
+  'GMV today': 'chart', 'Platform fees today': 'wallet', 'ECHO ECHO revenue': 'wallet', 'Owed to cafés': 'store',
+  'Owed to partners': 'bike', 'Payouts in flight': 'card' };
+const kpi = (label, value, note) => statCard(KPI_ICON[label] || 'grid', label, value, note);
 
 const table = (cols, rows) => `
   <div class="dtable-wrap"><table class="dtable">
@@ -238,16 +393,14 @@ async function scrFinance() {
     <button class="btn btn-primary btn-sm" data-act="buildBatch" data-kind="partner">
       Settle partners now</button>`;
 
-  await panel(view(), async () => ({
-    today: await quad.financeSummary({ from: startOfToday() }),
-    all: await quad.financeSummary(),
-    cafeterias: (await quad.financeCafeterias()).cafeterias,
-    partners: (await quad.financePartners()).partners,
-    payouts: await quad.payouts(),
-    recon: await quad.reconciliation(),
-    pricing: await quad.pricing(),
-    schedule: await quad.settlementSchedule(),
-  }), (d) => {
+  /* Eight independent reads, in parallel: the page waits for the slowest
+     one instead of the sum of all eight. */
+  await panel(view(), async () => {
+    const [today, all, cafeterias, partners, payouts, recon, pricing, schedule] = await Promise.all([
+      quad.financeSummary({ from: startOfToday() }), quad.financeSummary(), quad.financeCafeterias(),
+      quad.financePartners(), quad.payouts(), quad.reconciliation(), quad.pricing(), quad.settlementSchedule()]);
+    return { today, all, cafeterias: cafeterias.cafeterias, partners: partners.partners, payouts, recon, pricing, schedule };
+  }, (d) => {
     const t = d.today, a = d.all;
     const platform = d.pricing.live.find((p) => !p.vendor_id);
     const unconfigured = platform && !platform.commission_bps &&
@@ -456,44 +609,86 @@ const startOfToday = () => {
    CAFETERIAS
    ======================================================================== */
 async function scrCafeterias() {
-  setTitle('Cafeterias', 'Add outlets, assign owners, control trading.');
-  head().innerHTML = `<button class="btn btn-primary btn-sm" data-act="newVendor">Add cafeteria</button>`;
+  setTitle('Cafés', 'Every café on the platform, with its photo, hours and status, and what you can do for it.');
+  head().innerHTML = session.can('cafeterias.manage') ? `<button class="btn btn-primary btn-sm" data-act="newVendor">Add café</button>` : '';
   await panel(view(), () => quad.vendors({ includeArchived: 'true' }), (d) => {
     if (!d.vendors.length) {
-      return EmptyState('No cafeterias yet.', 'Add the first one to start the platform.');
+      return EmptyState('No cafés yet.', 'Add the first café to start taking orders.');
     }
-    return `<div class="stack">${d.vendors.map((raw) => {
+    const manage = session.can('cafeterias.manage');
+    const photos = session.can('menus.manage') || manage;
+    return `<div class="cafe-grid">${d.vendors.map((raw) => {
       const v = vendorVM(raw);
+      const status = !raw.active ? ['Archived', 'badge-warn'] : v.open ? ['Open', 'badge-open'] : raw.is_open ? ['Orders paused', 'badge-warn'] : ['Closed', 'badge-closed'];
       return `
-        <section class="card card-pad ${raw.active ? '' : 'faint'}">
-          <div class="between">
-            <div class="row" style="gap:12px">
-              ${Mark(v, 44)}
-              <div><b class="t-h3">${esc(v.name)}</b>
-                <div class="t-xs faint">${esc(v.kind || '')} ·
-                  ${v.ratingText.empty ? 'No ratings yet'
-                    : `★ ${v.ratingText.text} (${v.ratingText.count})`}</div></div>
+        <article class="cafe-card card${raw.active ? '' : ' is-archived'}">
+          ${cafeImage(raw)}
+          <div class="cafe-body">
+            <div class="between" style="gap:8px;align-items:flex-start">
+              <div style="min-width:0"><h2 class="cafe-name">${esc(v.name)}</h2>
+                <p class="cafe-kind">${esc(v.kind || 'Café')}${raw.campus_name ? ` · ${esc(raw.campus_name)}` : ''}</p></div>
+              <span class="badge ${status[1]}">${status[0]}</span>
             </div>
-            <div class="row" style="gap:8px">
-              <span class="badge ${raw.active ? (v.open ? 'badge-open' : 'badge-closed') : 'badge-warn'}">
-                ${!raw.active ? 'Archived' : v.open ? 'Open' : raw.is_open ? 'Orders paused' : 'Closed'}</span>
+            <dl class="cafe-facts">
+              <div><dt>Hours</dt><dd>${raw.opens_at && raw.closes_at ? `${esc(String(raw.opens_at).slice(0, 5))}–${esc(String(raw.closes_at).slice(0, 5))}` : 'Not set'}</dd></div>
+              <div><dt>Prep time</dt><dd>${raw.prep_minutes ? `${raw.prep_minutes} min` : '—'}</dd></div>
+              <div><dt>Delivery</dt><dd>${raw.delivery_enabled ? 'Offered' : 'Pickup only'}</dd></div>
+              <div><dt>Rating</dt><dd>${v.ratingText.empty ? 'No ratings yet' : `★ ${esc(v.ratingText.text)} (${v.ratingText.count})`}</dd></div>
+            </dl>
+            <div class="cafe-actions">
+              ${manage ? `<button class="btn btn-secondary btn-sm" data-act="editVendor" data-id="${v.id}">Edit</button>` : ''}
+              <button class="btn btn-secondary btn-sm" data-act="menuFor" data-id="${v.id}">Menu</button>
+              ${session.can('orders.view') ? `<button class="btn btn-secondary btn-sm" data-act="cafeOrders" data-id="${v.id}">Orders</button>` : ''}
+              ${photos ? `<label class="btn btn-ghost btn-sm">${raw.photo_asset ? 'Replace photo' : 'Add photo'}<input type="file" accept="image/jpeg,image/png,image/webp" data-cafe-photo="${v.id}" hidden></label>` : ''}
+              ${photos && raw.photo_asset ? `<button class="btn btn-ghost btn-sm" data-act="cafePhotoRemove" data-id="${v.id}">Remove photo</button>` : ''}
+              ${session.can('counter.manage') ? `<button class="btn btn-ghost btn-sm" data-act="assignOwner" data-id="${v.id}">Assign owner</button>
+                <button class="btn btn-ghost btn-sm" data-act="assignStaff" data-id="${v.id}">Add staff</button>` : ''}
+              ${manage ? `<button class="btn btn-ghost btn-sm" data-act="toggleOpen" data-id="${v.id}" data-v="${v.open ? '0' : '1'}">${v.open ? 'Close' : 'Open'}</button>
+              ${raw.is_open ? `<button class="btn btn-ghost btn-sm" data-act="toggleAccepting" data-id="${v.id}" data-v="${raw.accepting ? '0' : '1'}">${raw.accepting ? 'Pause new orders' : 'Resume new orders'}</button>` : ''}
+              <button class="btn btn-ghost btn-sm" data-act="archiveVendor" data-id="${v.id}" data-v="${raw.active ? '0' : '1'}">${raw.active ? 'Archive' : 'Restore'}</button>` : ''}
             </div>
           </div>
-          <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
-            <button class="btn btn-secondary btn-sm" data-act="editVendor" data-id="${v.id}">Edit</button>
-            <button class="btn btn-secondary btn-sm" data-act="menuFor" data-id="${v.id}">Menu</button>
-            <button class="btn btn-secondary btn-sm" data-act="assignOwner" data-id="${v.id}">Assign owner</button>
-            <button class="btn btn-secondary btn-sm" data-act="assignStaff" data-id="${v.id}">Add staff</button>
-            <button class="btn btn-ghost btn-sm" data-act="toggleOpen" data-id="${v.id}" data-v="${v.open ? '0' : '1'}">
-              ${v.open ? 'Close' : 'Open'}</button>
-            ${raw.is_open ? `<button class="btn btn-ghost btn-sm" data-act="toggleAccepting" data-id="${v.id}"
-              data-v="${raw.accepting ? '0' : '1'}">${raw.accepting ? 'Pause new orders' : 'Resume new orders'}</button>` : ''}
-            <button class="btn btn-ghost btn-sm" data-act="archiveVendor" data-id="${v.id}" data-v="${raw.active ? '0' : '1'}">
-              ${raw.active ? 'Archive' : 'Restore'}</button>
-          </div>
-        </section>`;
+        </article>`;
     }).join('')}</div>`;
-  }, { label: 'Loading cafeterias' });
+  }, { label: 'Loading cafés' });
+}
+
+/* The café's own photograph: an uploaded one if the café has it, else the
+   campus photograph the public site uses, else its tinted monogram. The
+   same sources as the student site, never a stock picture. */
+function cafeImage(raw) {
+  const v = vendorVM(raw);
+  if (raw.photo_asset) {
+    return `<div class="cafe-img" style="background:${v.markBg}"><span class="cafmark" aria-hidden="true">${esc(v.mark)}</span>
+      <img src="${esc(quad.assetUrl(raw.photo_asset))}" alt="${esc(`${raw.name}, the café`)}" loading="lazy" decoding="async" data-fallback></div>`;
+  }
+  return CafPhoto({ ...raw, heroBg: v.markBg, markBg: v.markBg, mark: v.mark }, { slot: 16 / 9, sizes: [100, 50, 33], cls: 'cafe-img' });
+}
+
+const CAFE_ACTIONS = {
+  cafeOrders: (t) => { S.orderFilter = { vendorId: t.dataset.id }; S.orderTab = 'all'; S.orderPage = 1; S.route = 'orders'; route(); },
+  cafePhotoRemove: (t) => {
+    if (!confirm('Remove this café\'s photo? The campus photograph or its monogram is shown instead.')) return null;
+    return act(t, () => quad.updateVendor(t.dataset.id, { photoAsset: null }), { ok: 'Photo removed', after: route });
+  },
+};
+
+async function cafePhotoChosen(input) {
+  const file = input.files?.[0];
+  const id = input.dataset.cafePhoto;
+  input.value = '';
+  if (!file) return;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return toast('Choose a JPEG, PNG or WebP image.', 'bad');
+  let blob;
+  try { blob = await cropImage(file, { title: 'Frame the café photo', aspects: ['wide'], minSide: 480, output: { maxSide: 1600, type: 'image/jpeg', quality: 0.88 } }); }
+  catch (e) { return toast(e.message, 'bad'); }
+  if (!blob) return;
+  try {
+    const up = await quad.uploadPhoto(blob, 'vendor_photo');
+    await quad.updateVendor(id, { photoAsset: up.id });
+    toast('Café photo saved');
+    route();
+  } catch (e) { toast(explain(e), 'bad'); }
 }
 
 /* ========================================================================
@@ -518,9 +713,8 @@ async function paintMenu() {
     if (!d.items.length) return EmptyState('No items yet.', 'Add the first dish for this cafeteria.');
     return `<div class="stack">${d.items.map((i) => `
       <div class="item ${i.active ? '' : 'faint'}">
-        ${i.photo_asset
-          ? `<img class="thumb-photo" src="${quad.assetUrl(i.photo_asset)}" alt="">`
-          : `<div class="item-thumbwrap"><div class="item-thumb"></div></div>`}
+        <div class="item-thumbwrap">${DishTile(i, quad.assetUrl)}
+          ${!i.photo_asset && dishImage(i, quad.assetUrl) ? '<span class="thumb-note">illustrative</span>' : ''}</div>
         <div class="grow">
           <b>${esc(i.name)}</b>
           <div class="t-xs faint">${esc(i.category || 'Uncategorised')} ·
@@ -733,12 +927,11 @@ const DED_BADGE = { proposed: 'badge-warn', disputed: 'badge-warn', upheld: 'bad
 async function scrTrust() {
   setTitle('Incidents & deposits', 'Delivery problems, partner security deposits and deductions.');
   head().innerHTML = `<button class="btn btn-secondary btn-sm" data-act="editDepositPolicy">Deposit policy</button>`;
-  await panel(view(), async () => ({
-    incidents: await quad.incidents('unresolved'),
-    deductions: (await quad.deductions('open')).deductions,
-    refunds: (await quad.depositRefunds('requested')).requests,
-    policy: (await quad.partnerPolicy()).policy,
-  }), (d) => `
+  await panel(view(), async () => {
+    const [incidents, deductions, refunds, policy] = await Promise.all([
+      quad.incidents('unresolved'), quad.deductions('open'), quad.depositRefunds('requested'), quad.partnerPolicy()]);
+    return { incidents, deductions: deductions.deductions, refunds: refunds.requests, policy: policy.policy };
+  }, (d) => `
     <div class="grid-kpi">
       ${kpi('Open incidents', d.incidents.incidents.length, 'reported, not yet resolved')}
       ${kpi('Deductions in progress', d.deductions.length, 'proposed, disputed or upheld')}
@@ -803,11 +996,11 @@ async function scrAdmins() {
     ${session.isOwner ? '<button class="btn btn-primary btn-sm" data-act="newAdminInvite">Invite administrator</button>' : ''}
     <button class="btn btn-secondary btn-sm" data-act="changeAdminPassword">Change my password</button>
     <button class="btn btn-secondary btn-sm" data-act="replaceAuthenticator">Replace my authenticator</button>`;
-  await panel(view(), async () => ({
-    admins: await quad.accessAdmins(),
-    invitations: session.can('admins.view') ? await quad.accessInvitations() : { invitations: [] },
-    me: await quad.adminCredential(),
-  }), (d) => {
+  await panel(view(), async () => {
+    const [admins, invitations, me] = await Promise.all([quad.accessAdmins(),
+      session.can('admins.view') ? quad.accessInvitations() : { invitations: [] }, quad.adminCredential()]);
+    return { admins, invitations, me };
+  }, (d) => {
     const open = d.invitations.invitations.filter((i) => i.state === 'waiting');
     return `
     <section class="card card-pad">
@@ -863,26 +1056,120 @@ async function scrAdmins() {
 
 /* Permission picker, grouped as the server's catalogue is. Owner-only
    permissions are shown locked so nothing is silently missing. */
-function permissionPicker(catalog, selected = []) {
-  return `
-    <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:8px">
-      <span class="t-xs muted">Start from:</span>
-      ${catalog.presets.map((p) => `<button type="button" class="btn btn-ghost btn-sm" data-act="applyPreset" data-perms="${esc(p.permissions.join(','))}">${esc(p.label)}</button>`).join('')}
-      <button type="button" class="btn btn-ghost btn-sm" data-act="applyPreset" data-perms="">None</button>
+/* What each assignable role carries, stated from the server's own rules
+   (auth/rbac.js CAPS). A café role's abilities come WITH the role and are
+   fixed; an administrator's come only from the permissions ticked for them. */
+const ROLE_CARDS = [
+  { role: 'vendor_owner', title: 'Café owner', scope: 'cafe',
+    body: 'Runs one café at the counter.',
+    inherits: ['Edit the menu, prices, availability and photos', 'Open, pause and close the café', 'See and move this café\'s orders',
+      'Add and remove this café\'s staff', 'See this café\'s own takings and settlements'] },
+  { role: 'vendor_staff', title: 'Café staff', scope: 'cafe',
+    body: 'Works one café\'s counter.',
+    inherits: ['See and move this café\'s orders', 'Mark menu items available or sold out'] },
+  { role: 'platform_admin', title: 'Administrator', scope: 'platform', ownerOnly: true,
+    body: 'Campus Control, with exactly the permissions you tick. Nothing is ticked to start with.' },
+  { role: 'support', title: 'Support', scope: 'platform', ownerOnly: true,
+    body: 'Campus Control for answering students, with exactly the permissions you tick.' },
+];
+
+async function assignRoleDialog() {
+  let vendors = [];
+  try { vendors = (await quad.vendors()).vendors || []; } catch { /* listed below as unavailable */ }
+  const owner = session.isOwner;
+  const m = modal('Assign a role', `
+    <fieldset class="role-pick" aria-label="Role">
+      ${ROLE_CARDS.map((r, i) => {
+        const locked = r.ownerOnly && !owner;
+        return `<label class="role-opt${locked ? ' is-locked' : ''}">
+          <input type="radio" name="role" value="${r.role}" ${i === 0 ? 'checked' : ''} ${locked ? 'disabled' : ''}>
+          <span class="role-opt-body"><span class="role-opt-title">${esc(r.title)}${locked ? ' <span class="badge">owner only</span>' : ''}</span>
+            <span class="role-opt-text">${esc(r.body)}</span></span></label>`;
+      }).join('')}
+    </fieldset>
+    <div class="role-cafe">
+      <div class="formrow">
+        <label class="field"><span class="t-label">Full name</span><input class="input" name="name" autocomplete="off" maxlength="80"></label>
+        <label class="field"><span class="t-label">Mobile number</span><input class="input" name="phone" type="tel" inputmode="tel" placeholder="98765 43210" required></label>
+      </div>
+      <label class="field"><span class="t-label">Café</span>
+        <select class="input" name="vendorId" required>
+          <option value="">Choose the café…</option>
+          ${vendors.map((v) => `<option value="${esc(v.id)}">${esc(v.name)}</option>`).join('')}
+        </select>${vendors.length ? '' : '<span class="field-help">No cafés could be listed for you; this needs “View cafés”.</span>'}</label>
+      <div class="role-inherits"><span class="t-label">Comes with the role</span><ul id="role-inherits"></ul>
+        <p class="field-help">These are fixed for every café role and apply to the chosen café only. They sign in at the counter with their mobile number.</p></div>
     </div>
-    <div class="stack" style="gap:12px;max-height:48vh;overflow:auto">
+    <div class="role-admin" hidden>
+      <p class="t-sm">Administrators sign in to Campus Control with their university email, a password and an authenticator app,
+        so they are added by invitation. The next step asks for their email and the exact permissions they get.</p>
+    </div>
+    <p class="field-error" role="alert" id="role-error" hidden></p>`,
+  async (d) => {
+    const err = document.getElementById('role-error');
+    const card = ROLE_CARDS.find((r) => r.role === d.role);
+    if (card.scope === 'platform') {
+      setTimeout(() => ACTIONS.newAdminInvite({ role: d.role }), 0);
+      return true;
+    }
+    const digits = String(d.phone || '').replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+    const problem = !/^\d{10}$/.test(digits) ? 'Enter a 10-digit mobile number.' : !d.vendorId ? 'Choose the café.' : '';
+    if (problem) { err.hidden = false; err.textContent = problem; throw new Error(problem); }
+    const out = await quad.grantRole({ role: d.role, phone: digits, name: d.name || undefined, vendorId: d.vendorId });
+    toast(out.onboarding?.message || 'Role assigned');
+    return out;
+  });
+  const form = m.querySelector('form');
+  /* Our own messages, in the dialog, instead of the browser's bubbles. */
+  form.noValidate = true;
+  const submit = form.querySelector('[type=submit]');
+  const sync = () => {
+    const r = ROLE_CARDS.find((c) => c.role === form.role.value);
+    const cafe = r.scope === 'cafe';
+    form.querySelector('.role-cafe').hidden = !cafe;
+    form.querySelector('.role-admin').hidden = cafe;
+    form.phone.required = cafe; form.vendorId.required = cafe;
+    submit.textContent = cafe ? 'Assign role' : 'Continue to invitation';
+    document.getElementById('role-inherits').innerHTML = (r.inherits || []).map((x) => `<li>${esc(x)}</li>`).join('');
+  };
+  form.addEventListener('change', (e) => { if (e.target.name === 'role') sync(); });
+  sync();
+}
+
+/* Permission editor. Grouped as the server's catalogue is; owner-only
+   permissions are shown locked; what every administrator has anyway is
+   listed so the picture is complete; and when an administrator currently
+   holds their role's DEFAULT list (no explicit list yet), that is said, so
+   saving is understood as making the list explicit. */
+function permissionPicker(catalog, selected = [], { source = null } = {}) {
+  const chosen = new Set(selected);
+  return `
+    ${source === 'role_default' ? `<p class="perm-note">This administrator has no explicit list yet: they hold their role's default
+      (${selected.length} permissions, ticked below). Saving makes exactly the ticked ones their explicit list.</p>`
+      : source === 'explicit' ? '<p class="perm-note">Ticked permissions are explicit grants made by the owner. Nothing else is inherited.</p>' : ''}
+    <div class="perm-tools">
+      <input class="input perm-search" type="search" placeholder="Search permissions" aria-label="Search permissions" data-perm-search>
+      <span class="perm-presets"><span class="t-xs muted">Start from:</span>
+        ${catalog.presets.map((p) => `<button type="button" class="btn btn-ghost btn-sm" data-act="applyPreset" data-perms="${esc(p.permissions.join(','))}">${esc(p.label)}</button>`).join('')}
+        <button type="button" class="btn btn-ghost btn-sm" data-act="applyPreset" data-perms="">None</button></span>
+      <span class="perm-count" data-perm-count>${chosen.size} selected</span>
+    </div>
+    <div class="perm-groups">
+      ${(catalog.alwaysAvailable || []).length ? `<fieldset class="perm-group perm-always"><legend>Always available</legend>
+        ${catalog.alwaysAvailable.map((a) => `<div class="perm-row is-fixed" data-perm-row="${esc(`${a.group} ${a.label}`.toLowerCase())}">
+          <span class="perm-check" aria-hidden="true">✓</span><span><b>${esc(a.group)}</b> · ${esc(a.label)}</span></div>`).join('')}</fieldset>` : ''}
       ${catalog.groups.map((g) => `
-        <fieldset style="border:1px solid var(--line);border-radius:10px;padding:8px 12px">
-          <legend class="t-label">${esc(g.name)}</legend>
+        <fieldset class="perm-group" data-perm-group><legend>${esc(g.name)}</legend>
           ${g.permissions.map((p) => `
-            <label class="row" style="gap:8px;align-items:flex-start;padding:3px 0">
-              <input type="checkbox" name="perm" value="${esc(p.key)}" ${selected.includes(p.key) ? 'checked' : ''} ${p.ownerOnly ? 'disabled' : ''}>
-              <span class="t-sm">${esc(p.label)}
-                <span class="t-xs faint">${esc(p.key)}${p.ownerOnly ? ' · owner only' : ''}${p.personalData ? ' · shows personal data' : ''}</span></span>
+            <label class="perm-row" data-perm-row="${esc(`${g.name} ${p.label} ${p.key}`.toLowerCase())}">
+              <input type="checkbox" name="perm" value="${esc(p.key)}" ${chosen.has(p.key) ? 'checked' : ''} ${p.ownerOnly ? 'disabled' : ''}>
+              <span><span class="perm-label">${esc(p.label)}</span>
+                <span class="perm-key">${esc(p.key)}${p.ownerOnly ? ' · owner only, never grantable' : ''}${p.personalData ? ' · shows personal data' : ''}</span></span>
             </label>`).join('')}
         </fieldset>`).join('')}
     </div>`;
 }
+
 const pickedPermissions = (form) => [...form.querySelectorAll('input[name=perm]:checked')].map((i) => i.value);
 
 async function scrReviews() {
@@ -1206,43 +1493,267 @@ const ORDER_STATES = ['awaiting_payment', 'confirmed', 'preparing', 'ready', 'as
   'picked_up', 'delivered', 'cancelled', 'refunded'];
 
 async function scrOrders() {
-  setTitle('Orders', 'Every order, searched and filtered on the server. Open one for its full timeline.');
+  setTitle('Order History', 'Every order, searched and filtered on the server. Open one for its details and full timeline.');
   head().innerHTML = '';
   const f = S.orderFilter;
+  const tab = S.orderTab || 'all';
+  const cal = icon('calendar', 18);
   view().innerHTML = `
-    <form class="filterbar" data-form="orders" aria-label="Filter orders">
+    <div class="oh-bar">
+      <nav class="oh-tabs" aria-label="Order views">${ORDER_TABS.map(([k, l]) => `
+        <button type="button" class="oh-tab" data-act="orderTab" data-tab="${k}" ${tab === k ? 'aria-current="page"' : ''}>${esc(l)}</button>`).join('')}
+      </nav>
+      <form class="oh-dates" data-form="orderDates" aria-label="Date range">
+        <label class="oh-date">${cal}<input type="date" name="from" value="${esc(f.from || '')}" aria-label="From date"></label>
+        <span class="oh-to">To</span>
+        <label class="oh-date">${cal}<input type="date" name="to" value="${esc(f.to || '')}" aria-label="To date"></label>
+      </form>
+    </div>
+    ${tab === 'summary' ? '<div id="orders-summary"></div>' : `
+    <form class="oh-filters" data-form="orders" aria-label="Filter orders">
       <input class="input" name="q" placeholder="Order code, student or café" value="${esc(f.q || '')}" aria-label="Search orders">
-      <select class="input" name="state" aria-label="Order state">${optionList(ORDER_STATES, f.state, 'Any state', ORDER_LABEL)}</select>
+      ${tab === 'all' ? `<select class="input" name="state" aria-label="Order state">${optionList(ORDER_STATES, f.state, 'Any state', ORDER_LABEL)}</select>` : ''}
       <select class="input" name="fulfilment" aria-label="Fulfilment">${optionList(['pickup', 'delivery'], f.fulfilment, 'Pickup or delivery')}</select>
       <select class="input" name="payment" aria-label="Payment state">${optionList(['paid', 'pending', 'created', 'failed', 'refunded', 'cancelled'], f.payment, 'Any payment')}</select>
-      <label class="t-xs faint">From <input class="input" type="date" name="from" value="${esc(f.from || '')}"></label>
-      <label class="t-xs faint">To <input class="input" type="date" name="to" value="${esc(f.to || '')}"></label>
       <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
       <button type="button" class="btn btn-ghost btn-sm" data-act="ordersReset">Clear</button>
     </form>
-    <div id="orders-list"></div>`;
-  await paintOrders();
+    <div id="orders-list"></div>`}`;
+  if (tab === 'summary') await paintSummary(); else await paintOrders();
 }
+
+/* The list for the current tab: the tab fixes the state, the form adds to it. */
+const orderQuery = () => {
+  const tab = S.orderTab || 'all';
+  const q = { ...S.orderFilter };
+  if (tab !== 'all') q.state = TAB_STATE[tab];
+  return q;
+};
+
+const STATUS_TONE = { delivered: 'ok', cancelled: 'bad', refunded: 'bad', picked_up: 'warn', assigned: 'warn',
+  ready: 'ink', preparing: 'ink', confirmed: 'ink', awaiting_payment: 'faint', draft: 'faint' };
+const PAY_LABEL_ADMIN = { paid: 'Paid', pending: 'Pending', created: 'Started', failed: 'Failed', refunded: 'Refunded', cancelled: 'Cancelled' };
+const Avatar = (name, size = 34) => {
+  const a = avatarFor(name);
+  return `<span class="oh-avatar" style="width:${size}px;height:${size}px;background:${a.tint}" aria-hidden="true">${esc(a.initials)}</span>`;
+};
+const StatusDot = (state) => `<span class="oh-status tone-${STATUS_TONE[state] || 'ink'}"><span class="oh-dot"></span>${esc(ORDER_LABEL[state] || state)}</span>`;
 
 async function paintOrders() {
   await panel(document.getElementById('orders-list'),
-    () => quad.adminOrders({ ...S.orderFilter, page: S.orderPage, pageSize: 25 }), (d) => {
+    () => quad.adminOrders({ ...orderQuery(), page: S.orderPage, pageSize: 25 }), (d) => {
+      S.orderRows = Object.fromEntries(d.orders.map((o) => [o.id, o]));
       if (!d.orders.length) {
-        return Object.keys(S.orderFilter).length
-          ? EmptyState('No order matches these filters.', 'Clear a filter to widen the search.')
+        return Object.keys(S.orderFilter).length || (S.orderTab && S.orderTab !== 'all')
+          ? EmptyState('No order matches.', 'Change the tab, the dates or a filter to widen the search.')
           : EmptyState('No orders yet.', 'Orders appear here the moment a student starts checkout.');
       }
-      return table(['Code', 'When', 'Cafeteria', 'Student', 'Type', 'State', 'Payment', 'Total', 'Platform fee', ''],
-        d.orders.map((o) => [
-          `<b style="white-space:nowrap">${esc(o.code)}</b>`, when(o.created_at), esc(o.vendor_name), esc(o.customer_name || '—'),
-          esc(o.fulfilment), `<span class="badge badge-ink">${esc(ORDER_LABEL[o.state] || o.state)}</span>`,
-          payBadge(o.payment_status), `<span class="num">${rupees(o.total_paise)}</span>`,
-          `<span class="num">${o.platform_fee_paise == null ? '—' : rupees(o.platform_fee_paise)}</span>`,
-          `<button type="button" class="btn btn-ghost btn-sm" data-act="orderTimeline" data-id="${o.id}">Timeline</button>
-           <button type="button" class="btn btn-ghost btn-sm" data-act="inspectOrder" data-id="${o.id}">Items</button>`,
-        ])) + pager(d, 'ordersPage');
+      return `<div class="oh-table-wrap"><table class="oh-table">
+        <thead><tr><th>Id</th><th>Name</th><th>Payment</th><th>Placed</th><th>Type</th><th>Status</th><th class="num">Total</th><th class="oh-act-col">Action</th></tr></thead>
+        <tbody>${d.orders.map((o) => `
+          <tr data-row="${o.id}">
+            <td><button type="button" class="oh-code" data-act="openOrder" data-id="${o.id}">#${esc(o.code)}</button></td>
+            <td><span class="oh-person">${Avatar(o.customer_name)}<span>${esc(o.customer_name || '—')}<span class="oh-sub">${esc(o.vendor_name)}</span></span></span></td>
+            <td>${esc(PAY_LABEL_ADMIN[o.payment_status] || 'No payment')}</td>
+            <td><span class="oh-when">${icon('clock', 15)}${when(o.created_at)}</span></td>
+            <td class="${o.fulfilment === 'delivery' ? 'oh-delivery' : ''}">${o.fulfilment === 'delivery' ? 'Delivery' : 'Collection'}</td>
+            <td>${StatusDot(o.state)}</td>
+            <td class="num">${rupees(o.total_paise)}</td>
+            <td class="oh-act-col"><button type="button" class="oh-dots" data-act="rowMenu" data-id="${o.id}" aria-haspopup="true" aria-label="Actions for order ${esc(o.code)}">${icon('dots', 18)}</button></td>
+          </tr>`).join('')}</tbody>
+      </table></div>${pager(d, 'ordersPage')}`;
     }, { label: 'Loading orders' });
 }
+
+/* ---------- Summary: the figures and the Graph View ------------------------ */
+async function paintSummary() {
+  const box = document.getElementById('orders-summary');
+  await panel(box, () => quad.adminOrderSummary({ from: S.orderFilter.from, to: S.orderFilter.to }), (d) => {
+    S.summary = d;
+    const t = d.totals;
+    return `
+      <div class="oh-summary">
+        <div class="oh-top">
+          ${bigStat('chart', 'Total Sales', rupees(t.sales_paise), 'gold')}
+          ${bigStat('card', 'Average Order', rupees(t.average_paise), 'blue')}
+          ${bigStat('check', 'Completed', String(t.completed), 'teal')}
+        </div>
+        <section class="oh-graph card">
+          <div class="oh-graph-head">
+            <h2>Graph View</h2>
+            <select class="input oh-metric" data-graph-metric aria-label="Graph shows">
+              <option value="sales" ${S.graphMetric !== 'orders' ? 'selected' : ''}>Sales</option>
+              <option value="orders" ${S.graphMetric === 'orders' ? 'selected' : ''}>Orders</option>
+            </select>
+          </div>
+          <div id="oh-chart"></div>
+        </section>
+        <div class="oh-side">
+          ${bigStat('bag', 'Total Order', String(t.orders), 'grey')}
+          ${bigStat('bike', 'Total Delivery', String(t.delivery), 'grey')}
+          ${bigStat('store', 'Total Collection', String(t.pickup), 'grey')}
+        </div>
+      </div>
+      <p class="t-xs faint oh-note">${esc(d.from)} to ${esc(d.to)}, India time${d.bucket === 'month' ? ', by month' : ', by day'}.
+        Orders count from the moment payment is confirmed; sales leave out cancelled and refunded orders.
+        ${t.cancelled ? `${t.cancelled} cancelled or refunded in this range.` : ''}</p>`;
+  }, { label: 'Loading the summary' });
+  paintChart();
+}
+
+const bigStat = (ic, label, value, tone) => `
+  <div class="oh-stat">
+    <span class="oh-stat-icon tone-${tone}" aria-hidden="true">${icon(ic, 26)}</span>
+    <span class="oh-stat-text"><span class="oh-stat-label">${esc(label)}</span><span class="oh-stat-value">${esc(value)}</span></span>
+  </div>`;
+
+function paintChart() {
+  const box = document.getElementById('oh-chart');
+  if (!box || !S.summary) return;
+  const metric = S.graphMetric === 'orders' ? 'orders' : 'sales';
+  const val = (p) => (metric === 'orders' ? p.orders : p.salesPaise / 100);
+  const g = chartGeometry(S.summary.series, val, { w: 640, h: 300 });
+  const fmt = (v) => (metric === 'orders' ? String(Math.round(v)) : v >= 1000 ? `₹${(v / 1000).toFixed(v >= 10000 ? 0 : 1)}k` : `₹${Math.round(v)}`);
+  const label = (at) => {
+    const d = new Date(`${at}T00:00:00`);
+    return S.summary.bucket === 'month' ? d.toLocaleDateString('en-IN', { month: 'short' }) : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  };
+  const empty = g.pts.every((p) => p.v === 0);
+  const peak = g.peak && g.peak.v > 0 ? g.peak : null;
+  box.innerHTML = `<svg class="oh-svg" viewBox="0 0 ${g.box.w} ${g.box.h}" role="img"
+      aria-label="${metric === 'orders' ? 'Orders' : 'Sales'} from ${esc(S.summary.from)} to ${esc(S.summary.to)}${peak ? `, highest ${esc(fmt(peak.v))} on ${esc(label(peak.at))}` : ''}">
+      ${g.grid.map((l) => `<line x1="${g.box.left}" x2="${g.box.w - g.box.right}" y1="${l.y}" y2="${l.y}" class="oh-gridline"/>
+        <text x="${g.box.left - 8}" y="${l.y + 4}" class="oh-axis" text-anchor="end">${esc(fmt(l.v))}</text>`).join('')}
+      ${g.pts.filter((_, i) => i % Math.max(1, Math.ceil(g.pts.length / 6)) === 0).map((p) => `<line x1="${p.x}" x2="${p.x}" y1="${g.box.top}" y2="${g.box.h - g.box.bottom}" class="oh-gridline v"/>`).join('')}
+      ${g.labels.map((p) => `<text x="${p.x}" y="${g.box.h - 8}" class="oh-axis" text-anchor="middle">${esc(label(p.at))}</text>`).join('')}
+      <path d="${g.d}" class="oh-line"/>
+      ${peak ? `<g class="oh-peak"><line x1="${peak.x}" x2="${peak.x}" y1="${peak.y}" y2="${g.box.h - g.box.bottom}" class="oh-marker"/>
+        <circle cx="${peak.x}" cy="${peak.y}" r="6" class="oh-point"/>
+        <rect x="${peak.x - 26}" y="${peak.y - 32}" width="52" height="20" rx="10" class="oh-tip"/>
+        <text x="${peak.x}" y="${peak.y - 18}" text-anchor="middle" class="oh-tiptext">${esc(fmt(peak.v))}</text></g>` : ''}
+      ${g.pts.map((p) => `<circle cx="${p.x}" cy="${p.y}" r="10" class="oh-hit"><title>${esc(label(p.at))}: ${esc(fmt(p.v))}</title></circle>`).join('')}
+    </svg>${empty ? '<p class="t-sm muted oh-empty">No placed orders in this range yet.</p>' : ''}`;
+}
+
+/* ---------- the order page: two columns, as in the reference ---------------- */
+async function scrOrderDetail() {
+  const id = S.orderId;
+  setTitle('Order', '');
+  head().innerHTML = '<button type="button" class="btn btn-ghost btn-sm" data-route="orders">← Order History</button>';
+  await panel(view(), async () => {
+    const [o, t] = await Promise.all([quad.order(id), quad.orderTimeline(id)]);
+    return { o, t };
+  }, ({ o, t }) => {
+    const ord = o.order;
+    const f = t.financials || o.financials || null;
+    const addr = ord.delivery_address || null;
+    const dest = ord.destination_snapshot || null;
+    const carrying = ['assigned', 'picked_up'].includes(ord.state);
+    document.getElementById('page-title').innerHTML = `Order Number <span class="od-code">#${esc(ord.code)}</span>`;
+    document.getElementById('crumb-page').textContent = `Order History / #${ord.code}`;
+    const row = (k, v) => (v == null || v === '' ? '' : `<div class="od-row"><span>${esc(k)}</span><b>${v}</b></div>`);
+    const money = (p) => (p == null ? '—' : rupees(p));
+    const refundable = orderActions({ ...ord, payment_status: o.payment?.status }, (p) => session.can(p)).some((a) => a.act === 'refund');
+    return `<div class="od">
+      <div class="od-main">
+        <section class="card od-card">
+          <table class="od-items">
+            <thead><tr><th>Items summary</th><th>QTY</th><th class="num">Price</th><th class="num">Total Price</th></tr></thead>
+            <tbody>${o.items.map((i) => `<tr>
+              <td><span class="od-item">${odDishThumb(i)}${esc(i.name_snapshot)}</span></td>
+              <td>× ${i.qty}</td><td class="num">${rupees(i.unit_paise_snapshot)}</td><td class="num">${rupees(i.line_paise)}</td></tr>`).join('')}</tbody>
+          </table>
+        </section>
+        <section class="card od-card">
+          <h2 class="od-h">Customer And Order Details</h2>
+          ${row('Customer Name', esc(t.order.customer_name || '—'))}
+          ${row('Phone Number', ord.delivery_contact_phone ? esc(ord.delivery_contact_phone) : '—')}
+          ${row('Café', esc(t.order.vendor_name))}
+          ${row('Type', ord.fulfilment === 'delivery' ? 'Delivery' : 'Collection')}
+          ${row('Placed via', esc(ord.placed_via || 'website'))}
+          ${row('Note', esc(addr?.instructions || 'N/A'))}
+        </section>
+        <section class="card od-card">
+          <h2 class="od-h">Timeline</h2>
+          <ol class="timeline">${t.timeline.map((e) => `<li>
+            <span class="t-xs faint">${esc(new Date(e.at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}</span>
+            <span class="chip chip-soft">${esc(TIMELINE_KIND[e.kind] || e.kind)}</span>
+            ${esc(e.label)}${e.amountPaise ? ` · ${rupees(e.amountPaise)}` : ''}${e.by ? ` · ${esc(e.by)}` : ''}${
+              e.outcome && e.outcome !== 'ok' ? ` · <b>${esc(e.outcome)}</b>` : ''}${e.note ? `<div class="t-xs faint">${esc(e.note)}</div>` : ''}</li>`).join('')
+            || '<li class="t-sm muted">Nothing recorded yet.</li>'}</ol>
+        </section>
+      </div>
+      <aside class="od-side">
+        ${ord.fulfilment === 'delivery' ? `<section class="card od-card od-rider">
+          <h2 class="od-h">Rider Details</h2>
+          ${ord.partner_id ? `<div class="od-rider-row">
+              <span class="od-rider-avatar">${Avatar(t.order.partner_name || 'Partner', 56)}${session.can('partners.view')
+                ? `<img class="od-rider-photo" src="${esc(quad.adminPartnerPhotoUrl(ord.partner_id))}" alt="" data-fallback="hide">` : ''}</span>
+              <b class="od-rider-name">${esc(t.order.partner_name || 'Assigned partner')}</b>
+              ${carrying ? '<button type="button" class="btn od-track" data-act="goDeliveries">Track Rider</button>' : ''}
+            </div>${!t.order.partner_name ? '<p class="t-xs faint">The name needs the partners.view permission.</p>' : ''}`
+            : '<p class="t-sm muted">No partner assigned yet.</p>'}
+        </section>` : ''}
+        <section class="card od-card">
+          <div class="between"><h2 class="od-h" style="margin:0">Order summary</h2>${StatusDot(ord.state)}</div>
+          ${row('Order Created', esc(new Date(ord.created_at).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })))}
+          ${row('Order Time', esc(new Date(ord.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })))}
+          ${row('Subtotal', money(f?.food_subtotal_paise ?? ord.subtotal_paise))}
+          ${row('Delivery Fee', money(f?.delivery_fee_paise ?? ord.delivery_paise))}
+          ${f ? row('Platform Fee', money(f.platform_fee_paise)) : ''}
+        </section>
+        <section class="card od-card od-total"><div class="od-row"><span>Total</span><b>${rupees(ord.total_paise)}</b></div></section>
+        ${ord.fulfilment === 'delivery' ? `<section class="card od-card">
+          <h2 class="od-h">Delivery Address</h2>
+          ${row('Place', esc(dest?.name || addr?.label || '—'))}
+          ${row('Block', esc(addr?.block || ''))}${row('Floor', esc(addr?.floor || ''))}${row('Room', esc(addr?.room || ''))}
+          ${row('Landmark', esc(addr?.landmark || ''))}
+        </section>` : ''}
+        <section class="card od-card">
+          <h2 class="od-h">Payment</h2>
+          ${o.payment ? `${row('Status', esc(PAY_LABEL_ADMIN[o.payment.status] || o.payment.status))}${row('Provider', esc(o.payment.provider))}${row('Amount', rupees(o.payment.amount_paise))}`
+            : '<p class="t-sm muted">No payment recorded.</p>'}
+          ${refundable ? `<button type="button" class="btn btn-danger btn-sm" data-act="refund" data-id="${ord.id}" style="margin-top:10px">Refund this order</button>` : ''}
+        </section>
+      </aside>
+    </div>`;
+  }, { label: 'Loading the order' });
+}
+
+/* The ⋮ menu: built from orderActions() for this administrator. */
+function rowMenu(t) {
+  const open = document.querySelector('.oh-menu');
+  const same = open?.dataset.for === t.dataset.id;
+  open?.remove();
+  if (same) return;
+  const o = S.orderRows?.[t.dataset.id];
+  if (!o) return;
+  const items = orderActions(o, (p) => session.can(p));
+  const m = el(`<div class="cc-menu oh-menu" role="menu" data-for="${o.id}">${items.map((a) => `
+    <button type="button" role="menuitem" class="cc-menu-item${a.danger ? ' danger' : ''}" data-act="${a.act}" data-id="${o.id}" data-code="${esc(o.code)}">${esc(a.label)}</button>`).join('')}</div>`);
+  /* On <body>, fixed to the button: inside the table's scroll box it would
+     be clipped. It has its own click listener for the same reason. */
+  document.body.append(m);
+  const r = t.getBoundingClientRect();
+  const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.right - w))}px`;
+  m.style.top = `${r.bottom + 6 + h > innerHeight ? Math.max(8, r.top - h - 6) : r.bottom + 6}px`;
+  m.addEventListener('click', onClick);
+  m.querySelector('button')?.focus();
+}
+document.addEventListener('scroll', () => document.querySelector('.oh-menu')?.remove(), { passive: true, capture: true });
+
+const ORDER_ACTIONS = {
+  orderTab: (t) => { S.orderTab = t.dataset.tab; S.orderPage = 1; return scrOrders(); },
+  rowMenu: (t) => rowMenu(t),
+  openOrder: (t) => { document.querySelector('.oh-menu')?.remove(); S.orderId = t.dataset.id; S.route = 'order'; route(); },
+  goDeliveries: () => { document.querySelector('.oh-menu')?.remove(); S.route = 'deliveries'; route(); },
+  copyCode: async (t) => {
+    document.querySelector('.oh-menu')?.remove();
+    try { await navigator.clipboard.writeText(t.dataset.code); toast(`Copied ${t.dataset.code}`); }
+    catch { toast(`Order code: ${t.dataset.code}`); }
+  },
+};
 
 const TIMELINE_KIND = { state: 'Status', payment: 'Payment', refund: 'Refund', webhook: 'Gateway webhook', audit: 'Audit' };
 
@@ -1388,7 +1899,17 @@ function onFormSubmit(e) {
   const form = e.target.closest('form[data-form]');
   if (!form || form.closest('.modalwrap')) return;
   e.preventDefault();
-  if (form.dataset.form === 'orders') { S.orderFilter = formValues(form); S.orderPage = 1; paintOrders(); }
+  if (form.dataset.form.startsWith('pf')) { pfSubmit(form); return; }
+  if (form.dataset.form === 'search') {
+    const q = String(new FormData(form).get('q') || '').trim();
+    if (!session.can('orders.view')) return toast('Searching orders needs the orders.view permission.', 'bad');
+    S.orderFilter = q ? { q } : {}; S.orderTab = 'all'; S.orderPage = 1; S.route = 'orders'; route();
+    return;
+  }
+  if (form.dataset.form === 'orders') {
+    S.orderFilter = { ...formValues(form), from: S.orderFilter.from, to: S.orderFilter.to };
+    S.orderPage = 1; paintOrders();
+  }
   else if (form.dataset.form === 'payments') { S.payFilter = formValues(form); S.payPage = 1; paintPayments(); }
   else if (form.dataset.form === 'report') downloadReport(form);
 }
@@ -1403,9 +1924,9 @@ function onFormSubmit(e) {
    and a blur that put it ON TOP of the dialog, blurring it and eating clicks. */
 /* An information-only dialog: one Done button, nothing to save. */
 const DONE = () => Promise.resolve(true);
-function modal(title, bodyHtml, onSubmit, sub = '') {
+function modal(title, bodyHtml, onSubmit, sub = '', { drawer = false } = {}) {
   const m = el(`
-    <div class="modalwrap" role="dialog" aria-modal="true"><div class="scrim-fixed" data-act="closeModal"></div>
+    <div class="modalwrap${drawer ? ' drawerwrap' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="scrim-fixed" data-act="closeModal"></div>
       <form class="modal">
         <div class="modal-head"><h2 class="t-h3">${esc(title)}</h2>
           ${sub ? `<p class="t-sm muted">${esc(sub)}</p>` : ''}</div>
@@ -1441,7 +1962,26 @@ function lockScroll() {
   document.body.style.overflow = document.querySelector('.modalwrap') ? 'hidden' : '';
 }
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.querySelector('.oh-menu')) { document.querySelector('.oh-menu').remove(); return; }
   if (e.key === 'Escape' && document.querySelector('.modalwrap')) closeModal();
+});
+
+/* The date chips and the Graph View's metric apply as soon as they change. */
+document.addEventListener('change', (e) => {
+  if (e.target.matches?.('[data-pf-photo]')) { pfPhotoChosen(e.target); return; }
+  if (e.target.matches?.('[data-cafe-photo]')) { cafePhotoChosen(e.target); return; }
+  if (e.target.matches?.('input[name="perm"]')) {
+    const f = e.target.closest('form');
+    const c = f?.querySelector('[data-perm-count]');
+    if (c) c.textContent = `${f.querySelectorAll('input[name=perm]:checked').length} selected`;
+  }
+  const d = e.target.closest?.('.oh-dates input');
+  if (d) {
+    S.orderFilter = { ...S.orderFilter, [d.name]: d.value || undefined };
+    S.orderPage = 1;
+    return (S.orderTab === 'summary' ? paintSummary : paintOrders)();
+  }
+  if (e.target.matches?.('[data-graph-metric]')) { S.graphMetric = e.target.value; paintChart(); }
 });
 
 const field = (name, label, value = '', type = 'text') => `
@@ -1494,9 +2034,9 @@ const ACTIONS = {
         <span class="chip chip-soft">${esc(TIMELINE_KIND[e.kind] || e.kind)}</span>
         ${esc(e.label)}${e.amountPaise ? ` · ${rupees(e.amountPaise)}` : ''}${e.by ? ` · ${esc(e.by)}` : ''}${
           e.outcome && e.outcome !== 'ok' ? ` · <b>${esc(e.outcome)}</b>` : ''}${e.duplicates ? ` · ${e.duplicates} duplicate(s) ignored` : ''}${
-          e.note ? `<div class="t-xs faint">${esc(e.note)}</div>` : ''}</li>`).join('') || '<li class="t-sm muted">Nothing recorded.</li>'}</ol>`, DONE);
+          e.note ? `<div class="t-xs faint">${esc(e.note)}</div>` : ''}</li>`).join('') || '<li class="t-sm muted">Nothing recorded.</li>'}</ol>`, DONE, '', { drawer: true });
   },
-  theme: () => toggleTheme(),
+  theme: () => toggleAdminTheme(),
 
   /* ---- incidents, deductions, deposits ---- */
   investigate: (t) => act(t, () => quad.investigateIncident(t.dataset.id), { ok: 'Marked as investigating', after: scrTrust }),
@@ -1568,15 +2108,15 @@ const ACTIONS = {
     (d) => quad.hideReview(t.dataset.id, true, d.reason)),
 
   /* ---- administrators ---- */
-  newAdminInvite: async () => {
+  newAdminInvite: async (t) => {
     const catalog = await quad.accessCatalog();
-    modal('Invite an administrator', `
-      ${field('name', 'Name')}
-      ${field('email', 'University email', '', 'email')}
-      ${select('role', 'Role ceiling', [['platform_admin', 'Administrator'], ['support', 'Support']])}
+    const want = t?.role || t?.dataset?.role || 'platform_admin';
+    const m = modal('Invite an administrator', `
+      <div class="formrow">${field('name', 'Full name')}${field('email', 'University email', '', 'email')}</div>
+      ${select('role', 'Role', [['platform_admin', 'Administrator'], ['support', 'Support']])}
       <p class="t-xs faint">They sign in with this mailbox, enter the one-time code from the invitation email, then set a password and an authenticator app.
         The code expires in ${catalog.inviteTtlHours} hours and works once.${catalog.emailDelivery ? '' : ' Email is not configured, so the code will be shown to you once instead.'}</p>
-      ${permissionPicker(catalog)}`,
+      ${permissionPicker(catalog, [], { source: 'explicit' })}`,
     async (d, form) => {
       const out = await quad.inviteAdministrator({ name: d.name, email: d.email, role: d.role, permissions: pickedPermissions(form) });
       if (out.inviteCode) {
@@ -1585,18 +2125,37 @@ const ACTIONS = {
           <p class="t-xs faint" style="margin-top:10px">Expires ${esc(new Date(out.expiresAt).toLocaleString('en-IN'))}. Shown only now.</p>`, DONE), 0);
       } else toast('Invitation emailed');
       return out;
-    });
+    }, '', { drawer: true });
+    m.querySelector('select[name=role]').value = want;
   },
   applyPreset: (t) => {
     const want = new Set((t.dataset.perms || '').split(',').filter(Boolean));
-    t.closest('form').querySelectorAll('input[name=perm]:not([disabled])').forEach((i) => { i.checked = want.has(i.value); });
+    const f = t.closest('form');
+    f.querySelectorAll('input[name=perm]:not([disabled])').forEach((i) => { i.checked = want.has(i.value); });
+    const c = f.querySelector('[data-perm-count]');
+    if (c) c.textContent = `${f.querySelectorAll('input[name=perm]:checked').length} selected`;
   },
   editAdminPermissions: async (t) => {
     const [catalog, detail] = await Promise.all([quad.accessCatalog(), quad.accessAdmin(t.dataset.id)]);
+    const before = detail.administrator.effective.permissions;
     modal(`Permissions · ${t.dataset.name}`, `
-      ${permissionPicker(catalog, detail.administrator.effective.permissions)}
-      ${field('reason', 'Reason for the change (kept in the audit log)')}`,
-    (d, form) => quad.setAdminPermissions(t.dataset.id, pickedPermissions(form), d.reason));
+      <p class="t-sm muted">${esc(detail.administrator.email || '')} · ${esc(detail.administrator.status)} ·
+        ${detail.sessions.length} open session(s). A change applies to their open sessions on the next request.</p>
+      ${permissionPicker(catalog, before, { source: detail.administrator.effective.source })}
+      ${field('reason', 'Reason for the change (kept in the audit log)')}
+      ${detail.history.length ? `<h3 class="t-label" style="margin-top:6px">Permission history</h3>
+        ${table(['When', 'Change', 'By'], detail.history.slice(0, 12).map((h) => [when(h.at), esc(h.action.replace(/^admin\./, '').replace(/_/g, ' ')), esc(h.actor_name || '—')]))}` : ''}`,
+    (d, form) => {
+      const after = pickedPermissions(form);
+      const added = after.filter((k) => !before.includes(k));
+      const removed = before.filter((k) => !after.includes(k));
+      if (!added.length && !removed.length) throw new Error('Nothing changed.');
+      if (!confirm(`Change ${t.dataset.name}'s permissions?
+
+${added.length ? `Grant: ${added.join(', ')}
+` : ''}${removed.length ? `Remove: ${removed.join(', ')}` : ''}`)) throw new Error('Not saved.');
+      return quad.setAdminPermissions(t.dataset.id, after, d.reason);
+    }, '', { drawer: true });
   },
   suspendAdmin: (t) => modal(`Suspend ${t.dataset.name}`,
     `<p class="t-sm muted">Every session ends now. Their password and authenticator are kept, so the owner can restore access later.</p>
@@ -1640,7 +2199,7 @@ const ACTIONS = {
       <h3 class="t-label" style="margin-top:12px">Access history</h3>
       ${d.history.length ? table(['When', 'Change', 'By'], d.history.map((h) => [when(h.at), esc(h.action), esc(h.actor_name || '—')])) : '<p class="t-sm muted">None.</p>'}
       <h3 class="t-label" style="margin-top:12px">Recent activity</h3>
-      ${d.activity.length ? table(['When', 'Action', 'Outcome'], d.activity.slice(0, 50).map((x) => [when(x.at), esc(x.action), esc(x.outcome)])) : '<p class="t-sm muted">No activity yet.</p>'}`, DONE);
+      ${d.activity.length ? table(['When', 'Action', 'Outcome'], d.activity.slice(0, 50).map((x) => [when(x.at), esc(x.action), esc(x.outcome)])) : '<p class="t-sm muted">No activity yet.</p>'}`, DONE, '', { drawer: true });
   },
   revokePasskey: (t) => {
     if (!confirm(`Remove the passkey “${t.dataset.label}”? Sessions opened with it end immediately.`)) return;
@@ -1670,11 +2229,18 @@ const ACTIONS = {
     if (!confirm('Set up a new authenticator? The one you use now stops working as soon as you confirm the new one.')) return;
     let out;
     try { out = await quad.beginAuthenticator(); }
-    catch (e) { return toast(explain(e), 'bad'); }
+    catch (e) {
+      /* Replacing a working authenticator needs a fresh password + code. */
+      if (e instanceof ApiError && e.code === 'reauth_required') {
+        try { await adminReauth(); out = await quad.beginAuthenticator(); } catch (e2) { return toast(explain(e2), 'bad'); }
+      } else return toast(explain(e), 'bad');
+    }
+    const qr = await qrSvg(out.uri);
     modal('Set up your authenticator', `
-      <p class="t-sm muted">In Microsoft Authenticator — or any authenticator app — choose
-        <b>Add account → Other account → Enter key manually</b>, then type this key.</p>
-      <div class="enrolcode">${esc(out.secret)}</div>
+      <p class="t-sm muted">In Microsoft Authenticator choose <b>Add account → Other account</b> and scan this code,
+        or choose <b>Enter code manually</b> and type the key below.</p>
+      ${qr ? `<div class="enrol-qr">${qr}</div>` : ''}
+      <div class="enrolcode">${esc(groupKey(out.secret))}</div>
       <p class="t-xs faint">Account name: ${esc(out.issuer)} · ${out.digits} digits · a new code every ${out.periodSeconds} seconds.
         This key is shown once. It is stored encrypted and nothing can read it back.</p>
       <label class="t-label" style="margin-top:12px;display:block">Code the app is showing now</label>
@@ -1697,7 +2263,7 @@ const ACTIONS = {
       (d) => quad.setCampus(t.dataset.id, { serviceStatus: d.status, statusMessage: d.message }));
     m.querySelector('select[name=status]').value = t.dataset.status;
   },
-  signout: () => signOut(),
+  signout: (t) => signOut({ admin: true, button: t }),
   closeModal,
 
   /* ---- cafeterias ---- */
@@ -1771,7 +2337,10 @@ const ACTIONS = {
       <input class="input" type="file" name="photo" accept="image/*"></label>`,
     async (d, form) => {
       const file = form.querySelector('input[name=photo]').files[0];
-      const photoAsset = file ? (await quad.uploadPhoto(file, 'food_photo')).id : undefined;
+      const framed = file ? await cropImage(file, { title: 'Frame the dish photo', aspects: ['square', 'card'], minSide: 300,
+        output: { maxSide: 1200, type: 'image/jpeg', quality: 0.88 } }) : null;
+      if (file && !framed) throw new Error('The photo was not saved: framing was cancelled.');
+      const photoAsset = framed ? (await quad.uploadPhoto(framed, 'food_photo')).id : undefined;
       return quad.createItem(S.vendorId, {
         name: d.name, description: d.description, price: d.price,
         prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
@@ -1798,7 +2367,10 @@ const ACTIONS = {
       </p>`,
       async (d, form) => {
         const file = form.querySelector('input[name=photo]').files[0];
-        const photoAsset = file ? (await quad.uploadPhoto(file, 'food_photo')).id : undefined;
+        const framed = file ? await cropImage(file, { title: 'Frame the dish photo', aspects: ['square', 'card'], minSide: 300,
+          output: { maxSide: 1200, type: 'image/jpeg', quality: 0.88 } }) : null;
+        if (file && !framed) throw new Error('The photo was not saved: framing was cancelled.');
+        const photoAsset = framed ? (await quad.uploadPhoto(framed, 'food_photo')).id : undefined;
         return quad.updateItem(i.id, {
           name: d.name, description: d.description, price: d.price,
           prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
@@ -1842,22 +2414,7 @@ const ACTIONS = {
   /* ---- users ---- */
   searchUsers: () => paintUsers(document.getElementById('user-q').value.trim()),
 
-  addRole: () => modal('Assign a role', `
-    ${field('name', 'Name')}${field('phone', 'Phone number', '', 'tel')}
-    <label class="field"><span class="t-label">Role</span>
-      <select class="input" name="role">
-        <option value="vendor_owner">Cafeteria owner</option>
-        <option value="vendor_staff">Cafeteria staff</option>
-        <option value="support">Support</option>
-        <option value="platform_admin">Admin</option>
-      </select></label>
-    ${field('vendorId', 'Cafeteria id (vendor roles only)')}
-    <p class="t-xs faint">
-      platform_owner cannot be granted here — it is set from the server's
-      PLATFORM_OWNER_PHONE and no API can hand it out. Platform roles can only
-      be granted by the platform owner.
-    </p>`,
-    (d) => quad.grantRole({ ...d, vendorId: d.vendorId || undefined })),
+  addRole: () => assignRoleDialog(),
 
   inspectUser: async (t) => {
     const u = await quad.user(t.dataset.id);
@@ -2170,8 +2727,9 @@ const ACTIONS = {
   refund: async (t) => {
     const reason = prompt('Refund reason (recorded in the audit log):');
     if (!reason) return;
-    await act(t, () => quad.refund(t.dataset.id, reason), { ok: 'Refund issued' });
+    const out = await act(t, () => quad.refund(t.dataset.id, reason), { ok: 'Refund issued' });
     closeModal();
+    if (out && ['orders', 'order'].includes(S.route)) route();
   },
 
   /* ---- platform ---- */
@@ -2470,3 +3028,1253 @@ async function fileOrText(form) {
 }
 
 const splitList = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
+
+/* ========================================================================
+   WEBSITE CUSTOMIZATION — the public website's content and look
+
+   One shared draft on the server, edited here and previewed live in a frame
+   of the real website. Nothing on this page changes what visitors see until
+   Publish: that is a server call that re-validates the draft and makes it a
+   new version in one transaction. Every control maps to an allowlisted
+   field the server checks; there is no free CSS, HTML or script anywhere.
+   ======================================================================== */
+const W = {
+  data: null,        // GET /admin/site
+  config: null,      // the working copy being edited
+  saved: null,       // JSON of the draft as last saved, for "unsaved changes"
+  revision: 0,
+  tab: 'theme',
+  problems: [],
+  previewRoute: 'welcome',
+  previewWidth: 'mobile',
+  vendors: null,
+  items: null,       // id -> { id, vendorId, vendorName, name, pricePaise, veg, available, photoAsset }
+  limits: null,      // /assets/limits
+  busy: false,
+};
+const W_TABS = [
+  ['theme', 'Brand & theme'], ['hero', 'Landing hero'], ['home', 'Homepage sections'],
+  ['featured', 'Featured cafés & dishes'], ['banners', 'Banners'], ['announcement', 'Announcement bar'],
+  ['footer', 'Footer & contact'], ['seo', 'Title & description'], ['features', 'Show or hide'],
+  ['history', 'Versions & rollback'],
+];
+const SECTION_LABEL = {
+  featured: 'Featured cafés & dishes', banners: 'Promotional banners', cafes: 'Cafés on this campus',
+  ask: 'Ask ECHO ECHO', reorder: 'Order again', pickup: 'Self pickup', deliver: 'Deliver with ECHO ECHO',
+};
+const SHIPPED_THEME = { accent: '#C8425F', background: '#FAF7F3', surface: '#FFFFFF', text: '#1A1416', textSecondary: '#3D3134', border: '#E9E1DA' };
+const ROUTE_LABEL = { home: 'Home', cafes: 'Cafés', deliver: 'Deliver with ECHO ECHO', ai: 'Ask ECHO ECHO', orders: 'Orders',
+  profile: 'Profile', signin: 'Sign in (Student / Employee)', 'ob-college': 'Student sign-in', cart: 'Cart' };
+
+const getPath = (o, path) => path.split('.').reduce((x, k) => (x == null ? x : x[k]), o);
+function setPath(o, path, v) {
+  const ks = path.split('.'); const last = ks.pop();
+  const parent = ks.reduce((x, k) => x[k], o);
+  parent[last] = v;
+}
+const wDirty = () => W.config && JSON.stringify(W.config) !== W.saved;
+const canEdit = () => !!W.data?.can.edit;
+const canPublish = () => !!W.data?.can.publish;
+
+async function scrWebsite() {
+  setTitle('Website Customization', 'Edit the public website’s words, images, sections and colours. Visitors see a change only after it is published.');
+  head().innerHTML = '';
+  await panel(view(), async () => {
+    const [d, limits] = await Promise.all([quad.adminSite(), W.limits ? W.limits : quad.assetLimits().catch(() => null)]);
+    return { d, limits };
+  }, ({ d, limits }) => {
+    W.data = d; W.limits = limits;
+    paintSiteChip(d);
+    W.config = structuredClone(d.draft.config);
+    W.saved = JSON.stringify(d.draft.config);
+    W.revision = d.draft.revision;
+    W.problems = [];
+    return `<div class="wz" id="wz">
+      <nav class="wz-tabs" aria-label="Website settings">${W_TABS.map(([k, l]) => `
+        <button type="button" class="wz-tab" data-act="wzTab" data-tab="${k}" ${W.tab === k ? 'aria-current="true"' : ''}>${esc(l)}</button>`).join('')}
+      </nav>
+      <section class="wz-edit card" aria-label="Editor">
+        <div class="wz-status" id="wz-status"></div>
+        <div id="wz-problems"></div>
+        <div id="wz-form" class="wz-form"></div>
+      </section>
+      <section class="wz-preview card" aria-label="Live preview">
+        <div class="wz-preview-bar">
+          <select class="input input-sm" data-wz-route aria-label="Preview screen">
+            ${[['welcome', 'Landing page'], ['home', 'Home'], ['signin', 'Student / Employee'], ['cafes', 'Cafés'], ['deliver', 'Deliver with ECHO ECHO']]
+              .map(([r, l]) => `<option value="${r}" ${W.previewRoute === r ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+          <div class="seg" role="group" aria-label="Preview width">
+            <button type="button" class="seg-btn" data-act="wzWidth" data-w="mobile" aria-pressed="${W.previewWidth === 'mobile'}">Phone</button>
+            <button type="button" class="seg-btn" data-act="wzWidth" data-w="desktop" aria-pressed="${W.previewWidth === 'desktop'}">Desktop</button>
+          </div>
+          <span class="wz-preview-tag">Draft preview · not public</span>
+        </div>
+        <div class="wz-frame-wrap ${W.previewWidth}"><iframe id="wz-frame" title="Preview of the website with this draft"
+          src="/web/?site-preview=1" loading="eager"></iframe></div>
+      </section>
+    </div>`;
+  }, { label: 'Loading website settings' });
+  if (!W.data) return;
+  wzHeadActions();
+  wzStatus();
+  await wzPaintForm();
+  wzBindOnce();
+}
+
+function wzHeadActions() {
+  head().innerHTML = `
+    <button type="button" class="btn btn-ghost btn-sm" data-act="wzDiscard" ${canEdit() ? '' : 'disabled'}>Discard changes</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-act="wzReset" ${canEdit() ? '' : 'disabled'}>Reset to last published</button>
+    <button type="button" class="btn btn-secondary btn-sm" data-act="wzSave" ${canEdit() ? '' : 'disabled'}>Save draft</button>
+    <button type="button" class="btn btn-primary btn-sm" data-act="wzPublish" ${canPublish() ? '' : 'disabled title="Needs the website.publish permission"'}>Publish changes</button>`;
+}
+
+function wzStatus() {
+  const box = document.getElementById('wz-status');
+  if (!box || !W.data) return;
+  const d = W.data;
+  const live = d.live;
+  box.innerHTML = `
+    <span class="wz-pill ${wDirty() ? 'warn' : 'ok'}">${wDirty() ? 'Unsaved changes' : 'All changes saved'}</span>
+    <span>${W.revision ? `Draft revision ${W.revision}${d.draft.updatedAt ? `, saved ${when(d.draft.updatedAt)}${d.draft.updatedBy ? ` by ${esc(d.draft.updatedBy)}` : ''}` : ''}` : 'No draft saved yet'}</span>
+    <span>${live ? `Live: version ${live.version}, published ${when(live.publishedAt)}${live.publishedBy ? ` by ${esc(live.publishedBy)}` : ''}` : 'Live: the built-in website (nothing published yet)'}</span>
+    ${!canEdit() ? '<span class="wz-pill">Read only: you do not have website.customize</span>' : ''}`;
+}
+
+function wzProblems() {
+  const box = document.getElementById('wz-problems');
+  if (!box) return;
+  box.innerHTML = W.problems.length ? `<div class="wz-problems" role="alert"><b>Fix these before saving:</b><ul>${
+    W.problems.map((p) => `<li><code>${esc(p.path)}</code> ${esc(p.problem)}</li>`).join('')}</ul></div>` : '';
+  document.querySelectorAll('[data-path]').forEach((i) => {
+    const bad = W.problems.some((p) => p.path === i.dataset.path || p.path.startsWith(`${i.dataset.path}.`));
+    i.classList.toggle('is-invalid', bad);
+    i.setAttribute('aria-invalid', String(bad));
+  });
+}
+
+/* ---------- field builders ---------------------------------------------- */
+const ro = () => (canEdit() ? '' : 'disabled');
+const wText = (path, label, { max = 120, area = false, hint = '' } = {}) => {
+  const v = getPath(W.config, path) ?? '';
+  return `<label class="field"><span class="t-label">${esc(label)} <span class="wz-count" data-count-for="${path}">${String(v).length}/${max}</span></span>
+    ${area ? `<textarea class="input" rows="3" maxlength="${max}" data-path="${path}" ${ro()}>${esc(v)}</textarea>`
+      : `<input class="input" maxlength="${max}" data-path="${path}" value="${esc(v)}" ${ro()}>`}
+    ${hint ? `<span class="t-xs faint">${esc(hint)}</span>` : ''}</label>`;
+};
+const wBool = (path, label, hint = '') => `<label class="wz-switch"><input type="checkbox" data-path="${path}" ${getPath(W.config, path) ? 'checked' : ''} ${ro()}>
+  <span class="grow"><span class="t-sm t-strong">${esc(label)}</span>${hint ? `<span class="t-xs faint" style="display:block">${esc(hint)}</span>` : ''}</span></label>`;
+const wSelect = (path, label, options, { allowNull = false } = {}) => {
+  const v = getPath(W.config, path);
+  return `<label class="field"><span class="t-label">${esc(label)}</span>
+    <select class="input" data-path="${path}" ${allowNull ? 'data-null="1"' : ''} ${ro()}>
+      ${allowNull ? `<option value="" ${v == null ? 'selected' : ''}>Website default</option>` : ''}
+      ${options.map(([val, l]) => `<option value="${esc(val)}" ${v === val ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+    </select></label>`;
+};
+const wColor = (key, label) => {
+  const path = `theme.${key}`;
+  const v = getPath(W.config, path);
+  const shown = v || SHIPPED_THEME[key];
+  return `<div class="wz-color">
+    <span class="t-label">${esc(label)}</span>
+    <div class="row g2">
+      <input type="color" class="wz-swatch" data-color-for="${path}" value="${esc(shown.toLowerCase())}" aria-label="${esc(label)} colour picker" ${ro()}>
+      <input class="input wz-hex" data-path="${path}" data-null="1" value="${esc(v || '')}" placeholder="${esc(SHIPPED_THEME[key])}" title="Empty means the website's own colour" maxlength="7" aria-label="${esc(label)} hex value" ${ro()}>
+      <button type="button" class="btn btn-ghost btn-sm" data-act="wzClear" data-path="${path}" ${v ? '' : 'disabled'} ${ro()}>Reset</button>
+    </div></div>`;
+};
+const wNumber = (path, label, min, max) => {
+  const v = getPath(W.config, path);
+  return `<label class="field"><span class="t-label">${esc(label)} <span class="t-xs faint">${min}–${max} px, empty for default</span></span>
+    <input class="input" type="number" min="${min}" max="${max}" step="1" data-path="${path}" data-null="1" data-int="1" value="${v ?? ''}" ${ro()}></label>`;
+};
+const linkOptions = (path, label, { allowEmpty = true } = {}) => {
+  const v = getPath(W.config, path) || '';
+  const internal = Object.entries(ROUTE_LABEL).map(([r, l]) => [`#/${r}`, l]);
+  const custom = v && !internal.some(([x]) => x === v);
+  return `<label class="field"><span class="t-label">${esc(label)}</span>
+    <select class="input" data-link-select="${path}" ${ro()}>
+      ${allowEmpty ? `<option value="" ${!v ? 'selected' : ''}>No link</option>` : ''}
+      ${internal.map(([x, l]) => `<option value="${esc(x)}" ${v === x ? 'selected' : ''}>Website: ${esc(l)}</option>`).join('')}
+      <option value="__custom" ${custom ? 'selected' : ''}>Another address (https:// or mailto:)</option>
+    </select>
+    <input class="input" data-path="${path}" value="${esc(custom ? v : '')}" placeholder="https://…" ${custom ? '' : 'hidden'} ${ro()}></label>`;
+};
+function wImage(path, label, hint) {
+  const id = getPath(W.config, path);
+  return `<div class="wz-image" data-image-for="${path}">
+    <span class="t-label">${esc(label)}</span>
+    <div class="row g3" style="align-items:center;flex-wrap:wrap">
+      <div class="wz-thumb">${id ? `<img src="${esc(quad.assetUrl(id))}" alt="">` : '<span class="t-xs faint">No image</span>'}</div>
+      <div class="stack g1">
+        <label class="btn btn-secondary btn-sm ${canEdit() ? '' : 'is-disabled'}">Upload<input type="file" accept="image/jpeg,image/png,image/webp" data-upload="${path}" hidden ${ro()}></label>
+        ${id ? `<button type="button" class="btn btn-ghost btn-sm" data-act="wzClear" data-path="${path}" ${ro()}>Remove</button>` : ''}
+      </div>
+      <div class="wz-progress" data-progress-for="${path}" hidden><span></span></div>
+    </div>
+    <span class="t-xs faint">${esc(hint)}${W.limits ? ` JPEG, PNG or WebP, up to ${Math.round(W.limits.maxBytes / 1048576)} MB.` : ''}</span>
+  </div>`;
+}
+
+/* ---------- the forms ----------------------------------------------------- */
+async function wzPaintForm() {
+  const box = document.getElementById('wz-form');
+  if (!box) return;
+  const c = W.config;
+  const opt = W.data.options;
+  const T = {
+    theme: () => `
+      <h2 class="wz-h">Brand</h2>
+      ${wImage('brand.logoAsset', 'Logo', 'Shown in the header and footer instead of the approved artwork. Wide images work best; at least 120 px high.')}
+      ${wImage('brand.faviconAsset', 'Favicon', 'The browser-tab icon. Square, at least 64 × 64 px.')}
+      <h2 class="wz-h">Colours <span class="t-xs faint">applied to the light appearance; dark mode keeps its own tuned palette</span></h2>
+      <div class="wz-grid2">
+        ${wColor('accent', 'Primary brand colour')}${wColor('background', 'Page background')}
+        ${wColor('surface', 'Cards and panels')}${wColor('border', 'Borders and dividers')}
+        ${wColor('text', 'Main text')}${wColor('textSecondary', 'Secondary text')}
+      </div>
+      <p class="t-xs faint">Text colours are checked against the background and cards (4.5:1) and the brand colour against cards (3:1); a combination that would be hard to read is refused.</p>
+      <h2 class="wz-h">Shape and type</h2>
+      <div class="wz-grid2">
+        ${wNumber('theme.buttonRadius', 'Button corner radius', 0, 24)}
+        ${wNumber('theme.cardRadius', 'Card corner radius', 0, 28)}
+        ${wSelect('theme.font', 'Typeface', opt.fonts.map((f) => [f, f]), { allowNull: true })}
+        ${wSelect('theme.density', 'Spacing', opt.densities.map((x) => [x, x[0].toUpperCase() + x.slice(1)]), { allowNull: true })}
+        ${wSelect('theme.appearance', 'Appearance for new visitors', [['system', 'Follow the device'], ['light', 'Light'], ['dark', 'Dark']], { allowNull: true })}
+      </div>`,
+    hero: () => `
+      <h2 class="wz-h">Landing hero <span class="t-xs faint">the first screen a signed-out visitor sees</span></h2>
+      ${wText('hero.eyebrow', 'Small line above the heading', { max: 60 })}
+      ${wText('hero.heading', 'Heading', { max: 90 })}
+      ${wText('hero.headingAccent', 'Highlighted end of the heading', { max: 60, hint: 'Shown in the brand colour after the heading.' })}
+      ${wText('hero.body', 'Description', { max: 280, area: true })}
+      ${wImage('hero.imageAsset', 'Background photograph', 'Optional. Faded behind the words so they stay readable; at least 1200 px wide.')}
+      <div class="wz-grid2">
+        ${wText('hero.primaryLabel', 'Main button label', { max: 40 })}
+        ${linkOptions('hero.primaryLink', 'Main button opens', { allowEmpty: false })}
+        ${wText('hero.secondaryLabel', 'Second button label', { max: 40, hint: 'Leave empty to hide the second button.' })}
+        ${linkOptions('hero.secondaryLink', 'Second button opens')}
+      </div>`,
+    home: () => `
+      <h2 class="wz-h">Homepage</h2>
+      ${wText('home.title', 'Home page heading', { max: 90 })}
+      <h2 class="wz-h">Sections <span class="t-xs faint">drag to reorder, or use the arrows; switch a section off to hide it</span></h2>
+      <ol class="wz-sections" id="wz-sections">${c.home.sections.map((s, i) => `
+        <li class="wz-section" draggable="${canEdit()}" data-index="${i}">
+          <span class="wz-grip" aria-hidden="true">⋮⋮</span>
+          <span class="grow t-sm t-strong">${esc(SECTION_LABEL[s.key] || s.key)}</span>
+          <label class="wz-mini"><input type="checkbox" data-path="home.sections.${i}.visible" ${s.visible ? 'checked' : ''} ${ro()}> Shown</label>
+          <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="home.sections" data-i="${i}" data-d="-1" aria-label="Move ${esc(SECTION_LABEL[s.key])} up" ${i === 0 ? 'disabled' : ''} ${ro()}>↑</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="home.sections" data-i="${i}" data-d="1" aria-label="Move ${esc(SECTION_LABEL[s.key])} down" ${i === c.home.sections.length - 1 ? 'disabled' : ''} ${ro()}>↓</button>
+        </li>`).join('')}</ol>
+      <p class="t-xs faint">Active orders and the "finish your profile" reminder always stay at the top: they are a student's own business, not promotion.</p>`,
+    featured: () => wzFeatured(),
+    banners: () => `
+      <h2 class="wz-h">Promotional banners <span class="t-xs faint">up to ${opt.limits.banners}, shown in the "Promotional banners" home section</span></h2>
+      ${c.banners.map((b, i) => `
+        <fieldset class="wz-card">
+          <legend class="t-label">Banner ${i + 1}</legend>
+          <div class="wz-grid2">
+            ${wText(`banners.${i}.title`, 'Title', { max: 60 })}
+            ${wText(`banners.${i}.linkLabel`, 'Button label', { max: 30 })}
+          </div>
+          ${wText(`banners.${i}.body`, 'Text', { max: 140, area: true })}
+          ${linkOptions(`banners.${i}.link`, 'Button opens')}
+          ${wImage(`banners.${i}.imageAsset`, 'Image', 'Optional, square works best.')}
+          <div class="wz-grid2">
+            <label class="field"><span class="t-label">Show from</span><input class="input" type="datetime-local" data-path="banners.${i}.startsAt" data-date="1" data-null="1" value="${esc(toLocalInput(b.startsAt))}" ${ro()}></label>
+            <label class="field"><span class="t-label">Show until</span><input class="input" type="datetime-local" data-path="banners.${i}.endsAt" data-date="1" data-null="1" value="${esc(toLocalInput(b.endsAt))}" ${ro()}></label>
+          </div>
+          <div class="row g2" style="flex-wrap:wrap">
+            ${wBool(`banners.${i}.active`, 'Switched on')}
+            <span class="grow"></span>
+            <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="banners" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''} ${ro()}>↑</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="banners" data-i="${i}" data-d="1" ${i === c.banners.length - 1 ? 'disabled' : ''} ${ro()}>↓</button>
+            <button type="button" class="btn btn-ghost btn-sm danger-text" data-act="wzRemove" data-list="banners" data-i="${i}" ${ro()}>Remove banner</button>
+          </div>
+        </fieldset>`).join('') || '<p class="t-sm muted">No banners yet.</p>'}
+      <button type="button" class="btn btn-secondary btn-sm" data-act="wzAddBanner" ${c.banners.length >= opt.limits.banners ? 'disabled' : ''} ${ro()}>Add a banner</button>`,
+    announcement: () => `
+      <h2 class="wz-h">Announcement bar <span class="t-xs faint">a single line under the header on every page</span></h2>
+      ${wBool('announcement.enabled', 'Show the announcement bar')}
+      ${wText('announcement.text', 'Message', { max: 160 })}
+      ${wSelect('announcement.tone', 'Style', [['info', 'Information'], ['promo', 'Promotion'], ['alert', 'Important notice']])}
+      <div class="wz-grid2">${wText('announcement.linkLabel', 'Link label', { max: 30 })}${linkOptions('announcement.link', 'Link opens')}</div>`,
+    footer: () => `
+      <h2 class="wz-h">Footer</h2>
+      ${wText('footer.text', 'Footer line', { max: 200 })}
+      <h2 class="wz-h">Footer links <span class="t-xs faint">up to ${opt.limits.footerLinks}</span></h2>
+      ${c.footer.links.map((l, i) => `<div class="wz-card wz-grid2">
+          ${wText(`footer.links.${i}.label`, 'Label', { max: 30 })}
+          ${linkOptions(`footer.links.${i}.link`, 'Opens', { allowEmpty: false })}
+          <div class="row g2"><button type="button" class="btn btn-ghost btn-sm danger-text" data-act="wzRemove" data-list="footer.links" data-i="${i}" ${ro()}>Remove link</button></div>
+        </div>`).join('')}
+      <button type="button" class="btn btn-secondary btn-sm" data-act="wzAddLink" ${c.footer.links.length >= opt.limits.footerLinks ? 'disabled' : ''} ${ro()}>Add a link</button>
+      <h2 class="wz-h">Contact and support</h2>
+      <div class="wz-grid2">
+        ${wText('footer.contactEmail', 'Contact email', { max: 120 })}
+        ${wText('footer.contactPhone', 'Contact phone', { max: 20 })}
+      </div>
+      ${linkOptions('footer.supportLink', 'Help link')}`,
+    seo: () => `
+      <h2 class="wz-h">Title and description <span class="t-xs faint">what a browser tab and a search result show</span></h2>
+      ${wText('seo.title', 'Page title', { max: 70 })}
+      ${wText('seo.description', 'Description', { max: 300, area: true })}`,
+    features: () => `
+      <h2 class="wz-h">Show or hide</h2>
+      ${wBool('features.askEcho', 'Ask ECHO ECHO on the home page', 'The assistant itself stays available from the menu.')}
+      ${wBool('features.deliverPromo', '"Deliver with ECHO ECHO" invitations', 'On the landing page, the home page and in the footer.')}
+      ${wBool('features.pickupPromo', 'The self-pickup suggestion on the home page')}
+      ${wBool('features.browseFirst', 'The second button on the landing page')}
+      <p class="t-xs faint">These hide promotion only. Ordering, prices, opening hours and who may order are not website settings and cannot be changed here.</p>`,
+    history: () => '<div id="wz-history"><p class="t-sm muted">Loading versions…</p></div>',
+  };
+  box.innerHTML = (T[W.tab] || T.theme)();
+  wzProblems();
+  if (W.tab === 'history') wzHistory();
+  if (W.tab === 'featured') wzFeaturedLoad();
+  wzPreview();
+}
+
+const toLocalInput = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+function wzFeatured() {
+  const c = W.config.featured;
+  const opt = W.data.options.limits;
+  const vendors = W.vendors || [];
+  const items = W.items ? Object.values(W.items) : [];
+  const name = (id) => vendors.find((v) => v.id === id)?.name;
+  return `
+    <h2 class="wz-h">Featured</h2>
+    ${wText('featured.heading', 'Section heading', { max: 60 })}
+    <p class="t-xs faint">A featured café appears only while it is listed on the website, and a featured dish only while its café and the dish are active: featuring never makes anything orderable.</p>
+    <h2 class="wz-h">Cafés <span class="t-xs faint">${c.cafeIds.length}/${opt.featuredCafes}</span></h2>
+    ${W.vendors === null ? '<p class="t-sm muted">Loading cafés…</p>' : `<div class="wz-checklist">${vendors.map((v) => `
+      <label class="wz-mini"><input type="checkbox" data-feature="cafeIds" value="${v.id}" ${c.cafeIds.includes(v.id) ? 'checked' : ''}
+        ${!c.cafeIds.includes(v.id) && c.cafeIds.length >= opt.featuredCafes ? 'disabled' : ''} ${ro()}> ${esc(v.name)}</label>`).join('')}</div>`}
+    <h2 class="wz-h">Dishes <span class="t-xs faint">${c.itemIds.length}/${opt.featuredItems}</span></h2>
+    ${c.itemIds.length ? `<ol class="wz-picked">${c.itemIds.map((id, i) => {
+      const it = W.items?.[id];
+      return `<li>${it ? `${esc(it.name)} <span class="t-xs faint">${esc(it.vendorName)} · ${rupees(it.pricePaise)}</span>` : `<span class="t-xs faint">Dish ${esc(id.slice(0, 8))} (not found: archived?)</span>`}
+        <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="featured.itemIds" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''} ${ro()}>↑</button>
+        <button type="button" class="btn btn-ghost btn-sm danger-text" data-act="wzRemove" data-list="featured.itemIds" data-i="${i}" ${ro()}>Remove</button></li>`;
+    }).join('')}</ol>` : '<p class="t-sm muted">No dishes featured.</p>'}
+    ${W.items === null ? '<p class="t-sm muted">Loading menus…</p>' : `
+    <label class="field"><span class="t-label">Add a dish</span>
+      <select class="input" data-add-item ${c.itemIds.length >= opt.featuredItems ? 'disabled' : ''} ${ro()}>
+        <option value="">Choose a dish…</option>
+        ${vendors.map((v) => `<optgroup label="${esc(v.name)}">${items.filter((it) => it.vendorId === v.id && !c.itemIds.includes(it.id))
+          .map((it) => `<option value="${it.id}">${esc(it.name)} · ${rupees(it.pricePaise)}${it.available ? '' : ' (unavailable now)'}</option>`).join('')}</optgroup>`).join('')}
+      </select></label>`}
+    ${c.cafeIds.length ? `<p class="t-xs faint">Featured cafés: ${c.cafeIds.map((id) => esc(name(id) || id.slice(0, 8))).join(', ')}</p>` : ''}`;
+}
+
+/* Cafés and their menus, read once, to name featured dishes and to give the
+   preview the same dish details the public endpoint would. */
+async function wzFeaturedLoad(force = false) {
+  if (W.vendors && W.items && !force) return;
+  try {
+    const vs = (await quad.vendors()).vendors;
+    W.vendors = vs;
+    const menus = await Promise.all(vs.map((v) => quad.menu(v.id).catch(() => ({ items: [] }))));
+    W.items = {};
+    menus.forEach((m, i) => (m.items || []).filter((it) => it.active !== false).forEach((it) => {
+      W.items[it.id] = { id: it.id, vendorId: vs[i].id, vendorName: vs[i].name, name: it.name,
+        pricePaise: it.price_paise, veg: it.veg, available: it.available, photoAsset: it.photo_asset };
+    }));
+  } catch (e) {
+    W.vendors ||= []; W.items ||= {};
+    toast(explain(e), 'bad');
+  }
+  if (W.tab === 'featured') { document.getElementById('wz-form').innerHTML = wzFeatured(); wzProblems(); }
+  wzPreview();
+}
+
+async function wzHistory() {
+  const box = document.getElementById('wz-history');
+  try {
+    const { versions } = await quad.siteVersions();
+    box.innerHTML = `
+      <h2 class="wz-h">Published versions <span class="t-xs faint">every publish is kept; rolling back publishes a copy as a new version</span></h2>
+      ${versions.length ? table(['Version', 'Published', 'By', 'Note', ''], versions.map((v) => [
+        `<b>v${v.version}</b> ${v.live ? '<span class="badge badge-ok">live</span>' : ''}${v.kind === 'rollback' ? ` <span class="badge">rollback of v${v.rolledBackFrom}</span>` : ''}`,
+        when(v.publishedAt), esc(v.publishedBy || '—'), `<span class="t-xs">${esc(v.note || '')}</span>`,
+        `<div class="row g2"><button type="button" class="btn btn-ghost btn-sm" data-act="wzPreviewVersion" data-v="${v.version}">Preview</button>
+          ${!v.live && canPublish() ? `<button type="button" class="btn btn-ghost btn-sm" data-act="wzRollback" data-v="${v.version}">Roll back to this</button>` : ''}</div>`,
+      ])) : '<p class="t-sm muted">Nothing has been published yet. The website shows its built-in settings.</p>'}`;
+  } catch (e) { box.innerHTML = ErrorState(e); }
+}
+
+/* ---------- preview --------------------------------------------------------
+   The frame is the real website, told by URL that it is a preview. The draft
+   reaches it only by postMessage on this origin; it is never stored or sent
+   to the server by the frame. */
+let previewTimer = null;
+let previewOverride = null;   // a historical version being looked at
+function wzPreview(now = false) {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {
+    const f = document.getElementById('wz-frame');
+    if (!f?.contentWindow) return;
+    const cfg = previewOverride || W.config;
+    const items = (cfg.featured?.itemIds || []).map((id) => W.items?.[id]).filter(Boolean);
+    f.contentWindow.postMessage({ type: 'echo-site-preview', config: cfg, featuredItems: items,
+      version: W.data?.live?.version || 0 }, location.origin);
+  }, now ? 0 : 140);
+}
+const wzPreviewRoute = () => document.getElementById('wz-frame')?.contentWindow
+  ?.postMessage({ type: 'echo-site-route', route: W.previewRoute }, location.origin);
+
+let wzBound = false;
+function wzBindOnce() {
+  if (wzBound) return;
+  wzBound = true;
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin || e.data?.type !== 'echo-site-preview-ready') return;
+    wzPreview(true);
+    setTimeout(wzPreviewRoute, 60);
+  });
+  root.addEventListener('input', wzOnInput);
+  root.addEventListener('change', wzOnChange);
+  root.addEventListener('dragstart', (e) => { const li = e.target.closest?.('.wz-section'); if (li) { e.dataTransfer.setData('text/plain', li.dataset.index); li.classList.add('dragging'); } });
+  root.addEventListener('dragend', (e) => e.target.closest?.('.wz-section')?.classList.remove('dragging'));
+  root.addEventListener('dragover', (e) => { if (e.target.closest?.('.wz-section')) e.preventDefault(); });
+  root.addEventListener('drop', (e) => {
+    const li = e.target.closest?.('.wz-section');
+    if (!li || !canEdit()) return;
+    e.preventDefault();
+    const from = Number(e.dataTransfer.getData('text/plain'));
+    const to = Number(li.dataset.index);
+    if (Number.isInteger(from) && from !== to) {
+      const list = W.config.home.sections;
+      const [moved] = list.splice(from, 1);
+      list.splice(to, 0, moved);
+      wzChanged(true);
+    }
+  });
+  window.addEventListener('beforeunload', (e) => { if (S.route === 'website' && wDirty()) { e.preventDefault(); e.returnValue = ''; } });
+}
+
+function wzValue(i) {
+  if (i.type === 'checkbox') return i.checked;
+  const raw = i.value.trim();
+  if (i.dataset.null && raw === '') return null;
+  if (i.dataset.int) { const n = Number(raw); return Number.isInteger(n) ? n : raw; }
+  if (i.dataset.date) { const d = new Date(raw); return Number.isNaN(d.getTime()) ? raw : d.toISOString(); }
+  if (i.classList.contains('wz-hex')) return raw.toUpperCase();
+  return i.tagName === 'SELECT' && i.dataset.null && raw === '' ? null : i.value;
+}
+
+function wzOnInput(e) {
+  const i = e.target;
+  if (S.route !== 'website') return;
+  if (i.dataset.path) {
+    setPath(W.config, i.dataset.path, wzValue(i));
+    const cnt = document.querySelector(`[data-count-for="${i.dataset.path}"]`);
+    if (cnt) cnt.textContent = `${i.value.length}/${cnt.textContent.split('/')[1]}`;
+    if (i.classList.contains('wz-hex') && /^#[0-9A-Fa-f]{6}$/.test(i.value)) {
+      const sw = document.querySelector(`[data-color-for="${i.dataset.path}"]`);
+      if (sw) sw.value = i.value.toLowerCase();
+    }
+    wzChanged(false);
+  } else if (i.dataset.colorFor) {
+    const v = i.value.toUpperCase();
+    setPath(W.config, i.dataset.colorFor, v);
+    const hex = document.querySelector(`.wz-hex[data-path="${i.dataset.colorFor}"]`);
+    if (hex) hex.value = v;
+    wzChanged(false);
+  }
+}
+
+async function wzOnChange(e) {
+  const i = e.target;
+  if (S.route !== 'website') return;
+  if (i.matches('[data-wz-route]')) { W.previewRoute = i.value; wzPreviewRoute(); return; }
+  if (i.dataset.linkSelect) {
+    const path = i.dataset.linkSelect;
+    const text = i.parentElement.querySelector(`input[data-path="${path}"]`);
+    if (i.value === '__custom') { text.hidden = false; text.focus(); setPath(W.config, path, text.value.trim()); }
+    else { text.hidden = true; text.value = ''; setPath(W.config, path, i.value); }
+    return wzChanged(false);
+  }
+  if (i.dataset.feature) {
+    const list = W.config.featured[i.dataset.feature];
+    if (i.checked && !list.includes(i.value)) list.push(i.value);
+    if (!i.checked) list.splice(list.indexOf(i.value), 1);
+    return wzChanged(true);
+  }
+  if (i.matches('[data-add-item]') && i.value) {
+    W.config.featured.itemIds.push(i.value);
+    return wzChanged(true);
+  }
+  if (i.dataset.upload) return wzUpload(i);
+  if (i.dataset.path && (i.type === 'checkbox' || i.tagName === 'SELECT')) wzChanged(false);
+}
+
+/* After an edit: mark unsaved, refresh the preview, and redraw the form
+   only when its structure changed (a list grew, shrank or moved). */
+function wzChanged(repaint) {
+  W.problems = [];
+  previewOverride = null;
+  wzStatus();
+  wzProblems();
+  if (repaint) wzPaintForm(); else wzPreview();
+  refreshSiteChipDirty();
+}
+function refreshSiteChipDirty() {
+  const chip = document.querySelector('.cc-sitechip');
+  if (chip && wDirty()) chip.classList.add('is-draft');
+}
+
+/* Uploads go to the image store as `site_image` (website.customize on the
+   server); the bytes are checked there by their magic number, size and
+   dimensions. The checks here only save a pointless upload. */
+async function wzUpload(input) {
+  let file = input.files?.[0];
+  const path = input.dataset.upload;
+  input.value = '';
+  if (!file) return;
+  const allowed = W.limits?.allowedMime || ['image/jpeg', 'image/png', 'image/webp'];
+  if (!allowed.includes(file.type)) return toast('Choose a JPEG, PNG or WebP image.', 'bad');
+  if (W.limits?.maxBytes && file.size > W.limits.maxBytes) return toast(`That image is larger than ${Math.round(W.limits.maxBytes / 1048576)} MB.`, 'bad');
+  /* Frame it first, in the shape this slot needs. A logo keeps transparency
+     (PNG); photographs are re-encoded as JPEG without EXIF. */
+  const FRAME = {
+    'brand.logoAsset': { title: 'Frame the logo', aspects: ['free', 'wide', 'banner', 'square'], output: { maxSide: 800, type: 'image/png' } },
+    'brand.faviconAsset': { title: 'Frame the favicon', aspects: ['square'], output: { maxSide: 256, type: 'image/png' } },
+    'hero.imageAsset': { title: 'Frame the hero photograph', aspects: ['wide', 'card'], output: { maxSide: 2000, type: 'image/jpeg', quality: 0.86 } },
+  }[path] || { title: 'Frame the banner image', aspects: ['square', 'card', 'wide'], output: { maxSide: 1200, type: 'image/jpeg', quality: 0.88 } };
+  let framed;
+  try { framed = await cropImage(file, FRAME); } catch (e) { return toast(e.message, 'bad'); }
+  if (!framed) return;
+  file = framed;
+  const dims = await imageSize(file).catch(() => null);
+  if (!dims) return toast('That file could not be read as an image.', 'bad');
+  const minimum = path === 'brand.faviconAsset' ? [64, 64] : path === 'brand.logoAsset' ? [0, 120] : path === 'hero.imageAsset' ? [1200, 0] : [200, 200];
+  if (dims.width < minimum[0] || dims.height < minimum[1]) {
+    return toast(`Too small: ${dims.width} × ${dims.height} px. This needs at least ${minimum[0] || 'any'} wide and ${minimum[1] || 'any'} high.`, 'bad');
+  }
+  if (path === 'brand.faviconAsset' && Math.abs(dims.width - dims.height) > 2) return toast('A favicon must be square.', 'bad');
+  const bar = document.querySelector(`[data-progress-for="${path}"]`);
+  if (bar) { bar.hidden = false; bar.firstElementChild.style.width = '0%'; }
+  try {
+    const out = await uploadWithProgress(file, 'site_image', (p) => { if (bar) bar.firstElementChild.style.width = `${Math.round(p * 100)}%`; });
+    setPath(W.config, path, out.id);
+    toast('Image uploaded. Save the draft to keep it.');
+    wzChanged(true);
+  } catch (e) {
+    toast(explain(e), 'bad');
+  } finally { if (bar) bar.hidden = true; }
+}
+
+const imageSize = (file) => new Promise((ok, bad) => {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => { ok({ width: img.naturalWidth, height: img.naturalHeight }); URL.revokeObjectURL(url); };
+  img.onerror = () => { bad(new Error('unreadable')); URL.revokeObjectURL(url); };
+  img.src = url;
+});
+
+/* fetch() cannot report upload progress; XMLHttpRequest can. Same endpoint,
+   same cookie, same error shape as the API client. */
+function uploadWithProgress(file, kind, onProgress) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append('kind', kind);
+    fd.append('photo', file);
+    const x = new XMLHttpRequest();
+    x.open('POST', `${API_BASE}/assets/`);
+    x.withCredentials = true;
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    x.onload = () => {
+      let body = null;
+      try { body = JSON.parse(x.responseText); } catch { /* not JSON */ }
+      if (x.status >= 200 && x.status < 300 && body?.id) resolve(body);
+      else reject(new ApiError(x.status, body || { error: 'The upload failed' }));
+    };
+    x.onerror = () => reject(new Error('Cannot reach the ECHO ECHO server'));
+    x.send(fd);
+  });
+}
+
+/* ---------- save, publish, rollback ---------------------------------------- */
+async function wzSave(btn) {
+  if (!canEdit()) return null;
+  const out = await act(btn, async () => {
+    try {
+      return await quad.saveSiteDraft(W.config, W.revision);
+    } catch (e) {
+      if (e instanceof ApiError && e.problems) { W.problems = e.problems; wzProblems(); }
+      throw e;
+    }
+  });
+  if (!out) return null;
+  W.revision = out.revision;
+  W.config = structuredClone(out.config);
+  W.saved = JSON.stringify(out.config);
+  W.data.draft = { ...W.data.draft, revision: out.revision, updatedAt: out.updatedAt, updatedBy: session.me.user.name, config: out.config };
+  W.problems = [];
+  toast(`Draft saved (revision ${out.revision})`);
+  wzStatus(); wzProblems(); refreshTopbar({ force: true });
+  return out;
+}
+
+const GROUP_LABEL = { theme: 'Colours and type', brand: 'Logo and favicon', announcement: 'Announcement bar', hero: 'Landing hero',
+  home: 'Homepage sections', featured: 'Featured', banners: 'Banners', footer: 'Footer and contact', seo: 'Title and description', features: 'Show or hide' };
+function changedGroups(a, b) {
+  return Object.keys(GROUP_LABEL).filter((k) => JSON.stringify(a?.[k]) !== JSON.stringify(b?.[k])).map((k) => GROUP_LABEL[k]);
+}
+
+async function wzPublish(btn) {
+  if (!canPublish()) return;
+  if (wDirty()) {
+    const saved = await wzSave(btn);
+    if (!saved) return;
+  }
+  const check = await quad.validateSite(W.config).catch((e) => ({ ok: false, problems: [{ path: 'server', problem: explain(e) }] }));
+  if (!check.ok) { W.problems = check.problems; wzProblems(); return toast('The draft has problems; nothing was published.', 'bad'); }
+  const live = W.data.live?.config || W.data.defaults;
+  const groups = changedGroups(W.config, live);
+  modal('Publish the website?', `
+    <p class="t-sm">Visitors will see this draft (revision ${W.revision}) as version ${(W.data.live?.version || 0) + 1}.
+      Open pages pick it up within about half a minute, without reloading.</p>
+    <p class="t-sm"><b>Changed since the live version:</b> ${groups.length ? groups.map(esc).join(', ') : 'nothing; this publishes the same settings again'}.</p>
+    ${field('note', 'Note for the history (optional)')}
+    <p class="t-xs faint">You may be asked for your password and authenticator code. The previous version stays in the history and can be restored.</p>`,
+  async (d) => {
+    const t0 = performance.now();
+    const out = await quad.publishSite(W.revision, d.note || '');
+    toast(`Published version ${out.version}. Checking the public website…`);
+    measurePublic(out.version, t0);
+    return out;
+  });
+}
+
+/* How long until the PUBLIC endpoint, through the CDN, returns the new
+   version: the number reported to the owner is measured, not promised. */
+async function measurePublic(version, t0) {
+  for (let i = 0; i < 40; i++) {
+    try {
+      const r = await fetch(`${API_BASE}/site/version/?t=${Date.now()}`, { credentials: 'omit', cache: 'no-store' }).then((x) => x.json());
+      if (r.version >= version) {
+        toast(`Version ${version} is live on the public website (${((performance.now() - t0) / 1000).toFixed(1)} s after publishing). Open pages update within 30 s.`);
+        return;
+      }
+    } catch { /* keep trying */ }
+    await new Promise((res) => setTimeout(res, 1500));
+  }
+  toast(`Version ${version} is published; the public endpoint had not shown it after a minute. Check System Health.`, 'bad');
+}
+
+function wzRollback(t) {
+  const v = Number(t.dataset.v);
+  modal(`Roll back to version ${v}?`, `
+    <p class="t-sm">Version ${v}'s settings become the live website again, as a new version. Nothing is deleted, and your draft is left as it is.</p>
+    ${field('note', 'Reason (kept in the history)')}`,
+  (d) => quad.rollbackSite(v, d.note || '').then((out) => { toast(`Rolled back: version ${out.version} is live`); measurePublic(out.version, performance.now()); return out; }));
+}
+
+async function wzPreviewVersion(t) {
+  const v = Number(t.dataset.v);
+  try {
+    const r = await quad.siteVersionConfig(v);
+    previewOverride = r.config;
+    wzPreview(true);
+    toast(`Previewing version ${v}. Any edit returns the preview to your draft.`);
+  } catch (e) { toast(explain(e), 'bad'); }
+}
+
+const WZ_ACTIONS = {
+  wzTab: (t) => { W.tab = t.dataset.tab; previewOverride = null; document.querySelectorAll('.wz-tab').forEach((b) => b.toggleAttribute('aria-current', b === t)); return wzPaintForm(); },
+  wzWidth: (t) => {
+    W.previewWidth = t.dataset.w;
+    document.querySelector('.wz-frame-wrap')?.classList.toggle('mobile', W.previewWidth === 'mobile');
+    document.querySelector('.wz-frame-wrap')?.classList.toggle('desktop', W.previewWidth === 'desktop');
+    document.querySelectorAll('[data-act="wzWidth"]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.w === W.previewWidth)));
+  },
+  wzClear: (t) => { setPath(W.config, t.dataset.path, null); wzChanged(true); },
+  wzMove: (t) => {
+    const list = getPath(W.config, t.dataset.list);
+    const i = Number(t.dataset.i), j = i + Number(t.dataset.d);
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    wzChanged(true);
+  },
+  wzRemove: (t) => { getPath(W.config, t.dataset.list).splice(Number(t.dataset.i), 1); wzChanged(true); },
+  wzAddBanner: () => {
+    const n = W.config.banners.length + 1;
+    let id = `banner-${n}`;
+    while (W.config.banners.some((b) => b.id === id)) id = `banner-${Math.floor(Math.random() * 1e6)}`;
+    W.config.banners.push({ id, title: 'New banner', body: '', imageAsset: null, link: '', linkLabel: '', active: false, startsAt: null, endsAt: null });
+    wzChanged(true);
+  },
+  wzAddLink: () => { W.config.footer.links.push({ label: 'New link', link: '#/cafes' }); wzChanged(true); },
+  wzDiscard: () => {
+    if (!wDirty()) return toast('There are no unsaved changes.');
+    W.config = JSON.parse(W.saved); W.problems = []; previewOverride = null;
+    toast('Unsaved changes discarded'); wzStatus(); wzPaintForm();
+  },
+  wzReset: () => modal('Reset the draft to the live website?', `
+    <p class="t-sm">The shared draft is replaced with ${W.data.live ? `version ${W.data.live.version}, which is live now` : 'the built-in website settings'}.
+      Unpublished changes, including other administrators' saved ones, are discarded.</p>`,
+    async () => { const out = await quad.resetSiteDraft(W.revision); toast('The draft now matches the live website'); return out; }),
+  wzSave: (t) => wzSave(t),
+  wzPublish: (t) => wzPublish(t),
+  wzRollback: (t) => wzRollback(t),
+  wzPreviewVersion: (t) => wzPreviewVersion(t),
+};
+
+/* ========================================================================
+   LIVE DELIVERIES — what is being carried right now
+
+   The state of each delivery and how fresh its partner's position is. The
+   position itself (coordinates) is never drawn or shown here: the age is
+   what operations needs, and the location stays with the people who need
+   it. The tracking API applies its own rules: a position exists only while
+   an order is being carried and is deleted when the delivery ends.
+   ======================================================================== */
+const FRESH_S = 60, STALE_S = 300;
+function freshness(t) {
+  if (!t) return '<span class="badge">unknown</span>';
+  if (t.partnerVisibility === 'delivery_over') return '<span class="badge">delivery over</span>';
+  if (!t.partner) return '<span class="badge badge-warn">no position shared yet</span>';
+  const a = t.partner.ageSeconds;
+  if (a <= FRESH_S) return `<span class="badge badge-ok">updated ${a} s ago</span>`;
+  if (a <= STALE_S) return `<span class="badge badge-warn">stale · ${Math.round(a / 60)} min old</span>`;
+  return `<span class="badge badge-danger">not updating · ${Math.round(a / 60)} min</span>`;
+}
+
+async function scrDeliveries() {
+  setTitle('Live Deliveries', 'Deliveries in progress, who is carrying them and whether their position is updating. Positions are not shown here.');
+  head().innerHTML = '<button type="button" class="btn btn-secondary btn-sm" data-act="deliveriesRefresh">Refresh</button>';
+  await panel(view(), async () => {
+    const get = (state) => quad.adminOrders({ state, fulfilment: 'delivery', pageSize: 50 }).then((r) => r.orders);
+    const [waiting, assigned, onway] = await Promise.all([
+      Promise.all(['confirmed', 'preparing', 'ready'].map(get)).then((x) => x.flat()), get('assigned'), get('picked_up')]);
+    const carrying = [...assigned, ...onway];
+    const tracks = await Promise.all(carrying.map((o) => quad.tracking(o.id).catch(() => null)));
+    return { waiting, assigned, onway, track: Object.fromEntries(carrying.map((o, i) => [o.id, tracks[i]])) };
+  }, (d) => {
+    const stale = [...d.assigned, ...d.onway].filter((o) => {
+      const t = d.track[o.id];
+      return !t?.partner || t.partner.ageSeconds > FRESH_S;
+    }).length;
+    const rows = (list, carrying) => list.map((o) => [
+      `<b>${esc(o.code)}</b><div class="t-xs muted">${when(o.created_at)}</div>`,
+      esc(o.vendor_name), esc(o.customer_name || '—'),
+      carrying ? (o.partner_name ? esc(o.partner_name) : '<span class="t-xs faint">assigned (name needs partners.view)</span>')
+        : '<span class="t-xs faint">not assigned yet</span>',
+      `<span class="badge badge-ink">${esc(ORDER_LABEL[o.state] || o.state)}</span>`,
+      carrying ? freshness(d.track[o.id]) : '—',
+      `<span class="num">${rupees(o.total_paise)}</span>`,
+      `<button type="button" class="btn btn-ghost btn-sm" data-act="orderTimeline" data-id="${o.id}">Timeline</button>`,
+    ]);
+    const cols = ['Order', 'Café', 'Student', 'Partner', 'State', 'Position', 'Total', ''];
+    return `
+      <div class="grid-kpi">
+        ${statCard('route', 'On the way', d.onway.length, 'picked up, being carried')}
+        ${statCard('bike', 'Partner assigned', d.assigned.length, 'heading to the café')}
+        ${statCard('bag', 'Waiting for a partner', d.waiting.length, 'confirmed delivery orders')}
+        ${statCard('pulse', 'Position not fresh', stale, `older than ${FRESH_S} s, or not shared`, stale ? 'warn' : '')}
+      </div>
+      <section class="card card-pad cc-section">
+        <h2 class="cc-h">Being carried</h2>
+        ${d.assigned.length + d.onway.length ? table(cols, rows([...d.onway, ...d.assigned], true))
+          : EmptyState('Nothing is being carried right now.', 'Deliveries appear here when a partner accepts one.')}
+      </section>
+      <section class="card card-pad cc-section">
+        <h2 class="cc-h">Waiting for a partner</h2>
+        ${d.waiting.length ? table(cols, rows(d.waiting, false)) : EmptyState('No delivery is waiting.', '')}
+      </section>
+      <p class="t-xs faint">A partner's phone sends its position about every 20 seconds while the delivery screen is open; a locked phone or a backgrounded browser pauses it.
+        Fresh means under ${FRESH_S} s, stale up to ${STALE_S / 60} min; after that the customer's map stops drawing it.</p>`;
+  }, { label: 'Loading deliveries' });
+}
+
+/* ========================================================================
+   SESSIONS — who is signed in to Campus Control
+   ======================================================================== */
+async function scrSessions() {
+  setTitle('Sessions', 'Open administrator sessions. Signing someone out ends every session they have, at once.');
+  head().innerHTML = '';
+  await panel(view(), async () => {
+    const { administrators } = await quad.accessAdmins();
+    const details = await Promise.all(administrators.map((a) => quad.accessAdmin(a.id).catch(() => null)));
+    return administrators.map((a, i) => ({ a, sessions: details[i]?.sessions || [] }));
+  }, (list) => {
+    const total = list.reduce((n, x) => n + x.sessions.length, 0);
+    return `
+      <div class="grid-kpi">
+        ${statCard('device', 'Open sessions', total, 'across all administrators')}
+        ${statCard('users', 'Administrators', list.length, `${list.filter((x) => x.sessions.length).length} signed in now`)}
+      </div>
+      ${list.map(({ a, sessions }) => {
+        const self = a.id === session.me.user.id;
+        return `<section class="card card-pad cc-section">
+          <div class="between" style="flex-wrap:wrap;gap:8px">
+            <div><h2 class="cc-h" style="margin:0">${esc(a.name || a.email || 'Administrator')}${self ? ' <span class="badge">you</span>' : ''}</h2>
+              <span class="t-xs muted">${esc(a.email || '')} · ${a.isOwner ? 'Owner' : esc(a.status)}</span></div>
+            ${!a.isOwner && !self && session.can('sessions.revoke') && sessions.length
+              ? `<button class="btn btn-secondary btn-sm" data-act="revokeAdminSessions" data-id="${a.id}" data-name="${esc(a.name || a.email || '')}">Sign out everywhere</button>` : ''}
+          </div>
+          ${sessions.length ? table(['Signed in', 'Expires', 'Method', 'IP', 'Device'], sessions.map((s) => [
+            when(s.issued_at), new Date(s.expires_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }),
+            esc(s.auth_method === 'admin_totp' ? 'password + authenticator' : s.auth_method), esc(s.ip || '—'),
+            `<span class="t-xs">${esc(s.user_agent || '')}</span>`])) : '<p class="t-sm muted">No open sessions.</p>'}
+        </section>`; }).join('')}
+      <p class="t-xs faint">Session details only: no session token or its hash ever leaves the server.</p>`;
+  }, { label: 'Loading sessions' });
+}
+
+/* A figure card in the reference's style: a round tinted icon, a label and
+   the number. Values always come from the server. */
+const statCard = (ic, label, value, note = '', tone = '') => `
+  <div class="cc-stat${tone ? ` tone-${tone}` : ''}">
+    <span class="cc-stat-icon" aria-hidden="true">${icon(ic, 22)}</span>
+    <span class="cc-stat-text"><span class="cc-stat-label">${esc(label)}</span>
+      <span class="cc-stat-value">${esc(String(value))}</span>
+      ${note ? `<span class="cc-stat-note">${esc(note)}</span>` : ''}</span>
+  </div>`;
+
+Object.assign(ACTIONS, WZ_ACTIONS, {
+  collapseRail: () => {
+    const c = document.querySelector('.cc');
+    c.classList.toggle('cc-collapsed');
+    try { localStorage.setItem('cc-rail', c.classList.contains('cc-collapsed') ? 'collapsed' : 'open'); } catch { /* storage blocked */ }
+  },
+  profileMenu: (t) => {
+    const m = document.getElementById('profile-menu');
+    m.hidden = !m.hidden;
+    t.setAttribute('aria-expanded', String(!m.hidden));
+    if (!m.hidden) m.querySelector('button')?.focus();
+  },
+  deliveriesRefresh: () => scrDeliveries(),
+});
+
+/* Narrowing the permission list as the owner types. Only hides rows; the
+   checked state, and what is saved, is unaffected. */
+document.addEventListener('input', (e) => {
+  if (e.target.matches?.('[data-form="pfNewPw"] input[name="password"]')) { paintMeter(e.target.value); return; }
+  const box = e.target.closest?.('[data-perm-search]');
+  if (!box) return;
+  const want = box.value.trim().toLowerCase();
+  const form = box.closest('form');
+  form.querySelectorAll('[data-perm-row]').forEach((r) => { r.hidden = want && !r.dataset.permRow.includes(want); });
+  form.querySelectorAll('[data-perm-group]').forEach((g) => { g.hidden = ![...g.querySelectorAll('[data-perm-row]')].some((r) => !r.hidden); });
+});
+Object.assign(ACTIONS, ORDER_ACTIONS);
+
+/* ========================================================================
+   MY PROFILE — the signed-in administrator's own account
+
+   Everything here acts on the caller only (routes/admin-profile.js and
+   /auth/admin/credential/*). Changing the password or the authenticator
+   needs the current password and a current code; ending sessions needs a
+   recent confirmation. Nothing here can reach another person's account.
+   ======================================================================== */
+const P = { data: null, photo: null, replace: null };
+const EVENT_LABEL = {
+  'auth.admin.login': 'Signed in', 'auth.admin.login.password': 'Sign-in attempt', 'auth.admin.reauth': 'Confirmed it was you',
+  'auth.logout': 'Signed out', 'admin.password.set': 'Password changed', 'admin.password.reset.request': 'Password reset requested',
+  'admin.password.reset.verify': 'Password reset code accepted', 'admin.password.reset.complete': 'Password reset',
+  'admin.authenticator.begin': 'Authenticator set-up started', 'admin.authenticator.confirm': 'Authenticator confirmed',
+  'admin.authenticator.replace': 'Authenticator replaced', 'admin.session.revoke': 'Ended a session',
+  'admin.session.revoke_others': 'Ended all other sessions', 'admin.profile.update': 'Display name changed',
+  'admin.profile.photo': 'Profile photo changed',
+};
+
+/* The signed-in administrator, as every part of the shell shows them. */
+const myName = () => session.me.adminProfile?.displayName || session.me.user.name || session.me.user.studentEmail || 'Administrator';
+const photoBust = { v: 0 };
+function AvatarOf({ size = 38, cls = 'cc-avatar' } = {}) {
+  const n = myName();
+  const img = session.me.adminProfile?.hasPhoto
+    ? `<img src="${esc(quad.adminPhotoUrl(session.me.user.id))}?v=${photoBust.v}" alt="" data-fallback="hide">` : '';
+  return `<span class="${cls}" style="width:${size}px;height:${size}px">${esc(initialsOf(n))}${img}</span>`;
+}
+/* After a profile change: update the shell in place (no re-render). */
+function refreshIdentity() {
+  const n = myName();
+  document.querySelectorAll('[data-me-name]').forEach((x) => { x.textContent = n; });
+  document.querySelectorAll('[data-me-avatar]').forEach((x) => { x.innerHTML = AvatarOf({ size: Number(x.dataset.size) || 38 }); });
+}
+
+const pwField = (name, label, auto) => `
+  <label class="field"><span class="t-label">${esc(label)}</span>
+    <span class="pw-wrap"><input class="input" type="password" name="${name}" autocomplete="${auto}" required>
+      <button type="button" class="pw-toggle" data-act="pwToggle" aria-label="Show ${esc(label.toLowerCase())}" aria-pressed="false">Show</button></span></label>`;
+const codeField = (name = 'code', label = 'Code from your authenticator app') => `
+  <label class="field"><span class="t-label">${esc(label)}</span>
+    <input class="input code-input" name="${name}" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>`;
+
+async function scrProfile() {
+  setTitle('My Profile', 'Your own account and sign-in. Only you can change these.');
+  head().innerHTML = '';
+  P.photo = null; P.replace = null;
+  await panel(view(), () => quad.myAdminProfile(), (d) => {
+    P.data = d;
+    const p = d.profile, sec = d.security;
+    return `<div class="pf">
+      <section class="card pf-card pf-identity">
+        <div class="pf-photo" id="pf-photo">${photoBlock()}</div>
+        <div class="pf-who">
+          <h2 class="pf-name" data-me-name>${esc(p.displayName)}</h2>
+          <p class="pf-email">${esc(p.email || '—')} <span class="badge badge-ok">verified</span></p>
+          <p class="pf-meta">${p.roles.map((r) => `<span class="badge badge-ink">${esc(r)}</span>`).join(' ')}
+            <span class="badge ${p.adminStatus === 'active' ? 'badge-ok' : 'badge-warn'}">${esc(p.adminStatus)}</span></p>
+        </div>
+        <dl class="pf-facts">
+          <div><dt>Account created</dt><dd>${esc(fmtDate(p.memberSince))}</dd></div>
+          ${p.adminSince ? `<div><dt>Administrator since</dt><dd>${esc(fmtDate(p.adminSince))}</dd></div>` : ''}
+          <div><dt>Access</dt><dd>${p.isOwner ? 'Everything, including owner-only settings' : `${p.permissionsCount} permission${p.permissionsCount === 1 ? '' : 's'}, set by the owner`}</dd></div>
+          <div><dt>Name on the student account</dt><dd>${esc(p.accountName || '—')}</dd></div>
+        </dl>
+      </section>
+
+      <section class="card pf-card">
+        <h2 class="pf-h">Display name</h2>
+        <p class="pf-help">The name Campus Control shows for you. Your login email, your student account and your role stay as they are.</p>
+        <form class="pf-form" data-form="pfName" novalidate>
+          <label class="field"><span class="t-label">Display name</span>
+            <input class="input" name="displayName" maxlength="40" value="${esc(p.displayName)}" autocomplete="name" required></label>
+          <p class="pf-msg" role="status" id="pf-name-msg"></p>
+          <div class="pf-actions"><button type="reset" class="btn btn-ghost btn-sm">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-sm">Save name</button></div>
+        </form>
+      </section>
+
+      <section class="card pf-card">
+        <h2 class="pf-h">Password</h2>
+        <p class="pf-help">Last changed ${esc(sec.passwordUpdatedAt ? when(sec.passwordUpdatedAt) : 'never')}. Changing it signs you out everywhere else.</p>
+        <form class="pf-form" data-form="pfNewPw" novalidate>
+          ${pwField('currentPassword', 'Current password', 'current-password')}
+          ${pwField('password', 'New password', 'new-password')}
+          <div class="pw-meter" aria-hidden="true"><span id="pw-bar"></span></div>
+          <p class="pf-help" id="pw-label">At least 12 characters. A few unrelated words work well.</p>
+          ${pwField('again', 'Confirm new password', 'new-password')}
+          ${codeField()}
+          <p class="pf-msg" role="status" id="pf-pw-msg"></p>
+          <div class="pf-actions"><button type="reset" class="btn btn-ghost btn-sm">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-sm">Change password</button></div>
+        </form>
+      </section>
+
+      <section class="card pf-card">
+        <h2 class="pf-h">Two-step sign-in</h2>
+        <p class="pf-status"><span class="badge ${sec.authenticatorReady ? 'badge-ok' : 'badge-warn'}">${sec.authenticatorReady ? 'On' : 'Not confirmed'}</span>
+          ${sec.authenticatorReady ? `Authenticator app confirmed ${esc(when(sec.authenticatorConfirmedAt))}.` : 'Your authenticator has not been confirmed yet.'}
+          ${sec.replacementPending ? '<span class="badge badge-warn">replacement started</span>' : ''}</p>
+        <p class="pf-help">Every sign-in needs your password and a code from your authenticator app. It cannot be switched off.</p>
+        <div id="pf-replace">${replaceStep()}</div>
+      </section>
+
+      <section class="card pf-card pf-wide">
+        <div class="between"><h2 class="pf-h" style="margin:0">Active sessions</h2>
+          ${d.sessions.length > 1 ? '<button type="button" class="btn btn-secondary btn-sm" data-act="pfRevokeOthers">Sign out all other sessions</button>' : ''}</div>
+        ${table(['Signed in', 'Method', 'Device', 'IP', ''], d.sessions.map((s) => [
+          `${esc(when(s.issuedAt))}${s.current ? ' <span class="badge badge-ok">this session</span>' : ''}`,
+          esc(s.method), `<span class="t-xs">${esc(s.userAgent || '—')}</span>`, esc(s.ip || '—'),
+          s.current ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-act="pfRevoke" data-h="${esc(s.handle)}">End</button>`]))}
+      </section>
+
+      <section class="card pf-card pf-wide">
+        <h2 class="pf-h">Security activity</h2>
+        ${d.activity.length ? table(['When', 'Event', 'Result', 'IP'], d.activity.map((a) => [
+          esc(fmtDateTime(a.at)), esc(EVENT_LABEL[a.action] || a.action),
+          `<span class="badge ${a.outcome === 'ok' ? 'badge-ok' : 'badge-warn'}">${a.outcome === 'ok' ? 'done' : esc(a.outcome)}</span>`,
+          esc(a.ip || '—')])) : '<p class="pf-help">Nothing recorded yet.</p>'}
+      </section>
+    </div>`;
+  }, { label: 'Loading your profile' });
+}
+
+const fmtDate = (t) => (t ? new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—');
+const fmtDateTime = (t) => new Date(t).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+function photoBlock() {
+  if (P.photo) {
+    return `<span class="pf-avatar"><img src="${esc(P.photo.url)}" alt="Preview of your new photo"></span>
+      <div class="pf-photo-actions"><span class="pf-help">Preview: not saved yet.</span>
+        <button type="button" class="btn btn-primary btn-sm" data-act="pfPhotoSave">Save photo</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-act="pfPhotoCancel">Cancel</button></div>`;
+  }
+  return `<span class="pf-avatar" data-me-avatar data-size="96">${AvatarOf({ size: 96 })}</span>
+    <div class="pf-photo-actions">
+      <label class="btn btn-secondary btn-sm">${session.me.adminProfile?.hasPhoto ? 'Replace photo' : 'Upload photo'}
+        <input type="file" accept="image/jpeg,image/png,image/webp" data-pf-photo hidden></label>
+      ${session.me.adminProfile?.hasPhoto ? '<button type="button" class="btn btn-ghost btn-sm" data-act="pfPhotoRemove">Remove</button>' : ''}
+      <span class="pf-help">JPEG, PNG or WebP, at least 96 × 96 px, up to 8 MB. Seen by administrators only.</span></div>`;
+}
+
+/* Replacing the authenticator: confirm it is you, scan the new QR code,
+   confirm a code from the new entry. Until then the current one works. */
+function replaceStep() {
+  const r = P.replace;
+  if (!r) return '<button type="button" class="btn btn-secondary btn-sm" data-act="pfReplaceStart">Replace authenticator</button>';
+  if (r.step === 'confirm-me') {
+    return `<form class="pf-form" data-form="pfReplaceMe" novalidate>
+      <p class="pf-help">First confirm it is you, with your current password and a code from your <b>current</b> authenticator.</p>
+      ${pwField('password', 'Current password', 'current-password')}
+      ${codeField('code', 'Code from your current authenticator')}
+      <p class="pf-msg" role="status" id="pf-rep-msg">${esc(r.error || '')}</p>
+      <div class="pf-actions"><button type="button" class="btn btn-ghost btn-sm" data-act="pfReplaceCancel">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-sm">Continue</button></div></form>`;
+  }
+  return `<form class="pf-form" data-form="pfReplaceNew" novalidate>
+    <p class="pf-help">In Microsoft Authenticator choose <b>Add account → Other account</b> and scan this code.
+      Your current authenticator keeps working until you confirm the new one.</p>
+    <div class="enrol-qr">${r.qr || '<p class="pf-help">The QR code could not be drawn. Use the key below.</p>'}</div>
+    <details class="enrol-key"><summary>Can’t scan? Enter the key instead</summary>
+      <code class="enrol-secret">${esc(groupKey(r.secret))}</code></details>
+    ${codeField('code', 'Code from the NEW entry')}
+    <p class="pf-msg" role="status" id="pf-rep-msg">${esc(r.error || '')}</p>
+    <div class="pf-actions"><button type="button" class="btn btn-ghost btn-sm" data-act="pfReplaceCancel">Cancel</button>
+      <button type="submit" class="btn btn-primary btn-sm">Confirm new authenticator</button></div></form>`;
+}
+const paintReplace = () => { const b = document.getElementById('pf-replace'); if (b) b.innerHTML = replaceStep(); };
+const msg = (id, text, bad = false) => { const m = document.getElementById(id); if (m) { m.textContent = text; m.classList.toggle('bad', bad); } };
+
+async function pfSubmit(form) {
+  const kind = form.dataset.form;
+  const data = Object.fromEntries(new FormData(form));
+  const btn = form.querySelector('[type=submit]');
+  btn.disabled = true;
+  try {
+    if (kind === 'pfName') {
+      const out = await quad.saveMyAdminProfile(data.displayName);
+      session.me.adminProfile = { ...(session.me.adminProfile || {}), displayName: out.displayName };
+      form.displayName.value = out.displayName;
+      refreshIdentity();
+      msg('pf-name-msg', 'Saved.');
+    } else if (kind === 'pfNewPw') {
+      if (data.password !== data.again) throw new Error('The two new passwords are not the same.');
+      if (String(data.password).length < 12) throw new Error('The new password needs at least 12 characters.');
+      await quad.setAdminPassword({ password: data.password, currentPassword: data.currentPassword, code: String(data.code || '').replace(/\D/g, '') });
+      form.reset(); paintMeter('');
+      msg('pf-pw-msg', 'Password changed. Your other sessions were signed out.');
+    } else if (kind === 'pfReplaceMe') {
+      await quad.adminReauth(data.password, String(data.code || '').replace(/\D/g, ''));
+      const out = await quad.beginAuthenticator();
+      P.replace = { step: 'scan', secret: out.secret, qr: await qrSvg(out.uri) };
+      paintReplace();
+      return;
+    } else if (kind === 'pfReplaceNew') {
+      await quad.confirmAuthenticator(String(data.code || '').replace(/\D/g, ''));
+      P.replace = null;
+      toast('New authenticator confirmed. The old one no longer works, and your other sessions were signed out.');
+      return scrProfile();
+    }
+  } catch (e) {
+    const where = { pfName: 'pf-name-msg', pfNewPw: 'pf-pw-msg', pfReplaceMe: 'pf-rep-msg', pfReplaceNew: 'pf-rep-msg' }[kind];
+    msg(where, explain(e), true);
+  } finally {
+    if (document.body.contains(btn)) btn.disabled = false;
+  }
+}
+
+function paintMeter(pw) {
+  const s = passwordStrength(pw);
+  const bar = document.getElementById('pw-bar');
+  if (bar) { bar.style.width = `${s.score * 25}%`; bar.dataset.score = String(s.score); }
+  const l = document.getElementById('pw-label');
+  if (l) l.textContent = pw ? `${s.label}. At least 12 characters; not your email or a common phrase.` : 'At least 12 characters. A few unrelated words work well.';
+}
+
+async function pfPhotoChosen(input) {
+  const f = input.files?.[0];
+  input.value = '';
+  if (!f) return;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(f.type)) return toast('Choose a JPEG, PNG or WebP image.', 'bad');
+  if (f.size > 8 * 1048576) return toast('That photo is larger than 8 MB.', 'bad');
+  /* Frame it first: square, at least 96 px, re-encoded without EXIF. */
+  let framed;
+  try { framed = await cropImage(f, { title: 'Frame your photo', aspects: ['square'], minSide: 96, output: { maxSide: 640, type: 'image/jpeg', quality: 0.9 } }); }
+  catch (e) { return toast(e.message, 'bad'); }
+  if (!framed) return;
+  P.photo = { file: framed, url: URL.createObjectURL(framed) };
+  document.getElementById('pf-photo').innerHTML = photoBlock();
+}
+
+const PROFILE_ACTIONS = {
+  pwToggle: (t) => {
+    const i = t.parentElement.querySelector('input');
+    const show = i.type === 'password';
+    i.type = show ? 'text' : 'password';
+    t.textContent = show ? 'Hide' : 'Show';
+    t.setAttribute('aria-pressed', String(show));
+  },
+  pfPhotoCancel: () => { URL.revokeObjectURL(P.photo?.url); P.photo = null; document.getElementById('pf-photo').innerHTML = photoBlock(); },
+  pfPhotoSave: (t) => act(t, async () => {
+    await quad.uploadMyAdminPhoto(P.photo.file);
+    URL.revokeObjectURL(P.photo.url); P.photo = null;
+    session.me.adminProfile = { ...(session.me.adminProfile || {}), hasPhoto: true };
+    photoBust.v++;
+    document.getElementById('pf-photo').innerHTML = photoBlock();
+    refreshIdentity();
+  }, { ok: 'Photo saved' }),
+  pfPhotoRemove: (t) => {
+    if (!confirm('Remove your profile photo?')) return null;
+    return act(t, async () => {
+      await quad.removeMyAdminPhoto();
+      session.me.adminProfile = { ...(session.me.adminProfile || {}), hasPhoto: false };
+      document.getElementById('pf-photo').innerHTML = photoBlock();
+      refreshIdentity();
+    }, { ok: 'Photo removed' });
+  },
+  pfReplaceStart: () => { P.replace = { step: 'confirm-me' }; paintReplace(); document.querySelector('#pf-replace input')?.focus(); },
+  pfReplaceCancel: () => { P.replace = null; paintReplace(); },
+  pfRevoke: (t) => act(t, () => quad.revokeMySession(t.dataset.h), { ok: 'Session ended', after: scrProfile }),
+  pfRevokeOthers: (t) => {
+    if (!confirm('Sign out every other session? This one stays signed in.')) return null;
+    return act(t, () => quad.revokeMyOtherSessions(), { ok: 'Other sessions ended', after: scrProfile });
+  },
+};
+
+Object.assign(ACTIONS, PROFILE_ACTIONS);
+
+/* ========================================================================
+   NOTIFICATIONS — the bell
+
+   The signed-in administrator's own in-app notifications (/notifications is
+   scoped to the caller on the server). An unread count on the bell, a
+   pop-over with read and unread items, mark one or all as read, older pages
+   on demand, and a link to the related record when this administrator may
+   open it. The count refreshes once a minute while the tab is visible:
+   there is no push channel, so it is a polite poll, not a socket.
+   ======================================================================== */
+const NOTES = { items: [], unread: 0, more: false, loading: false };
+const NOTE_POLL_MS = 60_000;
+
+/* Where a notification leads, if anywhere this administrator may go. */
+function noteTarget(n) {
+  const d = n.data || {};
+  if (d.orderId && session.can('orders.view')) return { route: 'order', id: d.orderId };
+  if (/^support/.test(n.kind) && session.can('support.view')) return { route: 'support' };
+  if (/deposit|incident/.test(n.kind) && session.can('deposits.view', 'delivery.incidents')) return { route: 'trust' };
+  if (/payout/.test(n.kind) && session.can('finance.view')) return { route: 'finance' };
+  if (/verification|suspended/.test(n.kind) && session.can('students.view')) return { route: 'verification' };
+  return null;
+}
+
+function paintBellCount() {
+  const dot = document.getElementById('notif-dot');
+  if (!dot) return;
+  dot.hidden = !NOTES.unread;
+  dot.textContent = NOTES.unread > 99 ? '99+' : String(NOTES.unread || '');
+  document.querySelector('[data-act="notifications"]')?.setAttribute('aria-label',
+    NOTES.unread ? `Notifications, ${NOTES.unread} unread` : 'Notifications');
+}
+
+async function refreshUnread() {
+  try { NOTES.unread = (await quad.notifications('true', { limit: 1 })).unread || 0; paintBellCount(); }
+  catch { /* the bell keeps its last count; the next tick tries again */ }
+}
+setInterval(() => { if (document.visibilityState === 'visible' && document.querySelector('.cc-frame')) refreshUnread(); }, NOTE_POLL_MS);
+
+function notesHtml(error = '') {
+  return `<div class="cc-notifs-head"><b>Notifications</b>
+      ${NOTES.unread ? '<button type="button" class="btn btn-ghost btn-sm" data-act="notesReadAll">Mark all as read</button>' : ''}</div>
+    <div class="cc-notifs-list" role="list">
+      ${error ? `<p class="cc-notifs-empty" role="alert">${esc(error)} <button type="button" class="btn btn-ghost btn-sm" data-act="notesReload">Try again</button></p>`
+        : NOTES.loading && !NOTES.items.length ? '<p class="cc-notifs-empty">Loading…</p>'
+        : !NOTES.items.length ? '<p class="cc-notifs-empty">Nothing yet. Notices about your account and the orders you handle appear here.</p>'
+        : NOTES.items.map((n) => {
+          const to = noteTarget(n);
+          return `<div class="cc-notif${n.read_at ? '' : ' unread'}" role="listitem">
+            <button type="button" class="cc-notif-main" data-act="noteOpen" data-id="${esc(n.id)}" ${to ? '' : 'aria-disabled="true"'}>
+              <span class="cc-notif-title">${esc(n.title || 'Notice')}</span>
+              ${n.body ? `<span class="cc-notif-body">${esc(n.body)}</span>` : ''}
+              <span class="cc-notif-time">${esc(when(n.created_at))}${to ? ' · open' : ''}</span>
+            </button>
+            ${n.read_at ? '' : `<button type="button" class="cc-notif-read" data-act="noteRead" data-id="${esc(n.id)}" title="Mark as read" aria-label="Mark as read">●</button>`}
+          </div>`; }).join('')}
+      ${NOTES.more && !error ? '<button type="button" class="btn btn-ghost btn-sm cc-notifs-more" data-act="notesMore">Show older</button>' : ''}
+    </div>`;
+}
+const paintNotes = (error) => { const box = document.querySelector('.cc-notifs'); if (box) box.innerHTML = notesHtml(error); };
+
+async function loadNotes({ older = false } = {}) {
+  NOTES.loading = true; paintNotes();
+  try {
+    const before = older && NOTES.items.length ? NOTES.items[NOTES.items.length - 1].created_at : undefined;
+    const r = await quad.notifications(undefined, { limit: 15, before });
+    NOTES.items = older ? [...NOTES.items, ...r.notifications] : r.notifications;
+    NOTES.unread = r.unread || 0; NOTES.more = !!r.more;
+    NOTES.loading = false; paintNotes(); paintBellCount();
+  } catch (e) { NOTES.loading = false; paintNotes(explain(e)); }
+}
+
+const BELL_ACTIONS = {
+  notifications: (t) => {
+    const open = document.querySelector('.cc-notifs');
+    if (open) { open.remove(); t.setAttribute('aria-expanded', 'false'); return; }
+    const box = el('<div class="cc-menu cc-notifs" role="dialog" aria-label="Notifications"></div>');
+    t.closest('.cc-bell').append(box);
+    t.setAttribute('aria-expanded', 'true');
+    box.addEventListener('click', onClick);
+    loadNotes();
+  },
+  notesReload: () => loadNotes(),
+  notesMore: () => loadNotes({ older: true }),
+  noteRead: async (t) => {
+    try {
+      await quad.markRead(t.dataset.id);
+      const n = NOTES.items.find((x) => x.id === t.dataset.id);
+      if (n && !n.read_at) { n.read_at = new Date().toISOString(); NOTES.unread = Math.max(0, NOTES.unread - 1); }
+      paintNotes(); paintBellCount();
+    } catch (e) { toast(explain(e), 'bad'); }
+  },
+  notesReadAll: async () => {
+    try {
+      await quad.markAllRead();
+      NOTES.items.forEach((n) => { n.read_at ||= new Date().toISOString(); });
+      NOTES.unread = 0; paintNotes(); paintBellCount();
+    } catch (e) { toast(explain(e), 'bad'); }
+  },
+  noteOpen: async (t) => {
+    const n = NOTES.items.find((x) => x.id === t.dataset.id);
+    if (!n) return;
+    if (!n.read_at) await BELL_ACTIONS.noteRead({ dataset: { id: n.id } });
+    const to = noteTarget(n);
+    if (!to) return;
+    document.querySelector('.cc-notifs')?.remove();
+    if (to.route === 'order') S.orderId = to.id;
+    S.route = to.route; route();
+  },
+};
+
+Object.assign(ACTIONS, BELL_ACTIONS);
+
+/* Back after signing out must not show a signed-in page from the browser's
+   page cache: a restored page asks the server again. */
+if (typeof window.addEventListener === 'function') window.addEventListener('pageshow', (e) => { if (e.persisted) location.reload(); });
+Object.assign(ACTIONS, CAFE_ACTIONS);
+
+/* A photo that fails to load is removed, leaving the monogram under it. */
+document.addEventListener('error', onImageError, true);
+
+/* The dish's photo on the order page: the matched photograph by name (an
+   order line keeps the name it was sold under), else its initials. */
+function odDishThumb(i) {
+  const ph = dishImage({ name: i.name_snapshot, photo_asset: null }, quad.assetUrl);
+  return ph ? `<img class="od-thumb" src="${esc(ph.src)}" alt="" width="36" height="36" loading="lazy" decoding="async" data-fallback>`
+    : Avatar(i.name_snapshot, 36);
+}
+
+/* ========================================================================
+   TEAM CHAT — staff, delivery partners and cafés (packages/ui/team-chat.js)
+   ======================================================================== */
+function scrChat() {
+  setTitle('Team Chat', 'Message the ECHO ECHO team, delivery partners and cafés. Only the people in a conversation can read it.');
+  head().innerHTML = '';
+  const box = el('<div class="chat-root"></div>');
+  view().replaceChildren(box);
+  mountChat(box, { quad, staff: true, toast, explain, can: (p) => session.can(p) });
+}
