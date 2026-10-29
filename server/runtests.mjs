@@ -82,6 +82,7 @@ const FILES = [
   ['payments', 'test/payments-cashfree.test.mjs'],
   ['handover', 'test/handover.test.mjs'],
   ['trust', 'test/trust.test.mjs'],
+  ['trust', 'test/partner-policy-consent.test.mjs'],
   ['auth', 'test/passkeys.test.mjs'],
   ['auth', 'test/admin-access.test.mjs'],
   ['finance', 'test/finance.test.mjs'],

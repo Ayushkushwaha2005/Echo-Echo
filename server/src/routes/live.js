@@ -36,7 +36,10 @@ const AREAS = {
          || ':' || (SELECT md5(COALESCE(string_agg(c.id::text || c.state || COALESCE(c.decided_at::text, ''), '|' ORDER BY c.id), '')) FROM verification_case c)
          || ':' || (SELECT count(*) || ':' || COALESCE(max(COALESCE(revoked_at, granted_at)), now() - interval '100 years')::text FROM user_role) AS s`],
   partners: ['partner.read',
-    `SELECT md5(COALESCE(string_agg(p::text, '|' ORDER BY p.user_id), '')) AS s FROM partner_profile p`],
+    /* An applicant accepting the policy changes what Approve can do. */
+    `SELECT md5(COALESCE(string_agg(p::text, '|' ORDER BY p.user_id), '')) || ':'
+         || (SELECT count(*) || ':' || COALESCE(max(accepted_at)::text, '-') FROM partner_policy_consent) AS s
+       FROM partner_profile p`],
   site: ['site.read',
     `SELECT COALESCE((SELECT version FROM site_config_live WHERE id), 0) || ':' || COALESCE((SELECT revision FROM site_config_draft WHERE id), 0) AS s`],
 };
