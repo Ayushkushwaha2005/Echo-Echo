@@ -12,7 +12,7 @@
    API would refuse it anyway.
    ========================================================================== */
 import {
-  quad, session, gate, el, panel, toast, act, explain, rupees,
+  quad, session, gate, el, panel, claim, toast, act, explain, rupees,
   vendorVM, EmptyState, Loading, ErrorState, signOut, when, ORDER_LABEL,
 } from '../../packages/ui/runtime.js';
 import { esc, toggleTheme, restoreTheme, Mark, VegMark } from '../../packages/ui/kit.js';
@@ -139,7 +139,7 @@ function markNav() {
   root.querySelectorAll('.webnav-mobile [data-route]').forEach((b) =>
     b.setAttribute('aria-pressed', String(b.dataset.route === S.route)));
 }
-const route = () => { markNav(); return ({ orders: scrOrders, menu: scrMenu, outlet: scrOutlet,
+const route = () => { markNav(); claim(view()); return ({ orders: scrOrders, menu: scrMenu, outlet: scrOutlet,
                        finance: scrFinance, messages: scrMessages }[S.route] || scrOrders)(); };
 
 /* ========================================================================
@@ -654,5 +654,5 @@ function scrMessages() {
   head().innerHTML = '';
   const box = el('<div class="chat-root"></div>');
   view().replaceChildren(box);
-  mountChat(box, { quad, staff: false, toast, explain });
+  mountChat(box, { quad, staff: false, me: session.me?.user?.id, toast, explain });
 }
