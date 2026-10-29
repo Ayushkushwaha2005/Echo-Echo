@@ -124,7 +124,9 @@ async function call(method, path, body, opts = {}) {
           ? `This is a preview deployment (${here?.origin}). It can show live data but never change it. Make the change at ${where}.`
           : `This page is open at ${here?.origin}, which the server does not accept changes from. Make the change at ${where}.` });
     }
-    throw new ApiError(res.status, json || { error: hostError(res.status) });
+    /* On staff screens a non-JSON answer keeps its status as a code, so the
+       screen can say "not found (404)" rather than "cannot reach". */
+    throw new ApiError(res.status, json || { error: hostError(res.status), code: STAFF ? `http_${res.status}` : undefined });
   }
   return json;
 }
@@ -471,9 +473,10 @@ export const quad = {
 
   /* Team Chat: membership is checked on the server for every call. */
   chatPeople: (audience, q, role) => get('/chat/people' + qs({ audience, q: q || undefined, role })),
-  chatConversations: (audience) => get('/chat/conversations' + qs({ audience })),
+  /* Reads take { signal, timeoutMs } so a screen can cancel one it no longer needs. */
+  chatConversations: (audience, opts) => call('GET', '/chat/conversations' + qs({ audience }), null, opts),
   chatStart: (body) => post('/chat/conversations', body),
-  chatMessages: (id, o = {}) => get(`/chat/conversations/${encodeURIComponent(id)}/messages` + qs({ after: o.after, before: o.before, limit: o.limit })),
+  chatMessages: (id, o = {}, opts) => call('GET', `/chat/conversations/${encodeURIComponent(id)}/messages` + qs({ after: o.after, before: o.before, limit: o.limit }), null, opts),
   chatSend: (id, body) => post(`/chat/conversations/${encodeURIComponent(id)}/messages`, body),
   chatRead: (id) => post(`/chat/conversations/${encodeURIComponent(id)}/read`, {}),
   chatAddMembers: (id, userIds) => post(`/chat/conversations/${encodeURIComponent(id)}/members`, { userIds }),

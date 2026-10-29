@@ -47,6 +47,7 @@ const FILES = [
   ['unit', 'test/photo-tiles.test.mjs'],
   ['unit', 'test/image-crop.test.mjs'],
   ['unit', 'test/site-origins.test.mjs'],
+  ['unit', 'test/chat-loading.test.mjs'],
   ['integration', 'test/integration.test.mjs'],
   ['api', 'test/api.test.mjs'],
   ['api', 'test/menu.test.mjs'],

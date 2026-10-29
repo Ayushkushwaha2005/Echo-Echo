@@ -175,3 +175,32 @@ test('sending is rate-limited per person', async () => {
   const newer = (await cs.get(`/chat/conversations/${id}/messages?after=${page.at(-2).id}`)).body.messages;
   assert.deepEqual(newer.map((m) => m.body), ['still fine for me'], 'polling with after= returns only what is new');
 });
+
+test('signed out gets 401 everywhere; an empty list is an answer; a sent message is there after signing in again', async () => {
+  const anon = client(app);
+  for (const [m, u] of [['get', '/chat/conversations'], ['get', '/chat/unread'], ['get', '/chat/people?audience=staff'],
+                        ['get', '/chat/conversations/00000000-0000-0000-0000-000000000000/messages']]) {
+    assert.equal((await anon[m](u)).status, 401, `${u} signed out`);
+  }
+  assert.equal((await anon.post('/chat/conversations/00000000-0000-0000-0000-000000000000/messages', { body: 'x' })).status, 401);
+
+  const o = await ownerUser();
+  const p = await partner('Partner Fresh');
+  const co = await as(o);
+  const none = await co.get('/chat/conversations');
+  assert.equal(none.status, 200);
+  assert.deepEqual(none.body.conversations, [], 'nobody to talk to yet: an empty list, not an error');
+
+  const id = (await co.post('/chat/conversations', { audience: 'partners', memberIds: [p.id] })).body.id;
+  const sent = await co.post(`/chat/conversations/${id}/messages`, { body: 'Persisted message check', clientRef: 'persist-1' });
+  assert.equal(sent.status, 200);
+  /* A new session for the same person, as after a reload or a new sign-in. */
+  const again = await as(o);
+  const list = (await again.get('/chat/conversations')).body.conversations;
+  assert.equal(list[0].id, id);
+  assert.equal(list[0].lastMessage.body, 'Persisted message check');
+  const msgs = (await again.get(`/chat/conversations/${id}/messages`)).body.messages;
+  assert.deepEqual(msgs.map((m) => m.id), [sent.body.message.id]);
+  /* The partner, in their own session, reads it too. */
+  assert.equal((await (await as(p, 'code')).get(`/chat/conversations/${id}/messages`)).body.messages[0].body, 'Persisted message check');
+});

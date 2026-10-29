@@ -11,7 +11,7 @@
    grants it. The UI does not pretend otherwise.
    ========================================================================== */
 import {
-  quad, session, gate, el, panel, toast, act, explain, rupees, ratingLabel,
+  quad, session, gate, el, panel, claim, toast, act, explain, rupees, ratingLabel,
   vendorVM, EmptyState, NotConfigured, Loading, ErrorState, signOut, when, ORDER_LABEL, adminReauth, quietly,
 } from '../../packages/ui/runtime.js';
 import { esc, toggleTheme, restoreTheme, Mark } from '../../packages/ui/kit.js';
@@ -284,7 +284,7 @@ function markNav() {
   });
   document.querySelectorAll('.cc-menu').forEach((m) => { m.hidden = true; });
 }
-const route = () => { markNav(); refreshTopbar(); return (SCREENS[S.route] || scrOverview)(); };
+const route = () => { markNav(); refreshTopbar(); claim(view()); return (SCREENS[S.route] || scrOverview)(); };
 
 /* ========================================================================
    OVERVIEW — counts, and honest gaps
@@ -4219,8 +4219,11 @@ function liveBlocked() {
   return !!String(globalThis.getSelection?.() || '');
 }
 
+/* A reload held back because someone was busy belongs to the page it was
+   for (LIVE.pending holds that route): opening another page drops it, so
+   it never re-mounts a page that did not change (Team Chat, for one). */
 async function liveReload() {
-  if (liveBlocked()) { LIVE.pending = true; return; }
+  if (liveBlocked()) { LIVE.pending = S.route; return; }
   LIVE.pending = false;
   const y = window.scrollY;
   const panelBox = document.querySelector('.cc-panel');
@@ -4262,7 +4265,8 @@ async function liveTick() {
       const moved = before ? Object.keys(LIVE.stamps).filter((k) => before[k] !== LIVE.stamps[k]) : [];
       if (moved.includes('site')) refreshTopbar({ force: true });
       /* A page left while this was in flight is not reloaded on its behalf. */
-      if (S.route === routeAtStart && (LIVE.pending || moved.some((k) => (LIVE_AREAS[S.route] || []).includes(k)))) {
+      if (LIVE.pending && LIVE.pending !== S.route) LIVE.pending = false;
+      if (S.route === routeAtStart && (LIVE.pending === S.route || moved.some((k) => (LIVE_AREAS[S.route] || []).includes(k)))) {
         await liveReload();
       }
     } catch {
@@ -4375,5 +4379,5 @@ function scrChat() {
   head().innerHTML = '';
   const box = el('<div class="chat-root"></div>');
   view().replaceChildren(box);
-  mountChat(box, { quad, staff: true, toast, explain, can: (p) => session.can(p) });
+  mountChat(box, { quad, staff: true, me: session.me?.user?.id, toast, explain, can: (p) => session.can(p) });
 }
