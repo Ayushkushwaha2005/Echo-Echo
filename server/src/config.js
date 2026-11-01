@@ -450,7 +450,14 @@ export const ADMIN = {
     return v === '1' || v.toLowerCase() === 'true';
   },
   reauthMinutes: Number(env('ADMIN_REAUTH_MINUTES', 10)),
-  inviteTtlHours: Number(env('ADMIN_PASSKEY_INVITE_TTL_HOURS', 24)),
+  /* The passkey invite this older variable named is retired. The value now
+     bounds the invitation link, and 72 hours is the default. */
+  inviteTtlHours: Number(env('ADMIN_INVITE_TTL_HOURS', env('ADMIN_PASSKEY_INVITE_TTL_HOURS', 72))),
+  /* Where an invitation link opens. Unset: the first allowed web origin. */
+  get publicUrl() {
+    const raw = process.env.ADMIN_PUBLIC_URL || `${HTTP.origin.split(',')[0].trim()}/admin/`;
+    return raw.endsWith('/') ? raw : `${raw}/`;
+  },
 };
 
 /* ---------- administrator sign-in ----------------------------------------

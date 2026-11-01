@@ -56,7 +56,7 @@ export async function actorFromToken(token) {
     `SELECT s.token_hash, s.user_id, u.status, u.name, u.phone, u.student_status,
             s.auth_method, s.passkey_verified_at, s.issued_at,
             s.campus_presence_at, s.campus_presence_site_id, s.campus_presence_accuracy_m,
-            u.student_email, u.student_email_verified_at, u.contact_phone, u.campus_site_id,
+            u.student_email, u.student_email_verified_at, u.staff_email, u.contact_phone, u.campus_site_id,
             c.service_status AS campus_service_status, c.name AS campus_name,
             (SELECT method FROM verification_case v WHERE v.user_id = u.id AND v.state = 'approved'
               ORDER BY coalesce(v.decided_at, v.submitted_at) DESC LIMIT 1) AS verified_via
@@ -131,6 +131,8 @@ export async function actorFromToken(token) {
     campusId: s.campus_site_id,
     campusServiceStatus: s.campus_service_status || null,
     campusName: s.campus_name || null,
+    /* The address this person is an administrator under. */
+    adminEmail: s.staff_email || s.student_email || null,
     roles,
     withheldRoles,
     isOwner: isOwner && roles.includes('platform_owner'),

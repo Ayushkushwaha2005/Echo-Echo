@@ -102,6 +102,13 @@ export const session = {
  * shell full of 403s.
  */
 export async function gate(root, surface, render) {
+  /* An invitation link is handled before any session check: the person it is
+     for has no account yet. */
+  if (surface === 'admin' && location.hash.startsWith('#invite=')) {
+    const { mountAdminInvite, inviteTokenFrom } = await import('./admin-invite.js');
+    const token = inviteTokenFrom(location.hash);
+    if (token) return mountAdminInvite(root, { token, onDone: () => location.reload() });
+  }
   root.innerHTML = shellLoading();
   let me;
   try {

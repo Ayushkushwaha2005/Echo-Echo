@@ -86,6 +86,7 @@ const FILES = [
   ['trust', 'test/partner-policy-consent.test.mjs'],
   ['auth', 'test/passkeys.test.mjs'],
   ['auth', 'test/admin-access.test.mjs'],
+  ['auth', 'test/admin-invitation.test.mjs'],
   ['finance', 'test/finance.test.mjs'],
   ['settlement', 'test/settlement.test.mjs'],
   ['settlement', 'test/reconciliation.test.mjs'],

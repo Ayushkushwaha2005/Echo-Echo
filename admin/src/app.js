@@ -1002,6 +1002,13 @@ async function scrTrust() {
 /* ========================================================================
    ADMINISTRATORS — who can run ECHO ECHO, and with which passkeys
    ======================================================================== */
+/* Shown only when email could not be sent, and only this once. */
+function showInviteLink(name, out) {
+  modal(`Invitation link · ${name}`, `
+    <p class="t-sm muted">${esc(out.note)}</p><div class="enrolcode" style="word-break:break-all">${esc(out.inviteLink)}</div>
+    <p class="t-xs faint" style="margin-top:10px">Expires ${esc(new Date(out.expiresAt).toLocaleString('en-IN'))}. Shown only now.</p>`, DONE);
+}
+
 const ADMIN_BADGE = { active: 'badge-ok', invited: 'badge-warn', suspended: 'badge-bad', revoked: 'badge-bad' };
 
 async function scrAdmins() {
@@ -1016,7 +1023,7 @@ async function scrAdmins() {
       session.can('admins.view') ? quad.accessInvitations() : { invitations: [] }, quad.adminCredential()]);
     return { admins, invitations, me };
   }, (d) => {
-    const open = d.invitations.invitations.filter((i) => i.state === 'waiting');
+    const open = d.invitations.invitations.filter((i) => i.state === 'waiting' || i.state === 'expired');
     return `
     <section class="card card-pad">
       <h2 class="t-label">Administrators</h2>
@@ -1051,10 +1058,15 @@ async function scrAdmins() {
         The platform owner is set in server configuration and cannot be changed, suspended or removed here.</p>
     </section>
     ${open.length ? `<section class="card card-pad" style="margin-top:18px">
-      <h2 class="t-label">Invitations waiting for sign-in</h2>
-      ${table(['Name', 'Email', 'Permissions', 'Expires', ''], open.map((i) => [
-        esc(i.name), esc(i.email), String(i.permissions.length), when(i.expires_at),
-        session.isOwner ? `<button class="btn btn-ghost btn-sm" data-act="cancelInvitation" data-id="${i.id}">Cancel</button>` : '']))}
+      <h2 class="t-label">Open invitations</h2>
+      ${table(['Name', 'Email', 'Permissions', 'Progress', 'Expires', ''], open.map((i) => [
+        esc(i.name), esc(i.email), String(i.permissions.length),
+        i.state === 'expired' ? '<span class="badge badge-bad">Expired</span>'
+          : i.legacy ? '<span class="badge badge-warn">Old code: resend</span>'
+          : i.terms_accepted ? 'Accepted, finishing setup' : i.email_verified ? 'Email confirmed' : i.email_sent_at ? 'Link sent' : 'Link not delivered',
+        when(i.expires_at),
+        session.isOwner ? `<button class="btn btn-secondary btn-sm" data-act="resendInvitation" data-id="${i.id}" data-name="${esc(i.name)}">Resend</button>
+          <button class="btn btn-ghost btn-sm" data-act="cancelInvitation" data-id="${i.id}" data-name="${esc(i.name)}">Cancel</button>` : '']))}
     </section>` : ''}
     <section class="card card-pad" style="margin-top:18px">
       <h2 class="t-label">Your sign-in</h2>
@@ -1939,7 +1951,7 @@ function onFormSubmit(e) {
    and a blur that put it ON TOP of the dialog, blurring it and eating clicks. */
 /* An information-only dialog: one Done button, nothing to save. */
 const DONE = () => Promise.resolve(true);
-function modal(title, bodyHtml, onSubmit, sub = '', { drawer = false } = {}) {
+function modal(title, bodyHtml, onSubmit, sub = '', { drawer = false, submitLabel = 'Save' } = {}) {
   const m = el(`
     <div class="modalwrap${drawer ? ' drawerwrap' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="scrim-fixed" data-act="closeModal"></div>
       <form class="modal">
@@ -1948,7 +1960,7 @@ function modal(title, bodyHtml, onSubmit, sub = '', { drawer = false } = {}) {
         <div class="modal-body">${bodyHtml}</div>
         <div class="modal-foot">
           ${onSubmit === DONE ? '' : '<button type="button" class="btn btn-ghost" data-act="closeModal">Cancel</button>'}
-          <button type="submit" class="btn btn-primary">${onSubmit === DONE ? 'Done' : 'Save'}</button>
+          <button type="submit" class="btn btn-primary">${onSubmit === DONE ? 'Done' : esc(submitLabel)}</button>
         </div>
       </form></div>`);
   document.body.append(m);
@@ -2127,18 +2139,15 @@ const ACTIONS = {
     const catalog = await quad.accessCatalog();
     const want = t?.role || t?.dataset?.role || 'platform_admin';
     const m = modal('Invite an administrator', `
-      <div class="formrow">${field('name', 'Full name')}${field('email', 'University email', '', 'email')}</div>
+      <div class="formrow">${field('name', 'Full name')}${field('email', 'Work email', '', 'email')}</div>
       ${select('role', 'Role', [['platform_admin', 'Administrator'], ['support', 'Support']])}
-      <p class="t-xs faint">They sign in with this mailbox, enter the one-time code from the invitation email, then set a password and an authenticator app.
-        The code expires in ${catalog.inviteTtlHours} hours and works once.${catalog.emailDelivery ? '' : ' Email is not configured, so the code will be shown to you once instead.'}</p>
+      <p class="t-xs faint">They get a link by email, confirm the mailbox with a code, review these permissions and accept, then set a password and an authenticator app. They hold no access until every step is done.
+        The link expires in ${catalog.inviteTtlHours} hours and works once.${catalog.emailDelivery ? '' : ' Email is not configured, so the link will be shown to you once instead.'}</p>
       ${permissionPicker(catalog, [], { source: 'explicit' })}`,
     async (d, form) => {
       const out = await quad.inviteAdministrator({ name: d.name, email: d.email, role: d.role, permissions: pickedPermissions(form) });
-      if (out.inviteCode) {
-        setTimeout(() => modal(`Invitation code · ${out.administrator.name}`, `
-          <p class="t-sm muted">${esc(out.note)}</p><div class="enrolcode">${esc(out.inviteCode)}</div>
-          <p class="t-xs faint" style="margin-top:10px">Expires ${esc(new Date(out.expiresAt).toLocaleString('en-IN'))}. Shown only now.</p>`, DONE), 0);
-      } else toast('Invitation emailed');
+      if (out.inviteLink) setTimeout(() => showInviteLink(out.administrator.name, out), 0);
+      else toast('Invitation emailed');
       return out;
     }, '', { drawer: true });
     m.querySelector('select[name=role]').value = want;
@@ -2183,17 +2192,26 @@ ${added.length ? `Grant: ${added.join(', ')}
   revokeAdminSessions: (t) => modal(`Sign ${t.dataset.name} out everywhere`, field('reason', 'Reason'),
     (d) => quad.revokeAdminSessions(t.dataset.id, d.reason)),
   reissueAdminInvite: async (t) => {
-    const out = await act(t, () => quad.reissueAdminInvite(t.dataset.id));
+    const out = await act(t, () => quad.reissueAdminInvite(t.dataset.id), { after: scrAdmins });
     if (!out) return;
-    if (out.inviteCode) {
-      modal(`Invitation code · ${t.dataset.name}`, `<p class="t-sm muted">${esc(out.note)}</p><div class="enrolcode">${esc(out.inviteCode)}</div>`, DONE);
-    } else toast('A new invitation code was emailed');
+    if (out.inviteLink) showInviteLink(t.dataset.name, out);
+    else toast('A new invitation link was emailed');
   },
+  resendInvitation: (t) => modal(`Resend the invitation to ${t.dataset.name}?`,
+    '<p class="t-sm muted">They get a new link. The old link stops working now, and any setup they had started on it is discarded.</p>',
+    async () => {
+      const out = await quad.resendInvitation(t.dataset.id);
+      if (out.inviteLink) setTimeout(() => showInviteLink(t.dataset.name, out), 0);
+      else toast('A new invitation link was emailed');
+      return out;
+    }, '', { submitLabel: 'Resend' }),
   confirmLocation: (t) => modal(`Confirm ${t.dataset.name}`, `
     <p class="t-sm muted">This location came from a public map. Confirm it only after checking on the ground that it exists at the recorded position and that food can be handed over there.</p>
     ${textarea('confirmation', 'How you confirmed it', 'e.g. Visited 20 Sep; hand-over at the main entrance; position matches.')}`,
     (d) => quad.confirmLocation(t.dataset.id, d.confirmation)),
-  cancelInvitation: (t) => act(t, () => quad.cancelInvitation(t.dataset.id), { ok: 'Invitation cancelled', after: scrAdmins }),
+  cancelInvitation: (t) => modal(`Cancel the invitation to ${t.dataset.name}?`,
+    '<p class="t-sm muted">The link stops working now. You can invite them again later.</p>',
+    () => quad.cancelInvitation(t.dataset.id), '', { submitLabel: 'Cancel invitation' }),
   adminDetail: async (t) => {
     const d = await quad.accessAdmin(t.dataset.id);
     const a = d.administrator;

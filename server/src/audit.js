@@ -17,6 +17,19 @@ export async function audit(req, { action, resource, resourceId, outcome, detail
   }
 }
 
+/* The privileged form: written on the caller's transaction, so the action and
+   its record commit together. There is deliberately no catch. If this row
+   cannot be written the transaction aborts, and the action does not happen. */
+export async function auditTx(c, req, { action, resource, resourceId, outcome = 'ok', detail, actorId = null, actorRole = null }) {
+  const a = req?.actor;
+  await c.query(
+    `INSERT INTO audit_log (actor_id, actor_role, action, resource, resource_id, outcome, detail, ip)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [a?.id || actorId, a?.roles?.[0] || actorRole, action, resource || null,
+     resourceId ? String(resourceId) : null, outcome,
+     detail ? JSON.stringify(detail) : null, req?.ip || null]);
+}
+
 /* Wraps a handler so a thrown HttpError is logged as a denial and rethrown. */
 export function audited(action, resourceOf, fn) {
   return async (req, reply) => {

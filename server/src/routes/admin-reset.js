@@ -47,7 +47,7 @@ const SENT = {
    for "not an administrator" — the caller must not be able to tell. */
 async function administratorFor(email) {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return null;
-  const u = await one(`SELECT id, status FROM app_user WHERE student_email = $1`, [email]);
+  const u = await one(`SELECT id, status FROM app_user WHERE student_email = $1 OR staff_email = $1`, [email]);
   if (!u || u.status !== 'active') return null;
   const roles = await platformRolesOf(u.id, { allowInvited: false });
   return roles.length ? u : null;

@@ -35,6 +35,7 @@ import adminSignInRoutes from './routes/admin-signin.js';
 import adminResetRoutes from './routes/admin-reset.js';
 import trackingRoutes from './routes/tracking.js';
 import adminAccessRoutes from './routes/admin-access.js';
+import adminInvitationRoutes from './routes/admin-invitation.js';
 import geodataRoutes from './routes/geodata.js';
 import adminOpsRoutes from './routes/admin-ops.js';
 import siteRoutes from './routes/site.js';
@@ -188,6 +189,9 @@ export function build() {
       /* Password reset proves an institutional mailbox with an emailed
          code. It issues no session and never bypasses the authenticator. */
       /^\/auth\/admin\/password-reset\/(request|verify|complete)$/,
+      /* An invitation link proves nothing by itself; the routes behind it ask
+         for the mailbox code before they reveal or accept anything. */
+      /^\/auth\/invitation\/(open|email\/send|email\/verify|accept|password|authenticator\/begin|complete)$/,
       /* Redeeming an enrolment code is public in exactly the sense that
          verifying an email code is: it proves possession of a secret, and
          only then does a session exist. */
@@ -368,6 +372,7 @@ export function build() {
     await app.register(trustRoutes);
     await app.register(passkeyRoutes);
     await app.register(adminAccessRoutes);
+    await app.register(adminInvitationRoutes);
     await app.register(geodataRoutes);
     await app.register(adminOpsRoutes);
     await app.register(siteRoutes);
