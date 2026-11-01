@@ -2182,6 +2182,37 @@ function JoinApplication(me, cta = 'Apply to deliver') {
   </div>`;
 }
 
+/* A newer partner policy than the one accepted when applying. Campus admin
+   cannot approve the application until it is accepted, and only the
+   applicant can accept it, here. The server records the acceptance against
+   this account and the exact version shown, and refuses an older one. */
+const longDate = (t) => new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+function PolicyUpdate() {
+  const d = need('deposit', () => quad.deposit());
+  if (!d) return Loading('Checking the partner policy');
+  if (!d.ok) return Problem(d.e);
+  const { policy, earlierConsent: was } = d.v;
+  if (!policy || d.v.consentedToLivePolicy) return '';
+  return `<div class="card card-pad stack g3" id="policy-update">
+    <div class="between">${Label('Action needed')}<span class="badge badge-warn">Policy not accepted</span></div>
+    <div class="t-h3">Accept the updated partner policy</div>
+    <p class="t-sm muted">${was ? `You accepted version ${was.version} on ${esc(longDate(was.acceptedAt))}. ` : ''}Version ${policy.version} has been in force since ${esc(longDate(policy.effectiveFrom))}. Campus admin can approve your application only after you read and accept it.</p>
+    <div class="sunken stack g2" style="padding:var(--s-3);max-height:260px;overflow:auto">
+      <div class="between"><span class="t-sm t-strong">Security deposit</span>
+        <span class="money t-sm">${policy.amountPaise ? money(policy.amountPaise) : 'None required'}</span></div>
+      <div class="between"><span class="t-xs muted">Time to dispute a proposed deduction</span>
+        <span class="t-xs">${Math.round(policy.disputeWindowHours / 24)} days</span></div>
+      <p class="t-xs" style="color:var(--text-2);white-space:pre-line">${esc(policy.terms)}</p>
+    </div>
+    <label class="row g2 t-sm" style="align-items:flex-start;cursor:pointer">
+      <input type="checkbox" id="accept-update" data-policy="${esc(policy.id)}" style="margin-top:3px">
+      <span>I have read version ${policy.version} of the delivery partner policy and I accept it.</span>
+    </label>
+    ${S.policyError ? `<p class="t-xs" style="color:var(--danger)">${esc(S.policyError)}</p>` : ''}
+    <button class="btn btn-primary btn-block" data-act="acceptPolicyUpdate">Accept version ${policy.version}</button>
+  </div>`;
+}
+
 /* Shown while an application waits: what deposit is still owed, if any. */
 function DepositDue() {
   const d = need('deposit', () => quad.deposit());
@@ -2221,7 +2252,7 @@ function ScrJoin() {
       action: () => JoinApplication(me) },
     pending: { badge: ['badge-warn', 'Application under review'], title: 'Application submitted',
       body: 'An administrator is reviewing your application. You will see it here, and in your notifications, once it is decided. You are not a delivery partner yet.',
-      action: () => `${DepositDue()}<button class="btn btn-secondary btn-block" data-act="refreshJoin">Check status</button>` },
+      action: () => `${PolicyUpdate()}${DepositDue()}<button class="btn btn-secondary btn-block" data-act="refreshJoin">Check status</button>` },
     approved: { badge: ['badge-open', 'Approved partner'], title: 'You are a delivery partner',
       body: 'Go online from your dashboard to start receiving delivery offers.',
       action: () => `<button class="btn btn-primary btn-lg btn-block" data-act="go" data-route="partner">Open partner dashboard</button>` },
@@ -3249,9 +3280,28 @@ document.addEventListener('click', async (e) => {
         render();
       });
       break;
+    case 'acceptPolicyUpdate':
+      S.policyError = '';
+      await withBusy(t, async () => {
+        const box = document.getElementById('accept-update');
+        if (!box?.checked) {
+          S.policyError = 'Tick the box to confirm you have read and accept the updated policy.';
+          return render();
+        }
+        try {
+          const out = await quad.partnerAcceptPolicy(box.dataset.policy);
+          toast(out.message || 'Policy accepted');
+        } catch (e) {
+          /* Replaced again while this page was open: the newer one is shown. */
+          S.policyError = explain(e);
+        }
+        drop('deposit', 'policy', 'me');
+        render();
+      });
+      break;
     case 'refreshJoin':
-      S.joinError = '';
-      drop('me', 'notifs'); render();
+      S.joinError = ''; S.policyError = '';
+      drop('me', 'notifs', 'deposit'); render();
       quad.me().then((m) => { S.me = m; }).catch(() => {});
       break;
     case 'leavePartner':

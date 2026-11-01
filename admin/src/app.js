@@ -876,9 +876,14 @@ async function paintPartners(status) {
   await panel(view(), () => quad.partners(status), (d) => {
     if (!d.partners.length) return EmptyState('Nobody in this queue.', status === 'pending' ? 'No applications are waiting.' : '');
     return `
-      ${d.policy ? `<p class="t-sm muted" style="margin-bottom:12px">Current policy: security deposit
-        <b>${d.policy.amountPaise ? rupees(d.policy.amountPaise) : 'not required'}</b>.
-        Approval needs a photo that clearly shows the applicant, acceptance of this policy, and the deposit recorded.</p>` : ''}
+      ${d.policy ? `<div style="margin-bottom:12px">
+        <p class="t-sm muted">Current partner policy: <b>version ${d.policy.version}</b>, in force since
+          <b>${esc(fmtDate(d.policy.effectiveFrom))}</b> · security deposit
+          <b>${d.policy.amountPaise ? rupees(d.policy.amountPaise) : 'not required'}</b>.
+          Approval needs a verified student, a photo that clearly shows the applicant, their own acceptance of this version, and the deposit recorded.</p>
+        <details><summary class="t-xs">Read version ${d.policy.version}</summary>
+          <p class="t-xs" style="white-space:pre-line;max-width:80ch;margin-top:6px">${esc(d.policy.terms)}</p></details>
+      </div>` : ''}
       ${table(['Photo', 'Name', 'Student', 'Policy', 'Deposit', 'Rating', 'Payouts', 'Status', ''],
       d.partners.map((p) => [
         p.has_photo
@@ -888,9 +893,11 @@ async function paintPartners(status) {
           : '<span class="badge badge-danger">No photo</span>',
         `<b>${esc(p.name || '—')}</b><div class="t-xs faint">${esc(p.student_email || p.phone || '')}</div>`,
         `<span class="badge ${p.student_status === 'approved' ? 'badge-open' : 'badge-warn'}">${esc(p.student_status)}</span>`,
-        p.consented ? '<span class="badge badge-open">Accepted</span>'
+        (p.consented ? `<span class="badge badge-open">Accepted v${d.policy?.version ?? ''}</span>`
           : p.status === 'approved' ? '<span class="badge badge-closed" title="Approved under an earlier policy version">Earlier version</span>'
-          : '<span class="badge badge-warn">Not accepted</span>',
+          : '<span class="badge badge-warn">Not accepted</span>') +
+        (p.consent?.acceptedAt ? `<div class="t-xs faint">${esc(fmtDate(p.consent.acceptedAt))}</div>`
+          : p.consent?.earlier ? `<div class="t-xs faint">accepted v${p.consent.earlier.version} on ${esc(fmtDate(p.consent.earlier.acceptedAt))}</div>` : ''),
         `${rupees(p.deposit_paise)}${p.deposit_required_paise ? ` <span class="t-xs faint">of ${rupees(p.deposit_required_paise)}</span>` : ''}`,
         p.rating?.count ? `★ ${Number(p.rating.average).toFixed(1)} (${p.rating.count})` : '<span class="t-xs faint">No ratings</span>',
         p.payout_destination
@@ -904,8 +911,13 @@ async function paintPartners(status) {
         `<div class="row" style="gap:6px;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" data-act="recordDeposit" data-id="${p.user_id}" data-name="${esc(p.name || '')}">Record deposit</button>
           ${p.status === 'pending'
-            ? `<button class="btn btn-primary btn-sm" data-act="pDecide" data-id="${p.user_id}" data-d="approve">Approve</button>
-               <button class="btn btn-danger btn-sm" data-act="pDecide" data-id="${p.user_id}" data-d="reject">Reject</button>`
+            /* Approve is offered only when the server would accept it; otherwise
+               the reason and the next step, from the same check (approvalBlockers). */
+            ? `<button class="btn btn-primary btn-sm" data-act="pDecide" data-id="${p.user_id}" data-d="approve"
+                 ${p.approval_blockers?.length ? `disabled aria-describedby="pblock-${p.user_id}"` : ''}>Approve</button>
+               <button class="btn btn-danger btn-sm" data-act="pDecide" data-id="${p.user_id}" data-d="reject">Reject</button>
+               ${p.approval_blockers?.length ? `<div class="t-xs" id="pblock-${p.user_id}" role="note" style="flex-basis:100%;max-width:340px;color:var(--warn)">
+                 <b>Cannot approve yet.</b> ${p.approval_blockers.map((b) => `${esc(b.error)}. ${esc(b.detail)}`).join(' ')}</div>` : ''}`
             : p.status === 'approved'
             ? `<button class="btn btn-ghost btn-sm" data-act="pDecide" data-id="${p.user_id}" data-d="suspend">Suspend</button>`
             : ''}</div>`,

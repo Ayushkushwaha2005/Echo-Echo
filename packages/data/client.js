@@ -385,6 +385,8 @@ export const quad = {
   retryWithdrawal: (id) => post(`/partner/withdrawals/${id}/retry`),
   partnerPolicy: () => get('/partner/policy'),
   partnerApplyWithConsent: (acceptPolicyId) => post('/partner/apply', { acceptPolicyId }),
+  /* An applicant or partner accepting a newer version of the policy, as themselves. */
+  partnerAcceptPolicy: (acceptPolicyId) => post('/partner/policy/accept', { acceptPolicyId }),
   uploadPartnerPhoto: (file) => {
     const fd = new FormData();
     fd.append('photo', file);
