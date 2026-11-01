@@ -107,11 +107,17 @@ export async function gate(root, surface, render) {
   try {
     me = await quad.me();
   } catch (e) {
+    /* A server waking from sleep and no connection at all are different
+       problems; the development hint is shown only in a local build. */
+    const local = globalThis.QUAD_DEPLOY?.env === 'local';
     return root.replaceChildren(el(fatal(
-      e instanceof Offline ? 'Cannot reach the ECHO ECHO server'
-                           : 'Something went wrong signing you in',
+      e instanceof Offline && e.code === 'timeout' ? 'The ECHO ECHO server is taking too long to answer'
+        : e instanceof Offline ? 'Cannot reach the ECHO ECHO server'
+        : 'Something went wrong signing you in',
       e instanceof Offline
-        ? 'The API is not responding. If you are running locally, start it with `npm start` in server/.'
+        ? (local ? 'The API is not responding. Start it with `npm start` in server/.'
+          : e.code === 'timeout' ? 'It may be starting up after a quiet period. Reload in a moment.'
+          : 'Check your internet connection, then reload.')
         : e.message)));
   }
 
@@ -245,7 +251,7 @@ export const NotConfigured = (title, detail) => `
 
 export const ErrorState = (e, retryAct = '') => `
   <div class="empty">
-    <h3 class="t-h3">${esc(e instanceof Offline ? 'Cannot reach the server' : e.message)}</h3>
+    <h3 class="t-h3">${esc(e instanceof Offline ? (e.code === 'timeout' ? e.message : 'Cannot reach the server') : e.message)}</h3>
     ${e.detail ? `<p class="t-sm muted">${esc(e.detail)}</p>` : ''}
     ${retryAct ? `<button class="btn btn-secondary btn-sm" data-act="${retryAct}">Try again</button>` : ''}
   </div>`;
@@ -257,6 +263,16 @@ let QUIET = false;
 export async function quietly(start) {
   QUIET = true;
   try { const p = start(); QUIET = false; return await p; } finally { QUIET = false; }
+}
+/* A new page is about to be drawn into `node`: any panel still loading there
+   belongs to the page being left, and must not paint its late answer (or
+   its error) over the new one. Called by each surface's router. Without it,
+   opening Team Chat while a slow Overview was still loading ended with the
+   Overview's "Cannot reach the server" drawn over the chat - with a Try
+   again that retried the Overview. */
+export function claim(node) {
+  if (node) node.dataset.loadSeq = String((Number(node.dataset.loadSeq) || 0) + 1);
+  return node;
 }
 export async function panel(node, loader, view, { label, quiet = QUIET } = {}) {
   /* A background refresh keeps what is on screen until the new data arrives,
