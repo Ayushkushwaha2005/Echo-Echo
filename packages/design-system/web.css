@@ -942,3 +942,5 @@ textarea.input { resize: vertical; min-height: 72px; }
 .invite-facts dt { color: var(--muted, inherit); opacity: .75; }
 .invite-facts dd { margin: 0; word-break: break-word; }
 .invite-perms { margin: 2px 0 10px; padding-left: 18px; font-size: 13px; }
+
+.share-dot { flex: none; width: 10px; height: 10px; margin-top: 3px; border-radius: 50%; background: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, .25); }

@@ -7,11 +7,10 @@
 
    Campus Control asks every few seconds while it is open and visible, and
    reloads the page in front of the administrator only when that page's
-   stamp has moved. The stamps are computed from the records themselves
-   (fingerprints of the small tables, the order event log for orders), so a
-   change made anywhere - the student site, the counter, another
-   administrator, a webhook - is seen the same way. Nothing is copied into a
-   second table to make this work.
+   stamp has moved. Catalogue and partner stamps come from change_event, which
+   database triggers write in the same transaction as the change, so a change
+   made anywhere - the student site, the counter, another administrator, a
+   script - is seen the same way. Orders read their own event log.
 
    A stamp is only an opaque string: it says THAT something changed, never
    what. Each one is computed only for an administrator who may read that
@@ -23,10 +22,10 @@ import { unreadCount } from '../services/notify.js';
 
 /* Area -> [the capability that reads it, the SQL whose single value is its stamp]. */
 const AREAS = {
-  cafes: ['vendor.read',
-    `SELECT md5(COALESCE(string_agg(v::text, '|' ORDER BY v.id), '')) AS s FROM vendor v`],
-  menu: ['menu.read',
-    `SELECT md5(COALESCE(string_agg(m::text, '|' ORDER BY m.id), '')) AS s FROM menu_item m`],
+  /* The newest change_event for the area: one index lookup, where this used to
+     hash two whole tables on every poll of every open tab. */
+  cafes: ['vendor.read', `SELECT coalesce(max(id), 0)::text AS s FROM change_event WHERE area = 'cafes'`],
+  menu: ['menu.read', `SELECT coalesce(max(id), 0)::text AS s FROM change_event WHERE area = 'menu'`],
   /* Every order state change is an order_event row, so the newest event id
      plus the order count moves on any placement, payment or transition. */
   orders: ['order.read_all',
@@ -35,11 +34,11 @@ const AREAS = {
     `SELECT (SELECT count(*) || ':' || COALESCE(max(profile_updated_at), max(created_at))::text FROM app_user)
          || ':' || (SELECT md5(COALESCE(string_agg(c.id::text || c.state || COALESCE(c.decided_at::text, ''), '|' ORDER BY c.id), '')) FROM verification_case c)
          || ':' || (SELECT count(*) || ':' || COALESCE(max(COALESCE(revoked_at, granted_at)), now() - interval '100 years')::text FROM user_role) AS s`],
-  partners: ['partner.read',
-    /* An applicant accepting the policy changes what Approve can do. */
-    `SELECT md5(COALESCE(string_agg(p::text, '|' ORDER BY p.user_id), '')) || ':'
-         || (SELECT count(*) || ':' || COALESCE(max(accepted_at)::text, '-') FROM partner_policy_consent) AS s
-       FROM partner_profile p`],
+  partners: ['partner.read', `SELECT coalesce(max(id), 0)::text AS s FROM change_event WHERE area = 'partners'`],
+  support: ['support.read', `SELECT coalesce(max(id), 0)::text AS s FROM change_event WHERE area = 'support'`],
+  reviews: ['review.read', `SELECT coalesce(max(id), 0)::text AS s FROM change_event WHERE area = 'reviews'`],
+  incidents: ['incident.read', `SELECT coalesce(max(id), 0)::text AS s FROM change_event WHERE area = 'incidents'`],
+  locations: ['location.read', `SELECT coalesce(max(id), 0)::text AS s FROM change_event WHERE area = 'locations'`],
   site: ['site.read',
     `SELECT COALESCE((SELECT version FROM site_config_live WHERE id), 0) || ':' || COALESCE((SELECT revision FROM site_config_draft WHERE id), 0) AS s`],
 };

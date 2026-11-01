@@ -8,6 +8,7 @@
    verification and the landing surface is derived from it server-side, so
    "select Admin and get admin" is not expressible on any request here.
    ========================================================================== */
+import { stopSharing } from '../services/partner-location.js';
 import { issueSession, revokeSession, cookieOptions } from '../auth/session.js';
 import { landingSurface, SURFACE_ROLES, Forbidden, HttpError, verificationView, isPlatformRole } from '../auth/rbac.js';
 import { q, one, tx } from '../db/index.js';
@@ -160,6 +161,8 @@ export default async function authRoutes(app) {
   app.post('/auth/otp/verify', phoneGone);
 
   app.post('/auth/logout', async (req, reply) => {
+    /* Signing out ends any position sharing with it. */
+    if (req.actor?.id) await stopSharing(req.actor.id, 'sign_out').catch(() => {});
     await revokeSession(req.cookies?.[SESSION.cookieName]);
     reply.clearCookie(SESSION.cookieName, { path: '/' });
     await audit(req, { action: 'auth.logout', outcome: 'ok' });

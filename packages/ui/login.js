@@ -100,10 +100,15 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
             ? `<p class="auth-error">Administrator sign-in is not available on this server.</p>`
             : '<button class="auth-btn" type="submit">Continue</button>'}
           <button class="auth-link" type="button" data-act="forgot">Forgot password?</button>
+          <button class="auth-link" type="button" data-act="lost-authenticator">Lost your authenticator?</button>
         </form>
       </div>`);
 
     const [emailInput, pwInput] = node.querySelectorAll('input');
+    node.querySelector('[data-act=lost-authenticator]').addEventListener('click', async () => {
+      const { mountAdminRecover } = await import('./admin-recover.js');
+      mountAdminRecover(root, { onDone: () => location.reload() });
+    });
     node.querySelector('[data-act=forgot]').addEventListener('click', () => {
       email = emailInput.value.trim() || email;
       render('reset-email');

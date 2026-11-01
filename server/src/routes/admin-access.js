@@ -26,7 +26,8 @@
        creates a role, an active administrator or a credential.
    ========================================================================== */
 import { q, one, tx } from '../db/index.js';
-import { authorize, BadRequest, NotFound, Forbidden, Conflict } from '../auth/rbac.js';
+import { authorize, can, BadRequest, NotFound, Forbidden, Conflict } from '../auth/rbac.js';
+import { deviceName, sessionHandle } from '../services/device.js';
 import { assertRecentPasskey } from '../auth/passkey-policy.js';
 import { catalogue, validatePermissionList, PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } from '../auth/permissions.js';
 import { emailConfigured } from '../services/email.js';
@@ -127,10 +128,12 @@ export default async function adminAccessRoutes(app) {
       `SELECT id, label, created_at, last_used_at, backed_up, revoked_at FROM webauthn_credential
         WHERE user_id = $1 ORDER BY created_at DESC`, [row.id])).rows;
     /* Session metadata only - never a token or its hash. */
-    const sessions = (await q(
-      `SELECT issued_at, expires_at, auth_method, ip, left(coalesce(user_agent,''), 120) AS user_agent
+    const sessions = can(req.actor, 'session.read') ? (await q(
+      `SELECT token_hash, issued_at, expires_at, last_seen_at, auth_method, ip, left(coalesce(user_agent,''), 200) AS user_agent
          FROM session WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()
-        ORDER BY issued_at DESC LIMIT 20`, [row.id])).rows;
+        ORDER BY coalesce(last_seen_at, issued_at) DESC LIMIT 20`, [row.id])).rows.map(({ token_hash, ...s }) => ({
+      ...s, handle: sessionHandle(token_hash), device: deviceName(s.user_agent),
+    })) : [];
     const activity = (await q(
       `SELECT at, action, resource, resource_id, outcome FROM audit_log
         WHERE actor_id = $1 ORDER BY at DESC LIMIT 100`, [row.id])).rows;
@@ -394,6 +397,23 @@ export default async function adminAccessRoutes(app) {
                        detail: { reason, ...counts } });
     return { id: t.id, status: 'revoked', ...counts,
              note: 'Administrator roles, passkeys, recovery codes, pending invites and every session were revoked. Their student account is unaffected.' };
+  });
+
+  /* One session, by its opaque handle. The handle is derived from the token
+     hash and reveals neither. */
+  app.post('/admin/access/admins/:id/sessions/:handle/revoke', async (req) => {
+    authorize(req.actor, 'session.revoke');
+    assertRecentPasskey(req.actor, 'signing an administrator out');
+    const t = await loadTarget(req.params.id, req.actor);
+    const reason = requireReason(req.body);
+    await tx(async (c) => {
+      const open = (await c.query(`SELECT token_hash FROM session WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()`, [t.id])).rows;
+      const hit = open.find((s) => sessionHandle(s.token_hash) === req.params.handle);
+      if (!hit) throw NotFound('That session has already ended');
+      await c.query(`UPDATE session SET revoked_at = now() WHERE token_hash = $1`, [hit.token_hash]);
+      await auditTx(c, req, { action: 'admin.session.revoke_one', resource: 'admin_account', resourceId: t.id, detail: { reason } });
+    });
+    return { id: t.id, revoked: true };
   });
 
   app.post('/admin/access/admins/:id/sessions/revoke', async (req) => {

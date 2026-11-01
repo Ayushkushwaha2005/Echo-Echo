@@ -33,12 +33,14 @@ export const PERMISSIONS = {
   'menus.manage':       { group: 'Menu', label: 'Edit menus, prices, availability and photos', caps: ['menu.create', 'menu.update', 'menu.archive', 'menu.availability', 'menu.price', 'menu.photo'] },
 
   /* ---- orders ---- */
+  'reports.export':     { group: 'Orders', label: 'Download order reports as CSV', caps: ['report.export'], pii: true },
   'orders.view':        { group: 'Orders', label: 'View every order, its items, amounts and history', caps: ['order.read', 'order.read_all', 'order.inspect'], pii: true },
   'orders.manage':      { group: 'Orders', label: 'Move orders through their normal states', caps: ['order.transition'] },
   'orders.override':    { group: 'Payments', label: 'Refund an order, or cancel it as an administrator', caps: ['order.override', 'order.refund'] },
 
   /* ---- delivery ---- */
   'delivery.view':              { group: 'Delivery tracking', label: 'View live deliveries and delivery settings', caps: ['delivery.read_all'] },
+  'delivery.track':             { group: 'Delivery tracking', label: 'See exact positions of partners and delivery spots on the live map (every view is audited)', caps: ['delivery.track'], pii: true },
   'delivery.manage':            { group: 'Delivery tracking', label: 'Change delivery settings', caps: ['delivery.config'] },
   'delivery.assign':            { group: 'Delivery tracking', label: 'Assign or reassign a delivery partner', caps: ['delivery.assign'] },
   'delivery.incidents':         { group: 'Delivery tracking', label: 'View and investigate delivery incidents', caps: ['incident.read', 'incident.manage'] },
@@ -104,6 +106,7 @@ export const PERMISSIONS = {
   'admins.restore':          { group: 'Access management', label: 'Restore administrator access', caps: ['admin.restore'], ownerOnly: true },
 
   /* ---- security ---- */
+  'sessions.read':    { group: 'Sessions', label: 'See administrators\' open sessions and devices', caps: ['session.read'] },
   'sessions.revoke':  { group: 'Sessions', label: 'Sign another administrator out everywhere', caps: ['session.revoke'] },
   'passkeys.manage':  { group: 'Authentication & security', label: 'Remove another administrator\'s old passkeys', caps: ['passkey.manage'], ownerOnly: true },
   'security.manage':  { group: 'Authentication & security', label: 'Owner identity, owner recovery and security architecture', caps: ['security.manage'], ownerOnly: true },

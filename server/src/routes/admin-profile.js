@@ -24,6 +24,7 @@ import { q, one } from '../db/index.js';
 import { BadRequest, Forbidden, NotFound, isPlatformRole } from '../auth/rbac.js';
 import { assertPasskeySession, assertRecentPasskey } from '../auth/passkey-policy.js';
 import { revokeAllForUser } from '../auth/session.js';
+import { sessionHandle } from '../services/device.js';
 import { credentialStatus } from '../services/admin-auth.js';
 import { putImage, getImage, removeImage } from '../services/storage.js';
 import { audit } from '../audit.js';
@@ -40,7 +41,7 @@ function me(req) {
 
 /* A session's public handle: derived from its token hash, so it identifies
    the row without being anything a cookie could be made from. */
-const handleOf = (tokenHash) => createHash('sha256').update(`session-handle:${tokenHash}`).digest('hex').slice(0, 20);
+const handleOf = sessionHandle;
 
 /** Display name rules: what a person would write as their name. */
 export function checkDisplayName(v) {

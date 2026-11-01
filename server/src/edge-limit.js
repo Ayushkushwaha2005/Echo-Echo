@@ -43,17 +43,26 @@ function sweep(now) {
   for (const [k, w] of windows) if (w.resetAt <= now) windows.delete(k);
 }
 
+const parseWindow = (w) => {
+  const m = /^(\d+)\s*(second|minute|hour)/.exec(String(w || ''));
+  if (!m) return RATE_LIMITS.windowMinutes * 60_000;
+  return Number(m[1]) * { second: 1000, minute: 60_000, hour: 3_600_000 }[m[2]];
+};
+
 /** Test hook: forget every window. */
 export function resetEdgeLimits() { windows.clear(); }
 
-/* onRequest hook. Applies to a route that opts in with config.edgeLimit and
-   carries an ordinary per-IP rateLimit (a route keyed per account, such as
-   withdrawals, is not an IP limit and is left alone). */
+/* onRequest hook. Applies to every route that carries an ordinary per-IP
+   rateLimit, unless it opts out with edgeLimit: false. A route keyed per
+   account (withdrawals) is not an IP limit and is left alone, and neither is
+   the plugin's global limit: behind one proxy address the edge key could be
+   shared by a whole campus, so a global cap on it could lock out real students.
+   These per-route limits are looser by edgeMultiplier for the same reason. */
 export async function edgeLimitHook(req, reply) {
   const cfg = req.routeOptions?.config;
   const rl = cfg?.rateLimit;
-  if (!cfg?.edgeLimit || !rl || typeof rl !== 'object' || rl.keyGenerator) return;
-  const windowMs = typeof rl.timeWindow === 'number' ? rl.timeWindow : RATE_LIMITS.windowMinutes * 60_000;
+  if (cfg?.edgeLimit === false || !rl || typeof rl !== 'object' || rl.keyGenerator) return;
+  const windowMs = typeof rl.timeWindow === 'number' ? rl.timeWindow : parseWindow(rl.timeWindow);
   const cap = Math.max(1, Math.round(rl.max * RATE_LIMITS.edgeMultiplier));
   const now = Date.now();
   sweep(now);

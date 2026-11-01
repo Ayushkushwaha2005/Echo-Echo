@@ -75,19 +75,13 @@ console.log(`\nECHO ECHO live check — ${base}\n`);
   const c = json?.checks || {};
   res.status === 200 && json?.ready ? ok('/ready 200 — the service can actually serve')
                                     : bad(`/ready returned ${res.status} (ready=${json?.ready})`);
-  c.database?.ok ? ok(`database answers (${c.database.latencyMs} ms)`)
+  c.database?.ok ? ok('database answers')
                  : bad(`database: ${c.database?.error || 'unreachable'}`);
   c.migrations?.ok ? ok(`schema current — ${c.migrations.applied} migrations, none pending`)
                    : bad(`migrations pending: ${JSON.stringify(c.migrations?.pending)}`);
-  c.data?.ok ? ok(`no development seed rows in production (${c.data.developmentSeedRows})`)
-             : bad(`development seed rows present: ${c.data?.developmentSeedRows}`);
-  const p = c.providers || {};
-  const state = (x) => (x?.configured ? `configured (${x.provider ?? 'yes'})` : 'NOT configured');
-  console.log(`      storage:  ${state(p.storage)}${p.storage?.productionReady ? ', production-ready' : ''}`);
-  console.log(`      email:    ${state(p.email)}`);
-  console.log(`      payments: ${state(p.payments)}  (deferred on purpose)`);
-  p.storage?.productionReady ? ok('private S3 storage is live') : bad('storage is not production-ready');
-  p.email?.configured ? ok('email provider is live') : bad('no email provider — no student can sign in');
+  c.data?.ok ? ok('no development seed rows in production')
+             : bad('development seed rows present');
+  /* Provider detail is for administrators now: see System Health. */
 }
 
 /* ---- security headers -------------------------------------------------- */

@@ -10,6 +10,7 @@
    `platform_owner` cannot be granted here, for instance, because no API
    grants it. The UI does not pretend otherwise.
    ========================================================================== */
+import { followChanges } from '../../packages/data/live.js';
 import {
   quad, session, gate, el, panel, claim, toast, act, explain, rupees, ratingLabel,
   vendorVM, EmptyState, NotConfigured, Loading, ErrorState, signOut, when, ORDER_LABEL, adminReauth, quietly,
@@ -56,7 +57,7 @@ const NAV_GROUPS = [
   ]],
   ['Access & system', [
     ['profile', 'My Profile', 'user'], ['admins', 'Access Management', 'key'], ['sessions', 'Sessions', 'device'],
-    ['audit', 'Audit Logs', 'log'], ['reliability', 'System Health', 'pulse'], ['platform', 'Platform settings', 'cog'],
+    ['approvals', 'Approvals', 'shield'], ['audit', 'Audit Logs', 'log'], ['reliability', 'System Health', 'pulse'], ['platform', 'Platform settings', 'cog'],
   ]],
 ];
 const NAV = NAV_GROUPS.flatMap(([, items]) => items);
@@ -69,9 +70,9 @@ const NAV_PERM = {
   partners: ['partners.view'], trust: ['delivery.incidents', 'deposits.view'], reviews: ['reviews.view'],
   locations: ['locations.view', 'boundary.view', 'campuses.view'], support: ['support.view'],
   finance: ['finance.view'], admins: ['admins.view'], platform: ['platform.view'], audit: ['audit.view'],
-  payments: ['finance.view'], reports: ['orders.view', 'finance.view'], reliability: ['platform.view'],
+  payments: ['finance.view'], reports: ['reports.export', 'finance.view'], reliability: ['platform.view'],
   website: ['website.customize', 'website.publish'], deliveries: ['orders.view'],
-  sessions: ['admins.view'], order: ['orders.view'],
+  sessions: ['sessions.read'], order: ['orders.view'],
 };
 const allowed = (r) => !NAV_PERM[r] || session.can(...NAV_PERM[r]);
 const allowedNav = () => NAV.filter(([r]) => allowed(r));
@@ -203,6 +204,7 @@ function render() {
   refreshUnread();
   route();
   liveTick();
+  followStream();
 }
 
 const initialsOf = (n) => String(n).split(/[\s@.]+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || 'A';
@@ -271,7 +273,7 @@ const SCREENS = {
   platform: scrPlatform, audit: scrAudit,
   payments: scrPayments, reliability: scrReliability, reports: scrReports,
   website: scrWebsite, deliveries: scrDeliveries, sessions: scrSessions, order: scrOrderDetail, profile: scrProfile,
-  chat: scrChat,
+  chat: scrChat, approvals: scrApprovals,
 };
 
 /* The current page is marked with aria-current / aria-pressed, which is what
@@ -648,7 +650,7 @@ async function scrCafeterias() {
                 <button class="btn btn-ghost btn-sm" data-act="assignStaff" data-id="${v.id}">Add staff</button>` : ''}
               ${manage ? `<button class="btn btn-ghost btn-sm" data-act="toggleOpen" data-id="${v.id}" data-v="${v.open ? '0' : '1'}">${v.open ? 'Close' : 'Open'}</button>
               ${raw.is_open ? `<button class="btn btn-ghost btn-sm" data-act="toggleAccepting" data-id="${v.id}" data-v="${raw.accepting ? '0' : '1'}">${raw.accepting ? 'Pause new orders' : 'Resume new orders'}</button>` : ''}
-              <button class="btn btn-ghost btn-sm" data-act="archiveVendor" data-id="${v.id}" data-v="${raw.active ? '0' : '1'}">${raw.active ? 'Archive' : 'Restore'}</button>` : ''}
+              <button class="btn btn-ghost btn-sm" data-act="archiveVendor" data-id="${v.id}" data-name="${esc(v.name)}" data-v="${raw.active ? '0' : '1'}">${raw.active ? 'Archive' : 'Restore'}</button>` : ''}
             </div>
           </div>
         </article>`;
@@ -707,6 +709,7 @@ async function scrMenu() {
       ${vs.map((v) => `<option value="${v.id}" ${v.id === S.vendorId ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}
     </select>
     <button class="btn btn-secondary btn-sm" data-act="categories">Categories</button>
+    <button class="btn btn-secondary btn-sm" data-act="bulkPrices">Change several prices</button>
     <button class="btn btn-primary btn-sm" data-act="newItem">Add food</button>`;
   await paintMenu();
 }
@@ -728,6 +731,7 @@ async function paintMenu() {
         <div class="row" style="gap:8px">
           <span class="money">${rupees(i.price_paise)}</span>
           <button class="btn btn-secondary btn-sm" data-act="editItem" data-id="${i.id}">Edit</button>
+          <button class="btn btn-ghost btn-sm" data-act="itemHistory" data-id="${i.id}" data-name="${esc(i.name)}" title="Revision ${esc(i.revision)}">History</button>
           <button class="btn btn-ghost btn-sm" data-act="itemAvail" data-id="${i.id}" data-v="${i.available ? '0' : '1'}">
             ${i.available ? 'Mark out' : 'Mark in'}</button>
           <button class="btn btn-ghost btn-sm" data-act="itemArchive" data-id="${i.id}" data-v="${i.active ? '0' : '1'}">
@@ -2328,7 +2332,7 @@ ${added.length ? `Grant: ${added.join(', ')}
           ${nodes.map((n) => `<option value="${n.id}" ${n.id === v.campus_node_id ? 'selected' : ''}>
             ${esc(n.name)}${n.lat == null ? ' (no recorded position)' : ''}</option>`).join('')}
         </select></label>`,
-      (d) => quad.updateVendor(v.id, { ...d, opensAt: d.opensAt || null, closesAt: d.closesAt || null,
+      (d) => quad.updateVendor(v.id, { ...d, revision: v.revision, opensAt: d.opensAt || null, closesAt: d.closesAt || null,
         prepMinutes: +d.prepMinutes, campusNodeId: d.campusNodeId || null,
         deliveryEnabled: !!d.deliveryEnabled, contactPublic: !!d.contactPublic }));
   },
@@ -2339,8 +2343,17 @@ ${added.length ? `Grant: ${added.join(', ')}
   toggleAccepting: (t) => act(t, () => quad.updateVendor(t.dataset.id, { accepting: t.dataset.v === '1' }),
     { after: route }),
 
-  archiveVendor: (t) => act(t, () => quad.updateVendor(t.dataset.id, { active: t.dataset.v === '1' }),
-    { after: route }),
+  archiveVendor: (t) => {
+    /* Bringing a café back is not risky. Removing one from students is. */
+    if (t.dataset.v === '1') return act(t, () => quad.updateVendor(t.dataset.id, { active: true }), { after: route });
+    return modal(`Archive ${t.dataset.name || 'this café'}?`,
+      `<p class="t-sm muted">Students stop seeing it. Its orders and history are kept, and it can be restored.</p>${field('reason', 'Reason')}`,
+      async (d) => {
+        const out = await quad.updateVendor(t.dataset.id, { active: false, reason: d.reason });
+        toast(out.pendingApproval ? 'Sent to the owner for approval. Nothing has changed yet.' : 'Café archived');
+        return out;
+      }, '', { submitLabel: 'Archive café' });
+  },
 
   assignOwner: (t) => modal('Assign cafeteria owner', `
     ${field('name', 'Name')}${field('phone', 'Phone number', '', 'tel')}
@@ -2405,6 +2418,7 @@ ${added.length ? `Grant: ${added.join(', ')}
         if (file && !framed) throw new Error('The photo was not saved: framing was cancelled.');
         const photoAsset = framed ? (await quad.uploadPhoto(framed, 'food_photo')).id : undefined;
         return quad.updateItem(i.id, {
+          revision: i.revision,
           name: d.name, description: d.description, price: d.price,
           prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
           categoryId: d.categoryId || null,
@@ -2413,6 +2427,38 @@ ${added.length ? `Grant: ${added.join(', ')}
       });
   },
 
+  /* Two steps on purpose: the server checks every row and shows before and after,
+     and applying writes all of them or none. Nothing goes live from the first form. */
+  bulkPrices: async () => {
+    const { items } = await quad.menu(S.vendorId);
+    const live = items.filter((i) => i.active);
+    if (!live.length) return toast('This cafeteria has no items to change.', 'bad');
+    modal('Change several prices', `
+      <p class="t-sm muted">Change the prices you want. Nothing is saved yet: you will see every change and any problem first. New orders use a new price; existing orders keep theirs.</p>
+      <div class="stack" style="gap:6px;max-height:50vh;overflow:auto">${live.map((i) => `
+        <label class="between" style="gap:12px"><span class="t-sm">${esc(i.name)}</span>
+          <input class="input" style="max-width:110px" inputmode="decimal" name="p:${i.id}" value="${(i.price_paise / 100).toFixed(2)}" data-was="${(i.price_paise / 100).toFixed(2)}" data-rev="${esc(i.revision)}" aria-label="Price of ${esc(i.name)} in rupees"></label>`).join('')}</div>`,
+    async (_d, form) => {
+      const changes = [...form.querySelectorAll('input[name^="p:"]')].filter((x) => x.value.trim() !== x.dataset.was)
+        .map((x) => ({ id: x.name.slice(2), price: x.value.trim(), revision: +x.dataset.rev }));
+      if (!changes.length) throw new Error('No price was changed.');
+      const preview = await quad.menuBulkPreview(S.vendorId, changes);
+      setTimeout(() => modal(preview.ok ? `Apply ${changes.length} price change${changes.length === 1 ? '' : 's'}?` : 'Fix these first',
+        `${table(['Item', 'Now', 'New', ''], preview.rows.map((r) => [esc(r.before?.name || r.id), r.before ? rupees(r.before.price_paise) : '—',
+          r.after ? rupees(r.after.price_paise) : '—', r.problems.length ? `<span class="badge badge-danger">${esc(r.problems.join('; '))}</span>` : '<span class="badge badge-ok">OK</span>']))}
+         <p class="t-xs faint" style="margin-top:10px">${preview.ok ? 'All of these go live together, or none do.' : 'Nothing has been changed. Go back and correct these rows.'}</p>`,
+        preview.ok ? async () => { const out = await quad.menuBulkApply(S.vendorId, changes); toast(`${out.applied} prices updated`); return out; } : DONE,
+        '', { submitLabel: 'Apply all' }), 0);
+      return preview;
+    }, '', { submitLabel: 'Review changes' });
+  },
+  itemHistory: async (t) => {
+    const { versions } = await quad.catalogVersions('menu', t.dataset.id);
+    modal(`History · ${t.dataset.name}`, versions.length
+      ? table(['Revision', 'Saved', 'By', 'Price', 'Name'], versions.map((v) => [String(v.revision), when(v.at), esc(v.actor_name || 'System'),
+          v.snapshot.price_paise == null ? '—' : rupees(v.snapshot.price_paise), esc(v.snapshot.name || '')]))
+      : '<p class="t-sm muted">No edits have been saved since history began. Availability changes are not listed here.</p>', DONE);
+  },
   itemAvail: (t) => act(t, () => quad.updateItem(t.dataset.id, { available: t.dataset.v === '1' }),
     { after: paintMenu }),
   itemArchive: (t) => act(t, () => quad.updateItem(t.dataset.id, { active: t.dataset.v === '1' }),
@@ -3781,10 +3827,12 @@ const WZ_ACTIONS = {
    it. The tracking API applies its own rules: a position exists only while
    an order is being carried and is deleted when the delivery ends.
    ======================================================================== */
+const LINE = String.fromCharCode(10);
 const FRESH_S = 60, STALE_S = 300;
 function freshness(t) {
   if (!t) return '<span class="badge">unknown</span>';
   if (t.partnerVisibility === 'delivery_over') return '<span class="badge">delivery over</span>';
+  if (t.partnerVisibility === 'restricted') return '<span class="badge">needs delivery.track</span>';
   if (!t.partner) return '<span class="badge badge-warn">no position shared yet</span>';
   const a = t.partner.ageSeconds;
   if (a <= FRESH_S) return `<span class="badge badge-ok">updated ${a} s ago</span>`;
@@ -3793,7 +3841,7 @@ function freshness(t) {
 }
 
 async function scrDeliveries() {
-  setTitle('Live Deliveries', 'Deliveries in progress, who is carrying them and whether their position is updating. Positions are not shown here.');
+  setTitle('Live Deliveries', session.can('delivery.track') ? 'Deliveries in progress, who is carrying them and where. Each view of a position is recorded in the audit log.' : 'Deliveries in progress and who is carrying them. Exact positions need the delivery.track permission.');
   head().innerHTML = '<button type="button" class="btn btn-secondary btn-sm" data-act="deliveriesRefresh">Refresh</button>';
   await panel(view(), async () => {
     const get = (state) => quad.adminOrders({ state, fulfilment: 'delivery', pageSize: 50 }).then((r) => r.orders);
@@ -3805,8 +3853,9 @@ async function scrDeliveries() {
   }, (d) => {
     const stale = [...d.assigned, ...d.onway].filter((o) => {
       const t = d.track[o.id];
-      return !t?.partner || t.partner.ageSeconds > FRESH_S;
+      return t?.partnerVisibility !== 'restricted' && (!t?.partner || t.partner.ageSeconds > FRESH_S);
     }).length;
+    const mapped = session.can('delivery.track') ? [...d.onway, ...d.assigned] : [];
     const rows = (list, carrying) => list.map((o) => [
       `<b>${esc(o.code)}</b><div class="t-xs muted">${when(o.created_at)}</div>`,
       esc(o.vendor_name), esc(o.customer_name || '—'),
@@ -3815,7 +3864,7 @@ async function scrDeliveries() {
       `<span class="badge badge-ink">${esc(ORDER_LABEL[o.state] || o.state)}</span>`,
       carrying ? freshness(d.track[o.id]) : '—',
       `<span class="num">${rupees(o.total_paise)}</span>`,
-      `<button type="button" class="btn btn-ghost btn-sm" data-act="orderTimeline" data-id="${o.id}">Timeline</button>`,
+      `${mapped.includes(o) ? `<button type="button" class="btn btn-secondary btn-sm" data-act="trackOnMap" data-id="${o.id}">Map</button> ` : ''}<button type="button" class="btn btn-ghost btn-sm" data-act="orderTimeline" data-id="${o.id}">Timeline</button>`,
     ]);
     const cols = ['Order', 'Café', 'Student', 'Partner', 'State', 'Position', 'Total', ''];
     return `
@@ -3825,6 +3874,11 @@ async function scrDeliveries() {
         ${statCard('bag', 'Waiting for a partner', d.waiting.length, 'confirmed delivery orders')}
         ${statCard('pulse', 'Position not fresh', stale, `older than ${FRESH_S} s, or not shared`, stale ? 'warn' : '')}
       </div>
+      ${mapped.length ? `<section class="card card-pad cc-section">
+        <h2 class="cc-h">Live map</h2>
+        <div id="cc-track-map" class="cc-track-map" data-order="${esc(trackSelected(mapped))}" role="region" aria-label="Map of the selected delivery"></div>
+        <p class="t-xs faint" id="cc-track-note" aria-live="polite"></p>
+      </section>` : ''}
       <section class="card card-pad cc-section">
         <h2 class="cc-h">Being carried</h2>
         ${d.assigned.length + d.onway.length ? table(cols, rows([...d.onway, ...d.assigned], true))
@@ -3834,16 +3888,74 @@ async function scrDeliveries() {
         <h2 class="cc-h">Waiting for a partner</h2>
         ${d.waiting.length ? table(cols, rows(d.waiting, false)) : EmptyState('No delivery is waiting.', '')}
       </section>
-      <p class="t-xs faint">A partner's phone sends its position about every 20 seconds while the delivery screen is open; a locked phone or a backgrounded browser pauses it.
+      <p class="t-xs faint">A partner chooses to share per delivery, and their phone then sends a position when they move while the delivery screen is open; a locked phone or a backgrounded browser pauses it.
         Fresh means under ${FRESH_S} s, stale up to ${STALE_S / 60} min; after that the customer's map stops drawing it.</p>`;
   }, { label: 'Loading deliveries' });
+  paintTrackMap();
+}
+
+/* The delivery shown on the map: the one chosen, or the first being carried. */
+let trackChoice = null;
+const trackSelected = (list) => {
+  if (!list.some((o) => o.id === trackChoice)) trackChoice = list[0]?.id || null;
+  return trackChoice || '';
+};
+async function paintTrackMap() {
+  const el = document.getElementById('cc-track-map');
+  if (!el?.dataset.order) return;
+  const note = document.getElementById('cc-track-note');
+  try {
+    const [{ drawTrackingMap, partnerFreshness, partnerVisibilityNote, ageText }, t] = await Promise.all([
+      import('../../packages/ui/map.js'), quad.tracking(el.dataset.order)]);
+    await drawTrackingMap(el, t);
+    const f = partnerFreshness(t.partner);
+    if (note) {
+      note.textContent = t.partner
+        ? `${f.state === 'fresh' ? 'Live' : f.state === 'stale' ? 'Stale' : 'Not updating'}: last position ${f.age === null ? 'at an unknown time' : ageText(f.age)}, about ${t.partner.accuracyM == null ? 'unknown' : `${Math.round(t.partner.accuracyM)} m`} accuracy. The line is direct, not a route. No arrival time is shown because none has been calibrated.`
+        : partnerVisibilityNote(t.partnerVisibility, null) || 'No position yet.';
+    }
+  } catch (e) {
+    if (note) note.textContent = explain(e);
+  }
+}
+
+/* ========================================================================
+   APPROVALS — high-risk, non-payment actions
+   ======================================================================== */
+const APPROVAL_BADGE = { pending: 'badge-warn', executed: 'badge-ok', rejected: 'badge-bad', expired: '', failed: 'badge-bad' };
+async function scrApprovals() {
+  setTitle('Approvals', 'High-risk actions another administrator has asked for. Payment actions are not part of this queue.');
+  head().innerHTML = '';
+  await panel(view(), async () => {
+    const list = await quad.approvals();
+    const policies = list.canDecide ? await quad.approvalPolicies() : { policies: [] };
+    return { ...list, policies: policies.policies };
+  }, (d) => `
+    <section class="card card-pad cc-section">
+      <h2 class="cc-h">${d.canDecide ? 'Requests' : 'Your requests'}</h2>
+      ${d.requests.length ? table(['Action', 'Reason', 'Requested by', 'When', 'Status', ''], d.requests.map((r) => [
+        esc(r.summary), esc(r.reason), esc(r.requested_by_name || ''), when(r.requested_at),
+        `<span class="badge ${APPROVAL_BADGE[r.status] || ''}">${esc(r.status)}</span>${r.result?.message ? `<div class="t-xs muted">${esc(r.result.message)}</div>` : ''}`,
+        d.canDecide && r.status === 'pending' && r.requested_by !== session.me.user.id
+          ? `<button class="btn btn-primary btn-sm" data-act="decideApproval" data-id="${r.id}" data-v="approve" data-name="${esc(r.summary)}">Approve</button>
+             <button class="btn btn-ghost btn-sm" data-act="decideApproval" data-id="${r.id}" data-v="reject" data-name="${esc(r.summary)}">Reject</button>` : '',
+      ])) : EmptyState('Nothing is waiting.', 'Requests appear here when a policy below is on and another administrator asks for that action.')}
+    </section>
+    ${d.canDecide ? `<section class="card card-pad cc-section">
+      <h2 class="cc-h">Which actions need approval</h2>
+      ${table(['Action', 'Status', 'Expires after', ''], d.policies.map((p) => [
+        esc(p.label), p.enabled ? '<span class="badge badge-ok">Needs approval</span>' : '<span class="badge">Runs directly</span>', `${p.expiry_hours} h`,
+        `<button class="btn btn-secondary btn-sm" data-act="toggleApprovalPolicy" data-type="${esc(p.action_type)}" data-v="${p.enabled ? '0' : '1'}" data-hours="${p.expiry_hours}">${p.enabled ? 'Turn off' : 'Turn on'}</button>`,
+      ]))}
+      <p class="t-xs faint" style="margin-top:10px">Your own actions run directly after you confirm it is you, and are audited. Independent approval of your actions would need a second owner-grade person, which does not exist today.</p>
+    </section>` : ''}`, { label: 'Loading approvals' });
 }
 
 /* ========================================================================
    SESSIONS — who is signed in to Campus Control
    ======================================================================== */
 async function scrSessions() {
-  setTitle('Sessions', 'Open administrator sessions. Signing someone out ends every session they have, at once.');
+  setTitle('Sessions', 'Open administrator sessions. End one, or sign someone out of all of them. An ended session stops working on its next request.');
   head().innerHTML = '';
   await panel(view(), async () => {
     const { administrators } = await quad.accessAdmins();
@@ -3865,10 +3977,13 @@ async function scrSessions() {
             ${!a.isOwner && !self && session.can('sessions.revoke') && sessions.length
               ? `<button class="btn btn-secondary btn-sm" data-act="revokeAdminSessions" data-id="${a.id}" data-name="${esc(a.name || a.email || '')}">Sign out everywhere</button>` : ''}
           </div>
-          ${sessions.length ? table(['Signed in', 'Expires', 'Method', 'IP', 'Device'], sessions.map((s) => [
-            when(s.issued_at), new Date(s.expires_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }),
+          ${sessions.length ? table(['Last active', 'Signed in', 'Expires', 'Method', 'IP', 'Device', ''], sessions.map((s) => [
+            s.last_seen_at ? when(s.last_seen_at) : '—', when(s.issued_at), new Date(s.expires_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }),
             esc(s.auth_method === 'admin_totp' ? 'password + authenticator' : s.auth_method), esc(s.ip || '—'),
-            `<span class="t-xs">${esc(s.user_agent || '')}</span>`])) : '<p class="t-sm muted">No open sessions.</p>'}
+            `<span class="t-xs" title="${esc(s.user_agent || '')}">${esc(s.device || '')}</span>`,
+            !a.isOwner && !self && session.can('sessions.revoke') && s.handle
+              ? `<button class="btn btn-ghost btn-sm" data-act="revokeOneSession" data-id="${a.id}" data-handle="${esc(s.handle)}" data-name="${esc(a.name || a.email || '')}">End</button>` : '',
+          ])) : '<p class="t-sm muted">No open sessions.</p>'}
         </section>`; }).join('')}
       <p class="t-xs faint">Session details only: no session token or its hash ever leaves the server.</p>`;
   }, { label: 'Loading sessions' });
@@ -3897,6 +4012,22 @@ Object.assign(ACTIONS, WZ_ACTIONS, {
     if (!m.hidden) m.querySelector('button')?.focus();
   },
   deliveriesRefresh: () => scrDeliveries(),
+  trackOnMap: (t) => { trackChoice = t.dataset.id; const el = document.getElementById('cc-track-map'); if (el) { el.dataset.order = trackChoice; paintTrackMap(); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } },
+  decideApproval: (t) => modal(`${t.dataset.v === 'approve' ? 'Approve' : 'Reject'}: ${t.dataset.name}`,
+    `<p class="t-sm muted">${t.dataset.v === 'approve' ? 'The server re-checks the current state, then carries this out now.' : 'Nothing will be done.'}</p>${textarea('note', 'Note (optional)')}`,
+    (d) => quad.decideApproval(t.dataset.id, t.dataset.v, d.note), '', { submitLabel: t.dataset.v === 'approve' ? 'Approve' : 'Reject' }),
+  toggleApprovalPolicy: (t) => act(t, () => quad.setApprovalPolicy(t.dataset.type, { enabled: t.dataset.v === '1', expiryHours: +t.dataset.hours }), { after: scrApprovals }),
+  revokeOneSession: (t) => modal(`End this session for ${t.dataset.name}?`, field('reason', 'Reason'),
+    (d) => quad.revokeOneAdminSession(t.dataset.id, t.dataset.handle, d.reason), '', { submitLabel: 'End session' }),
+  newRecoveryCodes: (t) => modal('Create new recovery codes?', '<p class="t-sm muted">Any recovery codes you already have stop working immediately.</p>',
+    async () => {
+      const out = await quad.newRecoveryCodes();
+      setTimeout(() => modal('Your recovery codes', `<p class="t-sm muted">Store these somewhere safe, away from your phone. Each works once and replaces a lost authenticator, together with your password. They are shown only now.</p>
+        <div class="enrolcode" style="white-space:pre-wrap">${out.codes.map(esc).join(LINE)}</div>`, DONE), 0);
+      return out;
+    }, '', { submitLabel: 'Create codes' }),
+  setAlertEmail: (t) => modal('Security alert address', `<p class="t-sm muted">A second address, ideally not your university mailbox, that also hears about recovery. It can only receive alerts: it cannot sign in or reset anything.</p>${field('email', 'Email', t.dataset.value || '', 'email')}`,
+    (d) => quad.setAlertEmail(d.email || null)),
 });
 
 /* Narrowing the permission list as the owner types. Only hides rows; the
@@ -3959,7 +4090,10 @@ async function scrProfile() {
   setTitle('My Profile', 'Your own account and sign-in. Only you can change these.');
   head().innerHTML = '';
   P.photo = null; P.replace = null;
-  await panel(view(), () => quad.myAdminProfile(), (d) => {
+  await panel(view(), async () => {
+    const [me, recovery] = await Promise.all([quad.myAdminProfile(), quad.recoveryStatus().catch(() => null)]);
+    return { ...me, recovery };
+  }, (d) => {
     P.data = d;
     const p = d.profile, sec = d.security;
     return `<div class="pf">
@@ -3989,6 +4123,14 @@ async function scrProfile() {
           <div class="pf-actions"><button type="reset" class="btn btn-ghost btn-sm">Cancel</button>
             <button type="submit" class="btn btn-primary btn-sm">Save name</button></div>
         </form>
+      </section>
+
+      <section class="card pf-card">
+        <h2 class="pf-h">Recovery</h2>
+        <p class="pf-help">If you lose your authenticator, a recovery code and your password let you set up a new one. ${d.recovery ? `You have <b>${d.recovery.remaining}</b> unused code${d.recovery.remaining === 1 ? '' : 's'}.` : ''}</p>
+        <p class="pf-help">Security alerts also go to: ${d.recovery?.alertEmail ? esc(d.recovery.alertEmail) : '<b>no second address set</b>'}</p>
+        <div class="pf-actions"><button type="button" class="btn btn-secondary btn-sm" data-act="newRecoveryCodes">Create recovery codes</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-act="setAlertEmail" data-value="${esc(d.recovery?.alertEmail || '')}">Change alert address</button></div>
       </section>
 
       <section class="card pf-card">
@@ -4237,6 +4379,7 @@ const LIVE_AREAS = {
   overview: ['orders', 'cafes', 'users', 'partners'], cafeterias: ['cafes'], menu: ['menu', 'cafes'],
   orders: ['orders'], order: ['orders'], deliveries: ['orders'],
   users: ['users'], verification: ['users'], partners: ['partners'],
+  support: ['support'], reviews: ['reviews'], trust: ['incidents'], locations: ['locations'],
 };
 const LIVE = { stamps: null, syncedAt: 0, failures: 0, timer: null, busy: false, pending: false };
 
@@ -4310,6 +4453,15 @@ async function liveTick() {
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') liveTick(); });
 globalThis.addEventListener?.('online', () => { LIVE.failures = 0; liveTick(); });
+/* The stream only says "look now". The poll above does the looking, and carries
+   on by itself whenever the stream is off, blocked or reconnecting. */
+function followStream() {
+  if (LIVE.stream) return;
+  LIVE.stream = followChanges('/admin/live/stream', () => {
+    clearTimeout(LIVE.nudge);
+    LIVE.nudge = setTimeout(() => { if (!LIVE.busy) liveTick(); }, 300);
+  });
+}
 
 function notesHtml(error = '') {
   return `<div class="cc-notifs-head"><b>Notifications</b>

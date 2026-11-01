@@ -450,9 +450,8 @@ export const ADMIN = {
     return v === '1' || v.toLowerCase() === 'true';
   },
   reauthMinutes: Number(env('ADMIN_REAUTH_MINUTES', 10)),
-  /* The passkey invite this older variable named is retired. The value now
-     bounds the invitation link, and 72 hours is the default. */
-  inviteTtlHours: Number(env('ADMIN_INVITE_TTL_HOURS', env('ADMIN_PASSKEY_INVITE_TTL_HOURS', 72))),
+  /* How long an invitation link works. */
+  inviteTtlHours: Number(env('ADMIN_INVITE_TTL_HOURS', 72)),
   /* Where an invitation link opens. Unset: the first allowed web origin. */
   get publicUrl() {
     const raw = process.env.ADMIN_PUBLIC_URL || `${HTTP.origin.split(',')[0].trim()}/admin/`;
@@ -479,6 +478,8 @@ export const ADMIN_AUTH = {
   /* How long an administrator session lasts. Shorter than a student's,
      because it can change money and permissions. */
   sessionMinutes: Number(env('ADMIN_SESSION_MINUTES', 480)),
+  /* An administrator session unused for this long ends. 0 turns it off. */
+  idleMinutes: Number(env('ADMIN_IDLE_MINUTES', 60)),
   /* How long the gap between the password screen and the authenticator
      screen may be. Long enough to open the app and read a code, short enough
      that a proven password left on a walked-away-from browser goes stale. */

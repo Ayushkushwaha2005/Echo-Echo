@@ -1017,3 +1017,5 @@ body { background: var(--cc-c-canvas); color: var(--cc-c-text); font-family: var
   .al-cover { display: none; }
   .al-orbit { transform: rotate(calc(var(--delay) * -18deg)) translateY(calc(var(--r) * 1px)) rotate(calc(var(--delay) * 18deg)); }
 }
+
+.cc-track-map { height: 360px; border-radius: 12px; overflow: hidden; margin: 8px 0; background: var(--cc-c-border); }

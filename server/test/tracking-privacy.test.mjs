@@ -32,7 +32,8 @@ const mkOrder = async (state, { partnerId = partner.id, vendor = V, customer = c
                            destination_snapshot, delivery_contact_phone, destination_kind, spot_lat, spot_lng)
    VALUES ($1,$2,$3,'delivery',$4,9000,10000,$5,'{"name":"Block 4"}','+919999900002','manual_map_spot',$6,$7)
    RETURNING *`, [`TRK${nth++}`, customer.id, vendor.id, state, partnerId, NEAR.lat, NEAR.lng])).rows[0];
-const report = async (p, orderId, extra = {}) => (await as(p)).post('/partner/location',
+const startSharing = async (p, orderId) => (await as(p)).post('/partner/location/start', { orderId });
+const report = async (p, orderId, extra = {}) => (await startSharing(p, orderId), await as(p)).post('/partner/location',
   { orderId, lat: NEAR.lat, lng: NEAR.lng, accuracy: 12, takenAt: Date.now(), ...extra });
 const view = async (u, orderId, method) => (await (await as(u, method)).get(`/orders/${orderId}/tracking`));
 
@@ -63,6 +64,8 @@ beforeEach(async () => {
   partner2 = await makeUser(pool, { phone: phone(), name: 'Partner Two', roles: ['student', 'delivery_partner'] });
   staffW = await makeUser(pool, { phone: phone(), name: 'Staff Other', roles: ['vendor_staff'], vendorId: W.id });
   admin = await makeUser(pool, { phone: phone(), name: 'Admin One', roles: ['platform_admin'] });
+  /* A position needs delivery.track; orders.view alone no longer carries one. */
+  await pool.query(`INSERT INTO admin_account (user_id, status, permissions) VALUES ($1,'active',$2)`, [admin.id, ['orders.view', 'delivery.track']]);
 });
 
 /* ---------- T1: the position ends with the delivery ---------------------- */
@@ -178,7 +181,7 @@ test('impossible or implausible reports are refused with 400 and store nothing',
     const r = await report(partner, o.id, extra);
     assert.equal(r.status, 400, why);
   }
-  /* Ten refusals above already count against this partner's 12 a minute
+  /* Ten refusals above already count against this partner's 20 a minute
      (failed reports are limited too), so the id checks use another. */
   for (const orderId of ['not-a-uuid', '', 42]) {
     assert.equal((await (await as(partner2)).post('/partner/location', { orderId, lat: NEAR.lat, lng: NEAR.lng })).status, 400);
@@ -188,6 +191,7 @@ test('impossible or implausible reports are refused with 400 and store nothing',
 
 test('a valid report without takenAt (older clients) is still accepted', async () => {
   const o = await mkOrder('picked_up');
+  await startSharing(partner, o.id);
   const r = await (await as(partner)).post('/partner/location', { orderId: o.id, lat: NEAR.lat, lng: NEAR.lng });
   assert.equal(r.status, 200);
 });
@@ -211,15 +215,16 @@ test('checkReport rules, directly', () => {
   assert.throws(() => checkReport({ orderId: id, lat: 1 }, now), /latitude and a longitude/);
 });
 
-test('reports are rate-limited per partner: 12 a minute', async () => {
+test('reports are rate-limited per partner: 20 a minute', async () => {
   const o = await mkOrder('picked_up');
+  await startSharing(partner, o.id);
   const s = await as(partner);
   const codes = [];
-  for (let i = 0; i < 13; i++) {
+  for (let i = 0; i < 21; i++) {
     codes.push((await s.post('/partner/location', { orderId: o.id, lat: NEAR.lat, lng: NEAR.lng })).status);
   }
-  assert.deepEqual(codes.slice(0, 12), Array(12).fill(200));
-  assert.equal(codes[12], 429);
+  assert.deepEqual(codes.slice(0, 20), Array(20).fill(200));
+  assert.equal(codes[20], 429);
   /* Another partner has their own allowance. */
   const o2 = await mkOrder('picked_up', { partnerId: partner2.id });
   assert.equal((await report(partner2, o2.id)).status, 200);

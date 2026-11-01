@@ -25,11 +25,28 @@
    map simply has less to draw.
    ========================================================================== */
 import { q, one } from '../db/index.js';
-import { authorize, can, BadRequest, NotFound, Forbidden } from '../auth/rbac.js';
-import { audit } from '../audit.js';
+import { authorize, can, BadRequest, NotFound, Forbidden, Conflict, HttpError } from '../auth/rbac.js';
+import { audit, auditTx } from '../audit.js';
 import {
-  CARRYING, VISIBLE_TO_CUSTOMER, REPORTS_PER_MINUTE, MAX_KM_FROM_PICKUP, checkReport, kmBetween,
+  CARRYING, VISIBLE_TO_CUSTOMER, REPORTS_PER_MINUTE, MAX_KM_FROM_PICKUP, SHARE_NOTICE_VERSION,
+  checkReport, kmBetween, stopSharing,
 } from '../services/partner-location.js';
+import { publishPosition } from '../services/live.js';
+import { tx } from '../db/index.js';
+
+/* One audit row per administrator, per order, per few minutes: a map that
+   refreshes every few seconds should not write hundreds of identical rows, and
+   the fact that this person looked is what the log needs. */
+const AUDIT_EVERY_MS = 5 * 60_000;
+const lastAudit = new Map();
+function auditPositionView(req, orderId) {
+  const key = `${req.actor.id}|${orderId}`;
+  const now = Date.now();
+  if (now - (lastAudit.get(key) || 0) < AUDIT_EVERY_MS) return null;
+  if (lastAudit.size > 5000) lastAudit.clear();
+  lastAudit.set(key, now);
+  return audit(req, { action: 'delivery.track.view', resource: 'food_order', resourceId: orderId, outcome: 'ok' });
+}
 
 const point = (row, label) => (row && row.lat != null && row.lng != null
   ? { label, name: row.name, lat: Number(row.lat), lng: Number(row.lng) }
@@ -38,6 +55,27 @@ const point = (row, label) => (row && row.lat != null && row.lng != null
 const perActor = (req) => (req.actor?.id ? `actor:${req.actor.id}` : req.ip);
 
 export default async function trackingRoutes(app) {
+  /* ---------- starting to share ------------------------------------------
+     The partner's explicit choice, once per delivery. Without this row no
+     position is accepted for the order. */
+  app.post('/partner/location/start', async (req) => {
+    authorize(req.actor, 'delivery.read', { ownerId: req.actor.id });
+    const orderId = String(req.body?.orderId ?? '');
+    if (!/^[0-9a-f-]{36}$/i.test(orderId)) throw BadRequest('Which delivery?');
+    return tx(async (c) => {
+      const o = (await c.query(`SELECT partner_id, state FROM food_order WHERE id = $1`, [orderId])).rows[0];
+      if (!o) throw NotFound('No such order');
+      if (o.partner_id !== req.actor.id) throw Forbidden('That delivery is not yours');
+      if (!CARRYING.includes(o.state)) throw Forbidden('That delivery is not in progress');
+      const row = (await c.query(
+        `INSERT INTO location_share_consent (order_id, partner_id, notice_version) VALUES ($1,$2,$3)
+         ON CONFLICT (order_id, partner_id) DO UPDATE SET consented_at = now(), notice_version = $3, stopped_at = NULL, stop_reason = NULL
+         RETURNING consented_at`, [orderId, req.actor.id, SHARE_NOTICE_VERSION])).rows[0];
+      await auditTx(c, req, { action: 'delivery.location.start', resource: 'food_order', resourceId: orderId, detail: { notice: SHARE_NOTICE_VERSION } });
+      return { sharing: true, consentedAt: row.consented_at, notice: SHARE_NOTICE_VERSION };
+    });
+  });
+
   /* ---------- the partner reports where they are ------------------------- */
   app.post('/partner/location', {
     config: { rateLimit: { max: REPORTS_PER_MINUTE, timeWindow: '1 minute', keyGenerator: perActor, hook: 'preHandler' } },
@@ -60,43 +98,74 @@ export default async function trackingRoutes(app) {
       throw Forbidden('That delivery is not in progress',
         `An order in "${o.state}" is not being carried anywhere.`);
     }
+    const consent = await one(
+      `SELECT 1 FROM location_share_consent WHERE order_id = $1 AND partner_id = $2 AND stopped_at IS NULL`, [o.id, req.actor.id]);
+    if (!consent) throw new HttpError(403, 'sharing_not_started', 'Tap Start sharing first', 'Your position is only sent after you choose to share it for this delivery.');
     if (o.pickup_lat != null && o.pickup_lng != null &&
         kmBetween({ lat: Number(o.pickup_lat), lng: Number(o.pickup_lng) }, r) > MAX_KM_FROM_PICKUP) {
       throw BadRequest('That position is too far from the café to be this delivery',
         `More than ${MAX_KM_FROM_PICKUP} km from the pickup point.`);
     }
 
-    await q(
+    /* The WHERE is the integrity rule: a replayed or delayed fix cannot move the
+       marker backwards. A row for a different order is simply replaced. */
+    const stored = await q(
       `INSERT INTO partner_location (partner_id, order_id, lat, lng, accuracy_m, at)
        VALUES ($1,$2,$3,$4,$5, COALESCE($6::timestamptz, now()))
        ON CONFLICT (partner_id) DO UPDATE SET order_id = $2, lat = $3, lng = $4,
-             accuracy_m = $5, at = COALESCE($6::timestamptz, now())`,
+             accuracy_m = $5, at = EXCLUDED.at
+       WHERE partner_location.order_id IS DISTINCT FROM EXCLUDED.order_id OR partner_location.at < EXCLUDED.at`,
       [req.actor.id, o.id, r.lat, r.lng, r.accuracy, r.takenAt]);
+    if (!stored.rowCount) throw Conflict('That fix is older than the last one', 'It was ignored.');
+    publishPosition(o.id);
     return { recorded: true };
   });
 
   /* Leaving a delivery, or going offline, takes the position with it. */
   app.post('/partner/location/clear', async (req) => {
     authorize(req.actor, 'delivery.read', { ownerId: req.actor.id });
-    await q(`DELETE FROM partner_location WHERE partner_id = $1`, [req.actor.id]);
+    const reason = ['partner', 'permission_revoked'].includes(req.body?.reason) ? req.body.reason : 'partner';
+    await stopSharing(req.actor.id, reason);
     return { cleared: true };
+  });
+
+  /* ---------- what a café may know --------------------------------------
+     Status and a first name, for the counter. No position, ever. */
+  app.get('/orders/:id/delivery-status', async (req) => {
+    const o = await one(
+      `SELECT o.id, o.code, o.state, o.fulfilment, o.vendor_id, o.partner_id, u.name AS partner_name
+         FROM food_order o LEFT JOIN app_user u ON u.id = o.partner_id WHERE o.id = $1`, [req.params.id]);
+    if (!o) throw NotFound('No such order');
+    if (!can(req.actor, 'order.read_all') && !(req.actor?.vendorIds?.includes(o.vendor_id) && can(req.actor, 'order.read', { vendorId: o.vendor_id }))) {
+      throw Forbidden('That order is not yours');
+    }
+    return {
+      orderId: o.id, code: o.code, state: o.state, fulfilment: o.fulfilment,
+      partnerAssigned: !!o.partner_id,
+      partnerFirstName: o.partner_name ? o.partner_name.trim().split(/\s+/)[0] : null,
+      deliveryStatus: !o.partner_id ? 'no_partner_yet' : o.state === 'picked_up' ? 'on_the_way' : o.state === 'assigned' ? 'heading_to_cafe' : 'finished',
+    };
   });
 
   /* ---------- what a map may draw ----------------------------------------- */
   app.get('/orders/:id/tracking', async (req) => {
     const o = await one(
       `SELECT o.id, o.state, o.customer_id, o.partner_id, o.fulfilment, o.destination_id,
-              o.destination_snapshot, o.spot_lat, o.spot_lng, v.name AS vendor_name, v.campus_node_id
+              o.destination_snapshot, o.spot_lat, o.spot_lng, o.vendor_id, v.name AS vendor_name, v.campus_node_id
          FROM food_order o JOIN vendor v ON v.id = o.vendor_id
         WHERE o.id = $1`, [req.params.id]);
     if (!o) throw NotFound('No such order');
 
     const isCustomer = o.customer_id === req.actor?.id;
     const isPartner = o.partner_id === req.actor?.id;
-    const isStaff = req.actor?.vendorIds?.length && can(req.actor, 'order.read');
-    if (!isCustomer && !isPartner && !isStaff && !can(req.actor, 'order.read_all')) {
+    /* Café staff and order-reading administrators get a coordinate-free answer;
+       an exact position needs delivery.track, and looking at one is audited. */
+    const isStaff = !!req.actor?.vendorIds?.length && can(req.actor, 'order.read', { vendorId: o.vendor_id });
+    const mayTrack = can(req.actor, 'delivery.track');
+    if (!isCustomer && !isPartner && !isStaff && !mayTrack && !can(req.actor, 'order.read_all')) {
       throw Forbidden('That order is not yours');
     }
+    const seesExact = isCustomer || isPartner || mayTrack;
 
     /* Both ends of the journey, read from surveyed campus rows. */
     const pickup = point(await one(
@@ -112,7 +181,7 @@ export default async function trackingRoutes(app) {
     const carrying = CARRYING.includes(o.state);
     let partner = null;
     if (o.partner_id && carrying) {
-      const show = isPartner || can(req.actor, 'order.read_all') ||
+      const show = isPartner || mayTrack ||
         (isCustomer && VISIBLE_TO_CUSTOMER.includes(o.state));
       if (show) {
         /* ageSeconds is measured on the server's clock, so the map can say
@@ -123,6 +192,7 @@ export default async function trackingRoutes(app) {
              FROM partner_location
             WHERE partner_id = $1 AND order_id = $2`, [o.partner_id, o.id]);
         if (row) {
+          if (mayTrack && !isPartner && !isCustomer) await auditPositionView(req, o.id);
           partner = { lat: Number(row.lat), lng: Number(row.lng),
                       accuracyM: row.accuracy_m == null ? null : Number(row.accuracy_m),
                       at: row.at, ageSeconds: Number(row.age_seconds) };
@@ -142,7 +212,7 @@ export default async function trackingRoutes(app) {
       fulfilment: o.fulfilment,
       vendorName: o.vendor_name,
       pickup,
-      destination,
+      destination: seesExact ? destination : (destination ? { label: destination.label, name: destination.name } : null),
       /* The frozen address, so the partner reads the same words the student
          chose rather than whatever the campus tree says today. */
       address: o.destination_snapshot || null,
@@ -151,7 +221,8 @@ export default async function trackingRoutes(app) {
          so the screen can explain rather than look broken. */
       partnerVisibility: !o.partner_id ? 'no_partner_yet'
         : !carrying ? 'delivery_over'
-        : (isPartner || can(req.actor, 'order.read_all')) ? (partner ? 'visible' : 'not_reported_yet')
+        : (isPartner || mayTrack) ? (partner ? 'visible' : 'not_reported_yet')
+        : !isCustomer ? 'restricted'
         : VISIBLE_TO_CUSTOMER.includes(o.state) ? (partner ? 'visible' : 'not_reported_yet')
         : 'hidden_until_pickup',
       boundary: boundary ? { name: boundary.name, polygon: boundary.polygon } : null,

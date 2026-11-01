@@ -225,7 +225,7 @@ Details: [ADMIN-ACCESS.md](ADMIN-ACCESS.md).
 PLATFORM_OWNER_EMAIL=ayush.17551@stu.upes.ac.in
 PLATFORM_ADMIN_EMAILS=                      # leave empty; invite admins from Campus Control
 ADMIN_PASSKEY_REQUIRED=true
-ADMIN_PASSKEY_INVITE_TTL_HOURS=24
+ADMIN_INVITE_TTL_HOURS=72
 ```
 
 First sign-in, once the API is live:

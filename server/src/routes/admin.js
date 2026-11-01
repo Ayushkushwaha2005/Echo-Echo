@@ -7,8 +7,8 @@
    an admin cannot escalate themselves or a friend.
 
    Assigning a cafeteria owner does NOT create credentials. It creates (or
-   finds) the user by phone and grants the role; that person then signs in
-   with their own OTP like everybody else. There is no invented password.
+   finds) the user by phone and grants the role. They open Counter with an
+   enrolment code. Campus Control roles go through an invitation instead.
    ========================================================================== */
 import { q, one, tx } from '../db/index.js';
 import { authorize, assertGrantable, ROLES, BadRequest, NotFound, Conflict, Forbidden } from '../auth/rbac.js';
@@ -163,15 +163,19 @@ export default async function adminRoutes(app) {
                                                 ...(explicit ? { permissions: explicit } : {}) } });
     return {
       ...out,
-      /* Honest about onboarding: no credential was created, because this
-         product has no passwords. They sign in with their own number. */
-      onboarding: {
-        method: 'phone_otp',
-        message: `${phone} can now sign in with an OTP and will land on ${
-          ['vendor_owner', 'vendor_staff'].includes(role) ? 'Counter' :
-          ['platform_admin', 'support'].includes(role) ? 'Campus Control' : 'the student site'}.`,
-        note: 'No credentials were generated. Notifying them is currently a manual step — ' +
-              'no notification provider is connected.',
+      /* Honest about onboarding: no credential was created here. */
+      onboarding: ['vendor_owner', 'vendor_staff'].includes(role) ? {
+        method: 'enrolment_code',
+        message: `${phone} holds this role now. They open Counter with an enrolment code from Cafés.`,
+        note: 'No credentials were generated, and they are not told automatically: give them the code yourself.',
+      } : ['platform_admin', 'support'].includes(role) ? {
+        method: 'invitation',
+        message: 'Administrators join through an invitation from Access Management, which is where their sign-in is set up.',
+        note: 'No credentials were generated.',
+      } : {
+        method: 'student_email',
+        message: `${phone} holds this role now and uses the student site with their university email code.`,
+        note: 'No credentials were generated.',
       },
     };
   });

@@ -16,7 +16,7 @@
    ========================================================================== */
 import { randomBytes, createHash } from 'node:crypto';
 import { q, one } from '../db/index.js';
-import { SESSION, HTTP, ADMIN } from '../config.js';
+import { SESSION, HTTP, ADMIN, ADMIN_AUTH } from '../config.js';
 import { Unauthenticated, isPlatformRole } from './rbac.js';
 import { PERMISSIONS, PERMISSION_KEYS, ROLE_DEFAULT_PERMISSIONS, capsFor } from './permissions.js';
 
@@ -54,7 +54,7 @@ export async function actorFromToken(token) {
   if (!token) return null;
   const s = await one(
     `SELECT s.token_hash, s.user_id, u.status, u.name, u.phone, u.student_status,
-            s.auth_method, s.passkey_verified_at, s.issued_at,
+            s.auth_method, s.passkey_verified_at, s.issued_at, s.last_seen_at,
             s.campus_presence_at, s.campus_presence_site_id, s.campus_presence_accuracy_m,
             u.student_email, u.student_email_verified_at, u.staff_email, u.contact_phone, u.campus_site_id,
             c.service_status AS campus_service_status, c.name AS campus_name,
@@ -65,6 +65,18 @@ export async function actorFromToken(token) {
       WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()`,
     [sha(token)]);
   if (!s) return null;
+
+  /* An administrator session that has sat idle ends, and stays ended. Student
+     sessions keep their own long lifetime. */
+  const strong = ['admin_totp', 'passkey'].includes(s.auth_method);
+  const seenMs = new Date(s.last_seen_at || s.issued_at).getTime();
+  if (strong && ADMIN_AUTH.idleMinutes > 0 && Date.now() - seenMs > ADMIN_AUTH.idleMinutes * 60_000) {
+    await q(`UPDATE session SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL`, [s.token_hash]);
+    return null;
+  }
+  if (Date.now() - seenMs > 60_000 || !s.last_seen_at) {
+    await q(`UPDATE session SET last_seen_at = now() WHERE token_hash = $1`, [s.token_hash]);
+  }
 
   const { rows } = await q(
     `SELECT role, vendor_id FROM user_role

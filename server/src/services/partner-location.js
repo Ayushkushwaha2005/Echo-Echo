@@ -17,7 +17,7 @@
    cannot make an old marker look new.
    ========================================================================== */
 import { q } from '../db/index.js';
-import { BadRequest } from '../auth/rbac.js';
+import { BadRequest, can } from '../auth/rbac.js';
 
 /* While the order is in these states its partner's position is live. */
 export const CARRYING = ['assigned', 'picked_up'];
@@ -25,9 +25,10 @@ export const CARRYING = ['assigned', 'picked_up'];
    walking towards you with your food. */
 export const VISIBLE_TO_CUSTOMER = ['picked_up'];
 
-/* The partner's phone sends a fix every 20 s (web/src/app.js). One a
-   second is far beyond that and still leaves room for retries. */
-export const REPORTS_PER_MINUTE = 12;
+/* The partner's phone sends at most one fix every 5 s (web/src/app.js). */
+export const REPORTS_PER_MINUTE = 20;
+/* What the partner agreed to, stored with their consent. */
+export const SHARE_NOTICE_VERSION = '2026-11-location-1';
 /* A fix the phone took longer ago than this is not "where they are". */
 export const MAX_FIX_AGE_SECONDS = 120;
 /* A phone clock may run a little fast; more than this is not a real fix. */
@@ -85,6 +86,26 @@ export function checkReport(body, now = Date.now()) {
 /* Called inside the transaction that moves an order out of CARRYING. */
 export async function forgetForOrder(c, orderId) {
   await c.query(`DELETE FROM partner_location WHERE order_id = $1`, [orderId]);
+  await c.query(`UPDATE location_share_consent SET stopped_at = now(), stop_reason = 'delivery_ended'
+                  WHERE order_id = $1 AND stopped_at IS NULL`, [orderId]);
+}
+
+/* Sign-out, or the partner stopping: the position and the live consent both go. */
+export async function stopSharing(partnerId, reason) {
+  await q(`DELETE FROM partner_location WHERE partner_id = $1`, [partnerId]);
+  await q(`UPDATE location_share_consent SET stopped_at = now(), stop_reason = $2
+            WHERE partner_id = $1 AND stopped_at IS NULL`, [partnerId, reason]);
+}
+
+/* Who may follow this order's position through a stream. The same rules as
+   the map: its customer after pickup, its partner, or delivery.track. */
+export async function canFollowOrder(actor, orderId) {
+  if (!actor) return false;
+  const o = await q(`SELECT customer_id, partner_id, state FROM food_order WHERE id = $1`, [orderId]).then((r) => r.rows[0]);
+  if (!o || !CARRYING.includes(o.state)) return false;
+  if (o.partner_id === actor.id) return true;
+  if (o.customer_id === actor.id) return VISIBLE_TO_CUSTOMER.includes(o.state);
+  return can(actor, 'delivery.track');
 }
 
 /* Rows whose order is no longer being carried (left over from before the

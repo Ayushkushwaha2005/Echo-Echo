@@ -18,6 +18,7 @@ import { assignDelivery } from './delivery.js';
 import { purgeExpiredIdImages } from './storage.js';
 import { notifyAsync } from './notify.js';
 import { pruneFinished } from './partner-location.js';
+import { expireStale } from './approvals.js';
 
 const MAX_ROUNDS = 3;
 const ABANDON_AFTER_MINUTES = 20;
@@ -87,6 +88,9 @@ export async function sweepOnce(log) {
     ['otp', pruneOtp],
     /* A partner's position whose delivery has ended (see partner-location.js). */
     ['partnerLocations', pruneFinished],
+    ['changeFeed', async () => ({ removed: (await q(`DELETE FROM change_event WHERE at < now() - interval '7 days'`)).rowCount })],
+    ['approvals', async () => ({ expired: await expireStale() })],
+    ['recoveryTickets', async () => ({ removed: (await q(`DELETE FROM admin_recovery_ticket WHERE expires_at < now() - interval '1 day'`)).rowCount })],
     ['idImages', () => purgeExpiredIdImages(RETENTION.idImageDays).then((n) => ({ purged: n }))],
   ]) {
     try { out[name] = await fn(); }

@@ -421,6 +421,9 @@ export default async function adminOpsRoutes(app) {
     const spec = REPORTS[req.params.kind];
     if (!spec) throw NotFound(`No report "${req.params.kind}". Reports: ${Object.keys(REPORTS).join(', ')}`);
     authorize(req.actor, spec.cap);
+    /* Exporting is a separate power from viewing. Financial reports keep their
+       finance check alone until payment work is unfrozen. */
+    if (!String(spec.cap).startsWith('finance.')) authorize(req.actor, 'report.export');
     const from = dateParam(req.query?.from, 'from');
     const toRaw = dateParam(req.query?.to, 'to');
     if (!from || !toRaw) throw BadRequest('from and to are required (YYYY-MM-DD)');

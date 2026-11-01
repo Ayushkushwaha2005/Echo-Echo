@@ -104,6 +104,33 @@ jobs:
         working-directory: server
         run: npm test
 
+  # Real browser journeys against the production bundle, the real API and a
+  # disposable PostgreSQL, with synthetic data and a stub in place of email.
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Server dependencies
+        working-directory: server
+        run: npm ci
+      - name: Build the bundle
+        run: QUAD_API_BASE=/api node build.mjs --production
+      - name: Browser tools
+        working-directory: tests/browser
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Prepare the test database
+        working-directory: server
+        run: node test/helpers/db.mjs init
+      - name: Journeys
+        working-directory: tests/browser
+        run: npx playwright test --config playwright.config.mjs
+
   workflows:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
