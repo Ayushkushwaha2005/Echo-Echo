@@ -585,6 +585,7 @@ const ACTIONS = {
         const file = form.querySelector('input[name=photo]').files[0];
         const photoAsset = file ? (await quad.uploadPhoto(file, 'food_photo')).id : undefined;
         return quad.updateItem(i.id, {
+          revision: i.revision,
           name: d.name, description: d.description, price: d.price,
           prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
           categoryId: d.categoryId || null,

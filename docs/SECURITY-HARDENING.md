@@ -38,6 +38,8 @@ replaced. Whether it is still active can't be told from here, and it was not loo
 
 ## Security issues found while doing this work
 
+- **The administrator detail route returned the wrong person. This is live on `main`.** `WHERE a OR b AND u.id = $1` meant `GET /admin/access/admins/:id` could return the first administrator with an account row, so once a second one exists the detail panel, sessions, activity and permission form could show someone else. Saving that form sends the target's id with permissions read from the wrong person, so **check any permission changes made once more than one invited administrator exists**. Found by a browser journey, fixed, regression-tested.
+- **Enforced CSP would have blocked the website preview frame.** Found by a browser journey before release; `frame-src` now allows `'self'`.
 - **Revoked certificate warning.** On 2 Nov 2026, Windows reported `udyamregistration.gov.in` as revoked. That's a
   government site, unrelated to ECHO ECHO, and already raised with the owner.
 - **`sharp` 0.33.5 had a high-severity advisory** when first chosen, so 0.35.5 is pinned.
