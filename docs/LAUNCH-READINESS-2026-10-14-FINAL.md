@@ -1,13 +1,40 @@
 # Launch readiness — final pass, 14 Oct 2026 (night)
 
-Branch `launch-audit`, on top of `origin/main` `8f0bf1a` (still the live commit on Render
-and Vercel). Earlier passes: `LAUNCH-AUDIT-2026-10-14.md`, `LAUNCH-READINESS-2026-10-14-FOLLOWUP.md`.
+**Deployed.** PR #6 (`fe89fed`) and PR #7 (`b747055`) are on `main` and live: Render
+`/health` reports `b7470550…`, `/ready` is ready with 30/30 migrations applied, and the
+Vercel site serves the new build. Earlier passes: `LAUNCH-AUDIT-2026-10-14.md`,
+`LAUNCH-READINESS-2026-10-14-FOLLOWUP.md`.
 
-**Decision: READY FOR INTERNAL TESTING.** Not yet a controlled campus pilot. The code is
-ready to deploy; the remaining blockers are approvals and owner-held resources, listed at
-the end.
+**Decision: READY FOR CONTROLLED CAMPUS PILOT — after the five owner items in section 5
+marked (pilot gate).** The engineering side is done and verified in production; what
+remains is physical (counters, admin sign-in domain), provider (Payouts activation) and
+spending (instance plan) decisions, plus custody of the backup passphrase.
 
 Statuses: FIXED & VERIFIED · BLOCKED BY OWNER/PROVIDER · NOT FIXED.
+
+## 0. Production evidence (after deploy)
+- `/health/client` on both hosts: `cfConnectingIpPresent: true`; after setting
+  `EDGE_CLIENT_IP_HEADER=cf-connecting-ip` on Render (owner-approved), `edgeKeySource: "edge"`.
+- Live probe, direct to Render, 640 sign-in-code requests each with a different forged
+  `X-Forwarded-For` (non-student address, refused before any email or write): 600 × 400,
+  then 429 from request 600; a brand-new forged address afterwards: 429. The site path
+  (`www.echoecho.tech/api`) stayed 400. Before this deploy every forged header got a fresh bucket.
+- Headless Chrome on **production** at 390×844 and 1280×900: site checks 42/42, logo checks
+  36/36, **0 CSP violations** under the live report-only policy (Leaflet, OSM/EOX tiles and
+  the Cashfree SDK load), 0 exceptions, favicons and `og-image.jpg` served as images.
+- Live data: Chai Garam and Tulips, Mon–Sat 8 AM–6 PM, status from the server clock;
+  pricing ₹10 platform fee, ₹15 delivery.
+- Render logs, last 40 min after the deploys: 0 error-level lines.
+- **Backups (owner-approved):** private B2 bucket `echo-echo-db-backups-c3f304` (SSE-B2,
+  lifecycle 30 days then delete), key restricted to that bucket with list/read/write and no
+  delete (a delete attempt was refused, 401); 7 repository secrets set from stdin. First run
+  ([38604872460](https://github.com/Ayushkushwaha2005/Echo-Echo/actions/runs/38604872460)):
+  dump of 77 tables, **restore drill into a throwaway PostgreSQL 18 matched**
+  (schema_migration 30, app_user 6, food_order/payment/ledger_txn/order_financials 0),
+  encrypted object `echoecho-2026-10-14T1714Z.dump.gpg` 75,352 bytes uploaded and verified.
+  Locally, the passphrase in `deploy/.env.backup` decrypts it back to a valid 307,875-byte
+  dump (`PGDMP`). The first attempt failed honestly on `pg_dump 17` vs **server 18.6**;
+  fixed by PR #7.
 
 ## 1. Logo (FIXED & VERIFIED)
 - Source: `C:\Users\ayush\Downloads\6.jpeg`, 1254×1254 JPEG, copied byte-for-byte to
@@ -42,13 +69,13 @@ Statuses: FIXED & VERIFIED · BLOCKED BY OWNER/PROVIDER · NOT FIXED.
 | Back button left the site; no deep links | FIXED & VERIFIED | browser checks |
 | Fee disclosure, partner discovery, SEO, robots, 404 | FIXED & VERIFIED | browser checks |
 | Offers did not show the partner's earning | FIXED & VERIFIED | `e2e.test.mjs`; offer card "You earn ₹10" in the role journey |
-| Forged `X-Forwarded-For` bypasses per-IP OTP limits | FIXED (code), **BLOCKED BY OWNER** for production | edge limit + 10 tests; `render.yaml` declares `EDGE_CLIENT_IP_HEADER`. Live Render does **not** have it yet, and the code is not deployed: not active in production. |
-| Backup workflow green with no backup | FIXED & VERIFIED (it now fails while unconfigured); backups themselves **BLOCKED BY OWNER** | no backup or restore has happened |
+| Forged `X-Forwarded-For` bypasses per-IP OTP limits | FIXED & VERIFIED | 10 tests; live probe in section 0 |
+| Backups | FIXED & VERIFIED | real backup + restore drill, section 0; passphrase custody is the owner's (section 5) |
 | fastify advisory | FIXED & VERIFIED | `npm audit`: 0 |
 | No CSP | FIXED (report-only), enforcement **NOT FIXED** by design | 0 violations enforced in headless Chrome; needs real reports, incl. a production Cashfree checkout, before enforcing |
 | Payout stuck in processing raised nothing | FIXED & VERIFIED | test; now also emails the owner |
 | Owner email exposed on a public endpoint | FIXED & VERIFIED | test |
-| No alerting | FIXED & VERIFIED for money and scheduler events (owner email); uptime **BLOCKED BY OWNER** | 5 tests; uptime needs an external monitor account |
+| No alerting | FIXED & VERIFIED for money, payout, reconciliation and scheduler events (owner email, 5 tests); backup failures alert via GitHub's failed-run email; uptime BLOCKED BY OWNER | an external monitor needs an account |
 | Dependabot off | FIXED & VERIFIED | config file + alerts enabled (API 204) |
 | Payouts not activated in Cashfree production | BLOCKED BY OWNER/PROVIDER | no production payout credentials exist; `PAYOUT_PROVIDER` unset on Render |
 | Counter/admin staffing | BLOCKED BY OWNER | physical |
@@ -73,18 +100,19 @@ Statuses: FIXED & VERIFIED · BLOCKED BY OWNER/PROVIDER · NOT FIXED.
 - Cashfree Payouts sandbox (earlier pass): 20/21. The "timeout, later success" account stayed PENDING; nothing was resent or marked paid.
 
 ## 5. Owner actions, in order
-1. **Approve the merge** of the PR for `launch-audit` (a merge to `main` auto-deploys Render and Vercel). No migration.
-2. After the deploy: check `/health` (commit), `/ready`, and `/health/client` on both hosts (`cfConnectingIpPresent: true`).
-3. **Set `EDGE_CLIENT_IP_HEADER=cf-connecting-ip` on Render**, then re-probe: forged `X-Forwarded-For` must hit 429 at the edge cap.
-4. **Backups:** approve creating a private B2 bucket with a key restricted to it and a 30-day lifecycle, the 7 GitHub secrets, a first backup run and a restore drill into a throwaway database. The encryption passphrase must go into your password manager.
-5. Admin passkey domain decision (section 3) and confirm you can sign in to Campus Control.
-6. Render paid instance decision.
-7. An external uptime monitor (free accounts exist) on `https://www.echoecho.tech/api/health/`.
-8. Cashfree Payouts production activation (or a written manual payout process).
-9. Enrol and train counter devices at both cafés.
-10. Logo legal decision; Chai Garam pricing decision; print and scan one QR proof.
-11. One small real order on your own account, refunded.
+1. **(pilot gate) Move `BACKUP_PASSPHRASE` from `deploy/.env.backup` into your password manager**, then keep a second copy offline. Without it no backup can be decrypted.
+2. **(pilot gate) Campus Control access:** sign in at `https://echo-echo-nu.vercel.app/admin/` (the passkey domain), or move `WEBAUTHN_RP_ID`/`WEBAUTHN_ORIGINS` to `echoecho.tech` and re-enrol passkeys. Confirm you can approve a partner and issue a refund.
+3. **(pilot gate) Counters:** enrol one device at Chai Garam and one at Tulips; walk each through accept → ready → pickup code once.
+4. **(pilot gate) Render instance:** the free plan sleeps after 15 min (cold starts, Cashfree webhooks arriving during a cold start, scheduler paused while asleep). A paid instance is a spending decision.
+5. **(pilot gate) One small real order** on your own account, refunded from Campus Control.
+6. Cashfree Payouts production activation, or a written manual payout process (`PAYOUT_PROVIDER` is unset; earnings are recorded and owed).
+7. External uptime monitor on `https://www.echoecho.tech/api/health/` (a free account suffices).
+8. After a week of `csp violation` logs including one real Cashfree checkout, switch `vercel.json` to the enforcing header.
+9. Logo legal decision (section 1); Chai Garam +₹10 pricing decision; confirm Tulips veg marks.
+10. Print one QR proof at real size and scan it with an iPhone and an Android phone.
 
 ## 6. Rollback
 No schema change. Vercel: promote the previous production deployment. Render: redeploy
-`8f0bf1a`. Unsetting `EDGE_CLIENT_IP_HEADER` restores today's rate-limit keys without a deploy.
+`8f0bf1a`. Unsetting `EDGE_CLIENT_IP_HEADER` on Render restores the old rate-limit keys.
+Backups: the B2 bucket and key can be removed from the B2 console; the GitHub secrets from
+Settings > Secrets.
