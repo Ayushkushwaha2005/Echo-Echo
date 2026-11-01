@@ -69,11 +69,11 @@ export async function startStack() {
   const { startDb } = await import('../../server/test/helpers/db.mjs');
   await startDb();
   Object.assign(process.env, {
-    NODE_ENV: 'test', SWEEPER: 'off', PORT: String(API_PORT), WEB_ORIGIN: `http://127.0.0.1:${WEB_PORT}`,
+    NODE_ENV: 'test', SWEEPER: 'off', PORT: String(API_PORT), PLATFORM_OWNER_PHONE: '+919000000000', WEB_ORIGIN: `http://127.0.0.1:${WEB_PORT}`,
     COOKIE_SECRET: 'browser-test-secret-at-least-32-characters', ADMIN_TOTP_KEY: 'browser-test-totp-key-0123456789abcdef',
     ADMIN_PASSKEY_REQUIRED: 'true', EMAIL_PROVIDER: 'resend', RESEND_API_KEY: 're_test', EMAIL_FROM: 'ECHO ECHO <verify@echo.test>',
     RESEND_BASE_URL: `http://127.0.0.1:${STUB_PORT}`, ADMIN_PUBLIC_URL: `http://127.0.0.1:${WEB_PORT}/admin/`,
-    TRUST_PROXY: 'false', LIVE_STREAMS_ENABLED: 'false', RATE_LIMIT_DISABLED: 'true',
+    TRUST_PROXY: 'false', LIVE_STREAMS_ENABLED: 'false',
   });
   const stub = await startStub();
   const { build } = await import('../../server/src/index.js');

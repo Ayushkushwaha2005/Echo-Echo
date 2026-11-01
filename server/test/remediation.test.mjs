@@ -719,3 +719,59 @@ test('reports: exporting order data needs reports.export; finance reports are un
   assert.equal((await noExport.c.get(`/admin/reports/${orderKind}${q}`)).status, 403);
   assert.equal((await withExport.c.get(`/admin/reports/${orderKind}${q}`)).status, 200);
 });
+
+/* ---------- a person's own data ---------------------------------------------- */
+test('data export holds my records only, and no other person, secret or position', async () => {
+  const { customer, o, partner } = await delivery();
+  const other = await makeUser(pool, { phone: phone(), name: 'Other Person Name' });
+  const vendor2 = await makeVendor(pool, { name: 'Other Cafe', slug: `oth-${nth++}` });
+  await order('delivered', { partnerId: null, vendorId: vendor2.id, customerId: other.id });
+  await pool.query(`INSERT INTO partner_location (partner_id, order_id, lat, lng, accuracy_m, at) VALUES ($1,$2,30.4172,77.9681,10, now())`, [partner.id, o.id]);
+  const c = await as(customer);
+  const r = await c.get('/me/data-export');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.profile.name, 'Customer');
+  assert.equal(r.body.orders.length, 1);
+  const dump = JSON.stringify(r.body);
+  assert.ok(!dump.includes('Other Person Name'));
+  assert.ok(!dump.includes(partner.id), 'no partner identity');
+  assert.ok(!dump.includes('Ravi'));
+  assert.ok(!dump.includes('token_hash'));
+  assert.equal((await pool.query(`SELECT count(*)::int n FROM audit_log WHERE action = 'data.export'`)).rows[0].n, 1);
+  assert.equal((await client(app).get('/me/data-export')).status, 401);
+});
+
+test('a deletion request is recorded once, deletes nothing, and only the owner records an outcome', async () => {
+  const u = await makeUser(pool, { phone: phone(), name: 'Leaving Student' });
+  const c = await as(u);
+  assert.equal((await c.post('/me/deletion-request', { note: 'Graduating' })).status, 200);
+  assert.equal((await c.post('/me/deletion-request', {})).status, 409, 'one open request');
+  assert.equal((await pool.query(`SELECT status FROM app_user WHERE id = $1`, [u.id])).rows[0].status, 'active', 'nothing was deleted');
+  assert.equal((await c.get('/admin/data-requests')).status, 403);
+  const o = await owner();
+  const list = await o.c.get('/admin/data-requests');
+  assert.equal(list.body.requests.length, 1);
+  const id = list.body.requests[0].id;
+  const a = await admin(['students.view']);
+  assert.equal((await a.c.post(`/admin/data-requests/${id}`, { status: 'completed', note: 'done it' })).status, 403);
+  assert.equal((await o.c.post(`/admin/data-requests/${id}`, { status: 'completed' })).status, 400, 'a note is required');
+  assert.equal((await o.c.post(`/admin/data-requests/${id}`, { status: 'completed', note: 'Erased profile, kept orders' })).status, 200);
+  assert.equal((await c.get('/me/deletion-request')).body.request.status, 'completed');
+});
+
+/* Found by the browser journey: `a OR b AND u.id = $1` returned whichever
+   administrator came first, so a detail page could show someone else entirely. */
+test('an administrator detail page is about that administrator, not the first one found', async () => {
+  const o = await owner();
+  const first = await admin(['students.view'], 'First Person');
+  const second = await admin(['orders.view'], 'Second Person');
+  for (const [who, name, perm] of [[first, 'First Person', 'students.view'], [second, 'Second Person', 'orders.view']]) {
+    const d = await o.c.get(`/admin/access/admins/${who.u.id}`);
+    assert.equal(d.status, 200);
+    assert.equal(d.body.administrator.id, who.u.id);
+    assert.equal(d.body.administrator.name, name);
+    assert.deepEqual(d.body.administrator.effective.permissions, [perm]);
+  }
+  const student = await makeUser(pool, { phone: phone(), name: 'Just A Student' });
+  assert.equal((await o.c.get(`/admin/access/admins/${student.id}`)).status, 404, 'a student is not an administrator');
+});

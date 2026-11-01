@@ -1,0 +1,39 @@
+# ECHO ECHO staging API. Not applied by anything: see docs/STAGING-AND-DEPLOYMENT.md.
+#
+# Rules for this environment:
+#   - its own database; never a branch or restore of production
+#   - synthetic data only
+#   - no production secret, ever; every sync: false below gets a NEW value
+#   - no payment keys: payments stay deferred here unless a test is explicitly approved
+services:
+  - type: web
+    name: echo-echo-api-staging
+    runtime: docker
+    plan: free
+    rootDir: server
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeployTrigger: "off"
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PAYMENTS_DEFERRED
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: COOKIE_SECRET
+        generateValue: true
+      - key: ADMIN_TOTP_KEY
+        generateValue: true
+      - key: WEB_ORIGIN
+        sync: false
+      - key: ADMIN_PUBLIC_URL
+        sync: false
+      - key: PLATFORM_OWNER_EMAIL
+        sync: false
+      - key: STUDENT_EMAIL_DOMAINS
+        value: stu.upes.ac.in
+      - key: LIVE_STREAMS_ENABLED
+        value: "false"
+      - key: TRUST_PROXY
+        value: "true"

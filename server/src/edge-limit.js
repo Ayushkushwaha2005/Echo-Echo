@@ -54,10 +54,10 @@ export function resetEdgeLimits() { windows.clear(); }
 
 /* onRequest hook. Applies to every route that carries an ordinary per-IP
    rateLimit, unless it opts out with edgeLimit: false. A route keyed per
-   account (withdrawals) is not an IP limit and is left alone, and neither is
-   the plugin's global limit: behind one proxy address the edge key could be
-   shared by a whole campus, so a global cap on it could lock out real students.
-   These per-route limits are looser by edgeMultiplier for the same reason. */
+   account (withdrawals) is not an IP limit and is left alone. Routes with no
+   limit of their own stay unlimited here. Behind one proxy address the edge key
+   could be shared by a whole campus, which is why this cap is looser than the
+   route's own by edgeMultiplier. */
 export async function edgeLimitHook(req, reply) {
   const cfg = req.routeOptions?.config;
   const rl = cfg?.rateLimit;

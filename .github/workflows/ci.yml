@@ -129,7 +129,10 @@ jobs:
         run: node test/helpers/db.mjs init
       - name: Journeys
         working-directory: tests/browser
-        run: npx playwright test --config playwright.config.mjs
+        run: |
+          node harness.mjs > harness.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:4173/api/health > /dev/null && break; sleep 2; done
+          npx playwright test --config playwright.config.mjs
 
   workflows:
     runs-on: ubuntu-24.04

@@ -339,6 +339,9 @@ export const quad = {
      position is disclosed at all. */
   tracking: (orderId) => get(`/orders/${orderId}/tracking`),
   trackingTicket: (orderId) => post(`/orders/${orderId}/tracking/ticket`),
+  myDataExport: () => get('/me/data-export'),
+  myDeletionRequest: () => get('/me/deletion-request'),
+  requestDeletion: (note) => post('/me/deletion-request', { note }),
   startSharing: (orderId) => post('/partner/location/start', { orderId }),
   sendPosition: (body) => post('/partner/location', body),
   clearLocation: (reason) => post('/partner/location/clear', reason ? { reason } : undefined),

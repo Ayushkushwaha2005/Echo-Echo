@@ -2025,6 +2025,8 @@ function ScrProfile() {
       p?.status === 'approved' ? 'data-act="go" data-route="partner"' : 'data-act="go" data-route="join"'],
     [I.help, 'Help & report an issue', 'Reach a real person in campus admin', 'data-act="sheet" data-sheet="report"'],
     [I.moon, 'Appearance', 'Switch between light and dark', 'data-act="theme"'],
+    [I.receipt, 'Download my data', 'A copy of what ECHO ECHO holds about you', 'data-act="exportMyData"'],
+    [I.warn, 'Ask to delete my account', 'A person reviews this; some order records may have to be kept', 'data-act="askDeletion"'],
     [I.logout, 'Sign out', '', 'data-act="signout"'],
   ];
   return `<div class="screen">
@@ -3049,6 +3051,23 @@ document.addEventListener('click', async (e) => {
           render();
         }
       });
+      break;
+    case 'exportMyData':
+      try {
+        const data = await quad.myDataExport();
+        const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+        const link = document.createElement('a');
+        link.href = url; link.download = 'echoecho-my-data.json';
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      } catch (err) { toast(explain(err), 'bad'); }
+      break;
+    case 'askDeletion':
+      if (!confirm('Ask ECHO ECHO to delete your account? Nothing changes yet: a person reviews this and tells you what was deleted and what must be kept.')) break;
+      try {
+        await quad.requestDeletion();
+        toast('Request sent. Your account is unchanged for now.');
+      } catch (err) { toast(explain(err), 'bad'); }
       break;
     case 'startLocation':
       positionShare?.begin();

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { db, owner, userWith, signInAs, totp, lastMailTo, PASSWORD, watchProblems, vendor } from './helpers.mjs';
+import { db, owner, userWith, signInAs, totp, lastMailTo, PASSWORD, watchProblems, vendor, openAdmin } from './helpers.mjs';
 
 const uniq = () => `${Date.now() % 1000000}`;
 
@@ -11,7 +11,7 @@ test('employee invitation, in a browser: link, code, review, password, authentic
   const email = `hire.${uniq()}@example.org`;
 
   /* The owner invites through the real Access Management screen. */
-  await page.goto('/admin/#admins');
+  await openAdmin(page, 'admins');
   await page.getByRole('button', { name: 'Invite administrator' }).click();
   await page.locator('input[name=name]').fill('Browser Hire');
   await page.locator('input[name=email]').fill(email);
@@ -77,21 +77,24 @@ test('sessions screen: last activity and device, one session ended, no token in 
   const problems = watchProblems(page);
   const o = await owner();
   await signInAs(context, o.id);
-  const a = await userWith({ name: 'Session Person', roles: ['platform_admin'], email: `sess.${uniq()}@stu.upes.ac.in`, permissions: ['students.view'] });
+  const personName = `Session Person ${uniq()}`;
+  const a = await userWith({ name: personName, roles: ['platform_admin'], email: `sess.${uniq()}@stu.upes.ac.in`, permissions: ['students.view'] });
   const other = await browser.newContext({ userAgent: 'Mozilla/5.0 (Linux; Android 14) Chrome/120.0 Mobile Safari/537.36' });
   await signInAs(other, a.id);
   await db.query(`UPDATE session SET user_agent = 'Mozilla/5.0 (Linux; Android 14) Chrome/120.0 Mobile Safari/537.36', last_seen_at = now() WHERE user_id = $1`, [a.id]);
   const theirs = await other.newPage();
-  await theirs.goto('/admin/#users');
+  await openAdmin(theirs, 'users');
   await expect(theirs.locator('.cc-frame')).toBeVisible();
 
-  await page.goto('/admin/#sessions');
-  const row = page.locator('section', { hasText: 'Session Person' });
-  await expect(row.getByText('Chrome on Android')).toBeVisible();
+  await openAdmin(page, 'sessions');
+  const row = page.locator('section', { hasText: personName });
+  await expect(row.getByText('Chrome on Android').first()).toBeVisible();
   const hashes = (await db.query(`SELECT token_hash FROM session WHERE user_id = $1`, [a.id])).rows;
   const html = await page.content();
   for (const h of hashes) expect(html).not.toContain(h.token_hash);
 
+  await db.query(`DELETE FROM session WHERE user_id = $1 AND token_hash <> (SELECT token_hash FROM session WHERE user_id = $1 ORDER BY issued_at DESC LIMIT 1)`, [a.id]);
+  await openAdmin(page, 'sessions');
   await row.getByRole('button', { name: 'End', exact: true }).click();
   await page.locator('.modalwrap input[name=reason]').fill('Lost the phone');
   await page.locator('.modalwrap button[type=submit]').click();
@@ -117,7 +120,7 @@ test('audit log screen shows a real privileged action', async ({ page, context }
   const o = await owner();
   await signInAs(context, o.id);
   await db.query(`INSERT INTO audit_log (actor_id, action, resource, outcome) VALUES ($1,'admin.invite.cancel','admin_invitation','ok')`, [o.id]);
-  await page.goto('/admin/#audit');
+  await openAdmin(page, 'audit');
   await expect(page.locator('.cc-frame')).toBeVisible();
   await expect(page.locator('table').first()).toBeVisible();
 });
@@ -135,7 +138,7 @@ test('live map: delivery.track sees a map; orders.view alone sees no position', 
   const tracker = await userWith({ name: 'Tracker', roles: ['platform_admin'], email: `track.${uniq()}@stu.upes.ac.in`, permissions: ['orders.view', 'delivery.track'] });
   await signInAs(context, tracker.id);
   const problems = watchProblems(page);
-  await page.goto('/admin/#deliveries');
+  await openAdmin(page, 'deliveries');
   await expect(page.locator('#cc-track-map')).toBeVisible();
   await expect(page.locator('#cc-track-note')).toContainText(/Live|Stale/);
   await expect(page.locator('#cc-track-note')).toContainText(/direct, not a route/);
@@ -146,7 +149,7 @@ test('live map: delivery.track sees a map; orders.view alone sees no position', 
   const p2 = await c2.newPage();
   const seen = [];
   p2.on('response', async (r) => { if (r.url().includes('/tracking')) seen.push(await r.text()); });
-  await p2.goto('/admin/#deliveries');
+  await openAdmin(p2, 'deliveries');
   await expect(p2.getByText('needs delivery.track').first()).toBeVisible();
   await expect(p2.locator('#cc-track-map')).toHaveCount(0);
   for (const body of seen) expect(body).not.toContain('77.9681');
@@ -157,7 +160,7 @@ test('live map: delivery.track sees a map; orders.view alone sees no position', 
 test('approvals screen: the owner can turn a policy on and sees the honest one-owner note', async ({ page, context }) => {
   const o = await owner();
   await signInAs(context, o.id);
-  await page.goto('/admin/#approvals');
+  await openAdmin(page, 'approvals');
   await expect(page.getByText(/second owner-grade person/)).toBeVisible();
   await expect(page.getByText('Archive a café')).toBeVisible();
 });
@@ -166,8 +169,8 @@ test('stale cafe form: the second editor is told and nothing is overwritten', as
   const o = await owner();
   await signInAs(context, o.id);
   const v = await vendor('Conflict Cafe');
-  await page.goto('/admin/#cafeterias');
-  await expect(page.getByText('Conflict Cafe')).toBeVisible();
+  await openAdmin(page, 'cafeterias');
+  await expect(page.getByRole('heading', { name: 'Conflict Cafe' }).first()).toBeVisible();
   const r = await page.evaluate(async ({ id, rev }) => {
     const send = (body) => fetch(`/api/vendors/${id}`, { method: 'PATCH', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const a = await send({ revision: rev, description: 'first' });
@@ -183,9 +186,8 @@ for (const [name, width] of [['phone', 390], ['tablet', 820], ['desktop', 1440]]
     await signInAs(context, o.id);
     await page.setViewportSize({ width, height: 900 });
     for (const route of ['overview', 'admins', 'sessions', 'deliveries', 'approvals', 'profile']) {
-      await page.goto(`/admin/#${route}`);
-      await expect(page.locator('.cc-frame')).toBeVisible();
-      await page.waitForTimeout(300);
+      await openAdmin(page, route);
+      await page.waitForTimeout(500);
       const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(over, `${route} at ${width}`).toBeLessThanOrEqual(1);
     }
@@ -204,10 +206,9 @@ test('accessibility: the new screens have no serious axe violations', async ({ p
   const o = await owner();
   await signInAs(context, o.id);
   for (const route of ['approvals', 'sessions']) {
-    await page.goto(`/admin/#${route}`);
-    await expect(page.locator('.cc-frame')).toBeVisible();
-    await page.waitForTimeout(400);
-    const r = await new AxeBuilder({ page }).include('#view, main, .cc-view').withTags(['wcag2a', 'wcag2aa']).analyze().catch(() => null);
-    if (r) expect(bad(r), route).toEqual([]);
+    await openAdmin(page, route);
+    await page.waitForTimeout(500);
+    const r = await new AxeBuilder({ page }).include('.cc-frame').withTags(['wcag2a', 'wcag2aa']).analyze();
+    expect(bad(r), route).toEqual([]);
   }
 });

@@ -91,4 +91,21 @@ export function watchProblems(page) {
   page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
   return problems;
 }
+/* A partner whose profile is complete and who has been approved. */
+export async function partnerReady(userId) {
+  const site = (await db.query(`SELECT id FROM campus_site ORDER BY created_at LIMIT 1`)).rows[0];
+  await db.query(`UPDATE app_user SET campus_site_id = $2, contact_phone = '+919999900003', student_status = 'approved' WHERE id = $1`, [userId, site?.id || null]);
+  await db.query(`INSERT INTO partner_profile (user_id, status) VALUES ($1,'approved') ON CONFLICT (user_id) DO UPDATE SET status = 'approved'`, [userId]);
+}
+
+/* Campus Control keeps its page out of the URL, so a journey opens a page the way
+   a person does. A missing nav entry fails here: that is the permission check. */
+export async function openAdmin(page, route) {
+  await page.goto('/admin/');
+  await page.locator('.cc-frame').waitFor();
+  const btn = page.locator(`.cc-navbtn[data-route=${route}]`);
+  await btn.waitFor({ state: 'attached' });
+  await btn.evaluate((b) => b.click());
+  await page.locator(`.cc-navbtn[data-route=${route}][aria-current=page]`).waitFor({ state: 'attached' });
+}
 export { scrypt };

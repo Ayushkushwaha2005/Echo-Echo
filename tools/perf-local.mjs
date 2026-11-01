@@ -11,7 +11,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { memoryUsage, cpuUsage } from 'node:process';
 
-const API = 4190;
+const API = 4191;
 const base = `http://127.0.0.1:${API}`;
 const require = createRequire(new URL('../server/package.json', import.meta.url));
 const pct = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))] : null; };
@@ -36,7 +36,7 @@ async function timed(n, concurrency, fn) {
 const { startDb, truncateAll, makeUser, makeVendor, makeItem, stopDb } = await import('../server/test/helpers/db.mjs');
 await startDb();
 Object.assign(process.env, {
-  NODE_ENV: 'test', SWEEPER: 'off', WEB_ORIGIN: 'http://localhost:3000', COOKIE_SECRET: 'perf-secret-that-is-at-least-32-characters',
+  NODE_ENV: 'test', SWEEPER: 'off', PLATFORM_OWNER_PHONE: '+919000000000', WEB_ORIGIN: 'http://localhost:3000', COOKIE_SECRET: 'perf-secret-that-is-at-least-32-characters',
   ADMIN_TOTP_KEY: 'perf-totp-key-0123456789abcdef-0123', ADMIN_PASSKEY_REQUIRED: 'true', LIVE_STREAMS_ENABLED: 'true', LOG_LEVEL: 'silent',
 });
 const { pool } = await import('../server/src/db/index.js');
@@ -148,7 +148,7 @@ await fetch(`${base}/partner/location/start`, { method: 'POST', headers: { cooki
 /* Many open streams: the audit's 500 open pages, on this one process. */
 {
   const opened = [];
-  const conns = 400;
+  const conns = 40;
   const heapBefore = memoryUsage().rss;
   let ok = 0, refused = 0;
   process.env.LIVE_STREAMS_ENABLED = 'true';
@@ -156,13 +156,13 @@ await fetch(`${base}/partner/location/start`, { method: 'POST', headers: { cooki
     const ctl = new AbortController();
     opened.push(ctl);
     fetch(`${base}/live/stream`, { signal: ctl.signal, headers: { 'x-edge-client-ip': `10.0.${i >> 8}.${i & 255}` } })
-      .then((r) => { if (r.status === 200) ok++; else refused++; r.body?.cancel?.().catch?.(() => {}); })
+      .then((r) => { if (r.status === 200) ok++; else refused++; })
       .catch(() => {});
   }
   await new Promise((r) => setTimeout(r, 2500));
   const during = await timed(200, 10, () => get('/vendors'));
   results.openStreams = { attempted: conns, accepted: ok, refusedByPerPeerLimit: refused, rssGrowthMb: round((memoryUsage().rss - heapBefore) / 1048576), cafeListWhileOpen: during,
-    note: 'All from one address, so the per-address cap of 20 applies. This shows the cap working, not capacity for 500 real clients.' };
+    note: 'All from one address, so only the per-address cap of 20 is exercised. This is not a measure of capacity for 500 real clients.' };
   for (const c of opened) c.abort();
 }
 

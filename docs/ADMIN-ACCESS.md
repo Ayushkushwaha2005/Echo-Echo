@@ -85,20 +85,44 @@ Campus Control. Narrow them from there.
 
 ## Inviting an administrator
 
-1. Owner: Administrators → **Invite administrator** → name, UPES email, role
-   ceiling, permissions → Save (passkey confirmation).
-2. The server stores the invitation **keyed by email**, with the one-time
-   code stored only as a salted hash, and emails the code via Resend. If email
-   cannot be sent, the code is shown to the owner once instead.
-3. The invitee signs in with that mailbox using the normal email code. Only
-   then — mailbox proven — does the invitation become their role, their
-   `admin_account` (status **invited**) and their passkey invite.
-4. They enter the invitation code and create a passkey. The account becomes
-   **active** and receives 10 recovery codes, shown once.
+The owner invites from Access Management with a name, any email address and the exact permissions. The
+employee gets a link, proves the mailbox with a code, reviews and accepts, sets a password and confirms an
+authenticator. Only that last step activates the account. See `docs/INVITATION-FLOW.md`.
 
-Invitations expire after `ADMIN_PASSKEY_INVITE_TTL_HOURS` (default 24), are
-single-use, allow 5 wrong attempts, and are never written to logs or the audit
-log. An expired or cancelled invitation grants nothing.
+## Permissions added in November 2026
+
+- `delivery.track`: exact positions on the live map. Nobody is migrated into it. Grant it deliberately.
+- `sessions.read`: other administrators' sessions and devices. Everyone holding `admins.view` was given it.
+- `reports.export`: order report downloads. Everyone holding `orders.view` was given it.
+
+Not done, because payments are frozen: splitting `finance.view` and `finance.manage` into payments,
+settlements, pricing, payouts and adjustments. When that work resumes, every holder of `finance.manage` should get
+all the new keys first, so nobody silently gains or loses power, and the owner can then narrow them. Finance
+reports do not check `reports.export` for the same reason.
+
+## Sessions
+
+Sessions show last activity and a device name. One session can be ended by its opaque handle, or all of them at
+once. Ending takes effect on the next request, and administrator sessions end after `ADMIN_IDLE_MINUTES` (60) idle.
+
+## Recovery
+
+An administrator creates recovery codes in My Profile: shown once, stored hashed, and replaced whenever a new
+set is made. On the sign-in screen, **Lost your authenticator?** takes the password plus one code and allows
+setting up a new authenticator, and nothing else. It opens no session, alerts every address on the account, and
+signs out every session. Five wrong codes lock recovery for an hour. An alert address in My Profile can also
+receive these alerts, ideally one that is not a student mailbox, and it can do nothing else.
+
+**The owner's identity is still `PLATFORM_OWNER_EMAIL`, a student mailbox.** Moving it to a non-student address is
+a server configuration change for the owner to make before graduation.
+
+## Approvals
+
+A non-owner's request for an action under an enabled policy queues on the Approvals page. The owner decides after
+confirming it is them. The database refuses self-decision and any change to the payload, and execution happens once,
+after re-checking current state. **With one owner, the owner's own actions run directly: there is no second person
+to check them, and independent approval needs another owner-grade person, which does not exist.** Only archiving a
+café is in the queue today, off by default. Payment actions were left out while payments are frozen.
 
 ## Lifecycle
 

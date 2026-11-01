@@ -38,6 +38,7 @@ import adminAccessRoutes from './routes/admin-access.js';
 import adminInvitationRoutes from './routes/admin-invitation.js';
 import adminRecoveryRoutes from './routes/admin-recovery.js';
 import approvalRoutes from './routes/approvals.js';
+import dataRequestRoutes from './routes/data-requests.js';
 import liveStreamRoutes from './routes/live-stream.js';
 import geodataRoutes from './routes/geodata.js';
 import adminOpsRoutes from './routes/admin-ops.js';
@@ -397,6 +398,7 @@ export function build() {
     await app.register(adminInvitationRoutes);
     await app.register(adminRecoveryRoutes);
     await app.register(approvalRoutes);
+    await app.register(dataRequestRoutes);
     await app.register(liveStreamRoutes);
     await app.register(geodataRoutes);
     await app.register(adminOpsRoutes);

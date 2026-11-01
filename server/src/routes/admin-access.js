@@ -97,7 +97,7 @@ const ADMIN_LIST_SQL = `
     LEFT JOIN LATERAL (SELECT array_agg(role ORDER BY role) AS roles FROM user_role x
                         WHERE x.user_id = u.id AND x.status = 'active'
                           AND x.role IN ('platform_owner','platform_admin','support')) r ON true
-   WHERE a.user_id IS NOT NULL OR r.roles IS NOT NULL`;
+   WHERE (a.user_id IS NOT NULL OR r.roles IS NOT NULL)`;
 
 export default async function adminAccessRoutes(app) {
   app.get('/admin/access/catalog', async (req) => {
