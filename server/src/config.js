@@ -193,8 +193,9 @@ export const PAYMENTS = {
     secretKey: env('CASHFREE_PG_SECRET_KEY'),
     apiVersion: env('CASHFREE_PG_API_VERSION', '2026-01-01'),
     returnUrl: env('CASHFREE_PG_RETURN_URL'),
-    /* Cashfree checkout method codes: cc credit card, dc debit card, upi. */
-    paymentMethods: env('CASHFREE_PG_PAYMENT_METHODS', 'cc,dc,upi'),
+    /* Cashfree checkout method codes: cc credit card, dc debit card, upi,
+       nb net banking. */
+    paymentMethods: env('CASHFREE_PG_PAYMENT_METHODS', 'cc,dc,upi,nb'),
     /* Where Cashfree sends this order's webhooks. Set per order so the
        endpoint is exactly the one this deployment verifies, whatever the
        dashboard says. Must be https. */

@@ -174,7 +174,7 @@ const TERMS_115 = { platform_fee_flat_paise: 1000, delivery_fee_paise: 500, deli
 
 /* ======================= collection and allocation ====================== */
 
-test('₹100 food + ₹5 delivery + ₹10 platform fee charges exactly ₹115, UPI and cards only', async () => {
+test('₹100 food + ₹5 delivery + ₹10 platform fee charges exactly ₹115, UPI, cards and net banking only', async () => {
   await setTerms(pool, TERMS_115);
   const { orderId, intent } = await paidOrder();
   assert.equal(intent.amountPaise, 11500);
@@ -182,7 +182,7 @@ test('₹100 food + ₹5 delivery + ₹10 platform fee charges exactly ₹115, U
                      platform: intent.breakdown.platformFeePaise }, { food: 10000, delivery: 500, platform: 1000 });
   const create = calls.find((c) => c.url === '/pg/orders');
   assert.equal(create.body.order_amount, '115.00');
-  assert.equal(create.body.order_meta.payment_methods, 'cc,dc,upi');
+  assert.equal(create.body.order_meta.payment_methods, 'cc,dc,upi,nb');
   assert.equal(create.body.order_splits, undefined, 'no Easy Split unless Cashfree activated it');
   const o = (await pool.query(`SELECT state FROM food_order WHERE id=$1`, [orderId])).rows[0];
   assert.equal(o.state, 'confirmed');
