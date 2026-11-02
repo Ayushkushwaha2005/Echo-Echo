@@ -4,7 +4,8 @@ Two ripples and a teal core that together read as an E, drawn only from strokes,
 
 | File | Use |
 |---|---|
-| `echoecho-icon-on-purple-256.png` | Cashfree checkout logo (transparent, white and mint, for the purple header) |
+| `echoecho-icon-checkout-256.png` | Cashfree checkout logo: heavier strokes and almost no padding for its small header slot |
+| `echoecho-icon-on-purple-256.png` | Finer white and mint icon for purple backgrounds at larger sizes |
 | `echoecho-icon-light-256.png` | Icon for light backgrounds (nearly invisible on the purple Cashfree header) |
 | `echoecho-icon-light-1024.png`, `echoecho-icon-dark-*.png` | Icon for light or dark backgrounds |
 | `echoecho-tile-*.png` | Solid tile for any background |
