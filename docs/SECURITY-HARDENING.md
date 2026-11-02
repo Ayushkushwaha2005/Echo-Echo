@@ -1,7 +1,6 @@
 # Security hardening
 
-Status of each finding in section 9 of the 31 Oct 2026 audit, on branch
-`non-payment-remediation`. **Nothing here is deployed.** It describes the branch, tested locally.
+Status of each finding in section 9 of the 31 Oct 2026 audit. Deployed in `26c9c99` on 3 Nov 2026 IST.
 
 | ID | Status | What was done | What remains |
 |---|---|---|---|
@@ -23,7 +22,7 @@ Status of each finding in section 9 of the 31 Oct 2026 audit, on branch
 | S16 Image re-encoding | COMPLETE | Decoded and rebuilt server-side with `sharp` | Adds a native dependency: check the production image builds |
 | S17 Request ids | COMPLETE | Strict format, otherwise generated | |
 | S18 Session timeout | COMPLETE | 60 idle minutes, `last_seen_at` per session | |
-| S19 Auto-deploy mismatch | BLOCKED | Confirmed on 2 Nov 2026: Render reports `autoDeploy: yes`, trigger `commit`. Last 5 deploys were `api` | The change was refused by session permission controls. Owner turns it off in the dashboard |
+| S19 Auto-deploy mismatch | COMPLETE | Turned off in the Render dashboard on 3 Nov 2026; the API reports `autoDeploy: no` | Keep it off, so every deploy passes CI and the migration gate |
 
 ## S5: replacing the authenticator (owner only)
 

@@ -95,8 +95,6 @@ force pushes. It leaves administrators able to override in an emergency.
 
 ## Render auto-deploy (S19)
 
-`render.yaml` says `autoDeployTrigger: "off"`. Read from the Render API on 2 Nov 2026: `autoDeploy: yes`,
-`autoDeployTrigger: commit`. The last five deploys were all `api`, so CI and the migration gate have not been
-bypassed in that sample, but nothing prevents it. Changing the setting through the API was refused by the
-permission controls of the session doing this work. The owner should turn it off in the Render dashboard under
-Settings → Auto-Deploy, before the next merge to `main`.
+Off, matching `render.yaml`: changed in the Render dashboard on 3 Nov 2026, and the API reports `autoDeploy: no`.
+Keep it off. "On Commit" deploys before CI, and "After CI Checks Pass" still skips the migration gate in
+`deploy.yml` and deploys each commit twice. Every deploy goes through `deploy.yml`.

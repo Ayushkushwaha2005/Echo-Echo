@@ -1,8 +1,8 @@
 # Non-payment remediation report
 
-Branch `non-payment-remediation` (PR #27), based on production `main` at `8880959`. See the PR for whether it has been merged or deployed.
+PR #27 was merged as `26c9c99` and deployed on 3 Nov 2026 IST. Migrations 036 to 042 were applied first. Production reports that commit and 42 migrations.
 
-COMPLETE means implemented and verified by the tests named, locally and in CI. **It does not mean proven on production or on a real phone.** Where a remainder exists only because payments are frozen, the row says so.
+COMPLETE means implemented and verified by the tests named, locally and in CI. **It does not mean every signed-in workflow has been exercised on production, or that anything was tested on a real phone.** Production was checked from outside and with read-only database counts; see `TEST-RESULTS.md`. Where a remainder exists only because payments are frozen, the row says so.
 
 ## Audit matrix
 
@@ -35,16 +35,16 @@ COMPLETE means implemented and verified by the tests named, locally and in CI. *
 | S7 Branch protection | BLOCKED | `main` confirmed unprotected; file ready | Owner runs the command, because a security setting is not something this work may change |
 | S8 Transactional audit | PARTIAL | 44 privileged routes commit with their audit row, proved by failing the audit log | Finance, wallet, payment, refund and deposit routes are frozen |
 | S9 | COMPLETE | As 4C | |
-| S10 DB roles | PARTIAL | `deploy/db-roles.sql`, `db-roles` (3) | Owner: changes the production connection string |
+| S10 DB roles | PARTIAL | `deploy/db-roles.sql`, `db-roles` (3). Production confirmed: the app connects as the table owner, not a superuser | Owner: changes the production connection string |
 | S11 Secrets | BLOCKED | Inventory, gitignored, history scan | Owner: password manager; `server/.env` must not point at production |
 | S12 Rate limiting | COMPLETE | `remediation`, `edge-limit`; `EDGE_CLIENT_IP_HEADER` confirmed set on Render | |
-| S13 Passkey path | PARTIAL | Gone from the invitation flow | Removal is the release after this, once production is confirmed to hold no passkey in use |
+| S13 Passkey path | PARTIAL | Gone from the invitation flow. Production holds 0 passkeys, read 3 Nov 2026 | Removal is a later release, once this one is stable |
 | S14 `/ready` | COMPLETE | `api`, `remediation`; migration gate still reads what it needs | Address stays in Git history |
 | S15 Dependencies | COMPLETE | `npm audit` 0 | |
 | S16 Uploads | COMPLETE | `remediation`, `trust`, `storage`; `sharp` proved inside the production image in CI | |
 | S17 Request IDs | COMPLETE | `remediation` | |
 | S18 Timeout | COMPLETE | As 2C | |
-| S19 Auto-deploy | BLOCKED | Read 2 Nov 2026: `autoDeploy: yes`, trigger `commit`; last 5 deploys `api`. The change was refused by session permission controls | Owner: Render dashboard, Settings, Auto-Deploy |
+| S19 Auto-deploy | COMPLETE | Turned off in the Render dashboard on 3 Nov 2026; the API reports `autoDeploy: no`, and this release deployed through `deploy.yml` | Keep it off: "After CI Checks Pass" would still skip the migration gate and deploy each commit twice |
 | 6A Image attribution | BLOCKED | 78 of 80 licences match their source page; 2 rawpixel pages refuse automated reads. No credit invented | Owner: replace photos, or `git revert 849d485`, which undoes their earlier removal of the credits |
 | 6B Logo | BLOCKED | `LOGO-ASSESSMENT.md`: no provenance in the file; hourglass symbol and character closely resemble *Ben 10* | Owner: new artwork; trademark lawyer |
 | 6C Privacy and DPDP | PARTIAL | Fuller export; request lifecycle, admin screen and retention list, `audit-completion`, browser | Lawyer: notice and retention periods. Nothing is erased until then |
@@ -54,7 +54,7 @@ COMPLETE means implemented and verified by the tests named, locally and in CI. *
 | 7D Database recovery | COMPLETE | CI: upgrade, timed dump and restore, app starts on the restored database, previous release runs on the new schema. Nightly drill now starts the app too | Point-in-time restore has never been drilled |
 | 7E Browser tests | COMPLETE | Journeys in CI on every push, listed in `TEST-RESULTS.md` | |
 
-**Totals: 45 findings. 27 complete (2 of them for the non-payment part only), 9 partial, 9 blocked, 0 not started.** Of the 9 partial, S3, S6 and S8 wait only on the payment freeze; S4, S10, S13, 6C, 7B and 7C need the owner, a lawyer or real hosting.
+**Totals: 45 findings. 28 complete (2 of them for the non-payment part only), 9 partial, 8 blocked, 0 not started.** Of the 9 partial, S3, S6 and S8 wait only on the payment freeze; S4, S10, S13, 6C, 7B and 7C need the owner, a lawyer or real hosting.
 
 ## Migrations
 
