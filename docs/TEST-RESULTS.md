@@ -16,6 +16,26 @@ Local runs were spoiled twice. On 2 Nov 2026 a second checkout's test suite shar
 
 One journey (lost authenticator) failed in two CI runs and passed in one. The cause was the test: the recovery screen loads on demand, so it sometimes filled in the sign-in form underneath and then sent a blank email and password. It now waits for the recovery screen.
 
+## Production checks after the release
+
+`26c9c99`, deployed 3 Nov 2026 IST. Signed out or read-only: no order, payment or other write was made.
+
+| Check | Result |
+|---|---|
+| `/health` | Reports `26c9c99` |
+| `/ready` | Ready, 42 migrations, none pending; provider detail no longer public |
+| `tools/live-check.mjs` in `deploy.yml` | Every check passed |
+| Database, read-only | 42 migrations, one active owner matching configuration, 0 orders |
+| New routes signed out | 401 on data requests, approvals, data export, restore, location reports and others |
+| Streams | 204: off, as intended |
+| Forged request id | Replaced by a generated one |
+| CSP | Enforced on Campus Control and Counter; report-only on the student site. An injected script did not run |
+| Real browser, signed out | Student home, cafes, a menu (24 items), sign-in, Campus Control sign-in, a used invitation link, Counter: no blocked script, crash or server error, no sideways scroll |
+| Render logs since deploy | No error lines |
+| Payment code | Unchanged from `4abff7a`, by diff |
+
+**Not checked on production:** any signed-in workflow, payments and webhooks in use, and delivery from offer to handoff, which needs a real order.
+
 ## Requested coverage
 
 | # | Requested | Status | Where |
