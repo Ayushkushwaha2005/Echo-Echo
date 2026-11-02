@@ -33,45 +33,7 @@ export async function platformRolesOf(userId, { allowInvited = true } = {}) {
 export const activeCredentialCount = async (userId) =>
   (await one(`SELECT count(*)::int n FROM webauthn_credential WHERE user_id = $1 AND revoked_at IS NULL`, [userId])).n;
 
-/* ---------- invitations to a mailbox not yet proven ------------------------ */
-export function newInviteSecret() {
-  const code = gen(3, 4);
-  const salt = randomBytes(12).toString('hex');
-  return { code, salt, codeHash: hash(code, salt) };
-}
-
-/* Called inside the email-code sign-in transaction, after the mailbox was
-   proven. Turns a live invitation into the role, the admin_account row and
-   the one-time passkey invite (same code, same expiry). */
-export async function acceptPendingInvitation(c, userId, email) {
-  const inv = (await c.query(
-    `SELECT * FROM admin_invitation WHERE email = $1 AND accepted_at IS NULL AND revoked_at IS NULL
-        AND expires_at > now() FOR UPDATE`, [email])).rows[0];
-  if (!inv) return null;
-  const owner = (await c.query(`SELECT 1 FROM user_role WHERE user_id = $1 AND role = 'platform_owner' AND status = 'active'`, [userId])).rows[0];
-  if (owner) return null;
-  await c.query(
-    `INSERT INTO user_role (user_id, role, granted_by, granted_via) VALUES ($1,$2,$3,'api')
-     ON CONFLICT (user_id, role, COALESCE(vendor_id,'00000000-0000-0000-0000-000000000000'::uuid))
-     DO UPDATE SET status = 'active', revoked_at = NULL, granted_by = $3, granted_at = now()`,
-    [userId, inv.role, inv.invited_by]);
-  await c.query(
-    `INSERT INTO admin_account (user_id, status, permissions, display_name, invited_by, invited_at,
-                                invite_email_sent_at, permissions_updated_at, permissions_updated_by)
-     VALUES ($1,'invited',$2,$3,$4,$5,$6, now(), $4)
-     ON CONFLICT (user_id) DO UPDATE SET status = 'invited', permissions = $2, display_name = $3, invited_by = $4,
-            invited_at = $5, invite_email_sent_at = $6, revoked_at = NULL, suspended_at = NULL, status_reason = NULL,
-            permissions_updated_at = now(), permissions_updated_by = $4, updated_at = now()`,
-    [userId, inv.permissions, inv.name, inv.invited_by, inv.created_at, inv.email_sent_at]);
-  await c.query(`UPDATE admin_passkey_invite SET revoked_at = now()
-                  WHERE user_id = $1 AND consumed_at IS NULL AND revoked_at IS NULL`, [userId]);
-  await c.query(
-    `INSERT INTO admin_passkey_invite (user_id, code_hash, salt, issued_by, expires_at) VALUES ($1,$2,$3,$4,$5)`,
-    [userId, inv.code_hash, inv.salt, inv.invited_by, inv.expires_at]);
-  await c.query(`UPDATE admin_invitation SET accepted_at = now(), accepted_user_id = $2 WHERE id = $1`, [inv.id, userId]);
-  return inv;
-}
-
+/* ---------- passkey invites (retired path, kept for the server command) ---- */
 /* ---------- invites -------------------------------------------------------- */
 export async function issueInvite(userId, { issuedBy = null } = {}) {
   const u = await one(`SELECT id, name, student_email, phone, status FROM app_user WHERE id = $1`, [userId]);

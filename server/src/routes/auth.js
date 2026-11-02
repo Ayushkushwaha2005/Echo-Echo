@@ -8,13 +8,13 @@
    verification and the landing surface is derived from it server-side, so
    "select Admin and get admin" is not expressible on any request here.
    ========================================================================== */
+import { stopSharing } from '../services/partner-location.js';
 import { issueSession, revokeSession, cookieOptions } from '../auth/session.js';
 import { landingSurface, SURFACE_ROLES, Forbidden, HttpError, verificationView, isPlatformRole } from '../auth/rbac.js';
 import { q, one, tx } from '../db/index.js';
 import { SESSION, PLATFORM_OWNER, providerStatus, RATE_LIMITS, STUDENT_EMAIL, ADMIN } from '../config.js';
 import { audit } from '../audit.js';
 import { flag } from '../services/flags.js';
-import { acceptPendingInvitation } from '../services/admin-credentials.js';
 import { profileOf, validateMobile } from '../services/profile.js';
 import {
   normaliseStudentEmail, sendStudentEmailCode, verifyStudentEmailCode, recordMailboxProof,
@@ -99,9 +99,6 @@ export default async function authRoutes(app) {
       if (u.status !== 'active') return { user: u, created, proof: { before: u.student_status, after: u.student_status } };
       const proof = await recordMailboxProof(c, u.id, email);
       await grantConfiguredAdminRoles(c, u.id, email);
-      /* An owner's invitation to this mailbox takes effect only now that the
-         mailbox is proven. It grants nothing usable until a passkey exists. */
-      await acceptPendingInvitation(c, u.id, email);
       u = (await c.query(`SELECT * FROM app_user WHERE id = $1`, [u.id])).rows[0];
       return { user: u, created, proof };
     });
@@ -164,6 +161,8 @@ export default async function authRoutes(app) {
   app.post('/auth/otp/verify', phoneGone);
 
   app.post('/auth/logout', async (req, reply) => {
+    /* Signing out ends any position sharing with it. */
+    if (req.actor?.id) await stopSharing(req.actor.id, 'sign_out').catch(() => {});
     await revokeSession(req.cookies?.[SESSION.cookieName]);
     reply.clearCookie(SESSION.cookieName, { path: '/' });
     await audit(req, { action: 'auth.logout', outcome: 'ok' });

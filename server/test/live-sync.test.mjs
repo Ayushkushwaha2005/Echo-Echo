@@ -49,7 +49,7 @@ test('each stamp moves with its own records, and only then', async () => {
   const c = await as(owner);
 
   const s0 = await stamps(c);
-  assert.deepEqual(Object.keys(s0.stamps).sort(), ['cafes', 'menu', 'orders', 'partners', 'site', 'users']);
+  assert.deepEqual(Object.keys(s0.stamps).sort(), ['cafes', 'incidents', 'locations', 'menu', 'orders', 'partners', 'reviews', 'site', 'support', 'users']);
   assert.ok(!Number.isNaN(Date.parse(s0.at)));
   assert.deepEqual((await stamps(c)).stamps, s0.stamps, 'nothing changed: nothing moves');
 

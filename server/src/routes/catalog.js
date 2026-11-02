@@ -20,7 +20,8 @@ const withStatus = (v, now = new Date()) => {
 };
 import { q, one, tx } from '../db/index.js';
 import { authorize, can, BadRequest, NotFound, HttpError } from '../auth/rbac.js';
-import { audit } from '../audit.js';
+import { audit, auditTx } from '../audit.js';
+import { needsApproval, requestApproval } from '../services/approvals.js';
 import { removeImage } from '../services/storage.js';
 
 /* The owning vendor of a resource is always re-read from the database.
@@ -41,6 +42,18 @@ const RATING = `
         '5', count(*) FILTER (WHERE stars = 5)))
      FROM review r WHERE `;
 
+/* A form that names the revision it loaded is refused if the record has moved
+   on. Instant actions (open, close, sold out) send none and never conflict. */
+function assertRevision(sent, current) {
+  if (sent === undefined || sent === null) return;
+  if (Number(sent) !== current) {
+    throw new HttpError(409, 'stale_edit', 'Someone else changed this while you were editing',
+      `This form is on revision ${sent}; the current one is ${current}. Reload to see their change. Nothing was saved.`);
+  }
+}
+/* Who the change_event and version-history triggers record. Local to the transaction. */
+const setActor = (c, req) => c.query(`SELECT set_config('app.actor_id', $1, true)`, [req.actor?.id || '']);
+
 export default async function catalogRoutes(app) {
   /* ---------- vendors ---------------------------------------------------- */
   app.get('/vendors', async (req) => {
@@ -51,7 +64,7 @@ export default async function catalogRoutes(app) {
        not in service lists its outlets with ordering closed. */
     const campusId = req.query?.campusId || null;
     const { rows } = await q(
-      `SELECT v.id, v.slug, v.name, v.kind, v.description, v.photo_asset,
+      `SELECT v.id, v.revision, v.slug, v.name, v.kind, v.description, v.photo_asset,
               v.campus_node_id, v.opens_at, v.closes_at, v.open_days, v.is_open, v.accepting,
               v.delivery_enabled, v.prep_minutes, v.active, v.campus_site_id,
               cs.name AS campus_name, cs.service_status AS campus_service_status,
@@ -72,7 +85,7 @@ export default async function catalogRoutes(app) {
       req.actor.vendorIds.includes(v.id) ||
       can(req.actor, 'menu.read'));
     const { rows } = await q(
-      `SELECT i.id, i.name, i.description, i.price_paise, i.veg, i.prep_minutes,
+      `SELECT i.id, i.revision, i.name, i.description, i.price_paise, i.veg, i.prep_minutes,
               i.tags, i.aliases, i.available, i.active, i.photo_asset,
               i.category_id, c.name AS category,
               ${RATING} r.item_id = i.id AND NOT r.hidden) AS rating
@@ -173,14 +186,31 @@ export default async function catalogRoutes(app) {
       map.campus_site_id = b.campusSiteId;
     }
 
+    /* Archiving queues if the owner turned that policy on and this is not the
+       owner: the frozen request runs later, after a decision, or not at all. */
+    if (b.active === false && await needsApproval(req.actor, 'vendor.archive')) {
+      const v = await one(`SELECT name FROM vendor WHERE id = $1`, [req.params.id]);
+      if (!v) throw NotFound('No such cafeteria');
+      const request = await requestApproval(req, {
+        actionType: 'vendor.archive', payload: { vendorId: req.params.id }, summary: `Archive ${v.name}`,
+        reason: b.reason, idempotencyKey: req.headers['idempotency-key'],
+      });
+      return { pendingApproval: true, requestId: request.id, status: request.status };
+    }
+
     const set = [], vals = [];
     for (const [k, v] of Object.entries(map)) {
       if (v !== undefined) { vals.push(v); set.push(`${k} = $${vals.length}`); }
     }
     if (!set.length) throw BadRequest('Nothing to update');
     vals.push(req.params.id);
-    const row = await one(`UPDATE vendor SET ${set.join(', ')} WHERE id = $${vals.length} RETURNING *`, vals);
-    if (!row) throw NotFound('No such cafeteria');
+    const row = await tx(async (c) => {
+      await setActor(c, req);
+      const cur = (await c.query(`SELECT revision FROM vendor WHERE id = $1 FOR UPDATE`, [req.params.id])).rows[0];
+      if (!cur) throw NotFound('No such cafeteria');
+      assertRevision(b.revision, cur.revision);
+      return (await c.query(`UPDATE vendor SET ${set.join(', ')} WHERE id = $${vals.length} RETURNING *`, vals)).rows[0];
+    });
     /* A replaced or removed café photo is deleted from storage. */
     if (oldPhoto && oldPhoto !== row.photo_asset) await removeImage(oldPhoto).catch(() => {});
     await audit(req, { action: 'vendor.update', resource: 'vendor', resourceId: row.id, outcome: 'ok',
@@ -225,8 +255,10 @@ export default async function catalogRoutes(app) {
     await assertCategoryOf(b.categoryId, vendorId);
 
     return tx(async (c) => {
+      await setActor(c, req);
       const cur = (await c.query(`SELECT * FROM menu_item WHERE id = $1 FOR UPDATE`, [req.params.id])).rows[0];
       if (!cur) throw NotFound('No such menu item');
+      assertRevision(b.revision, cur.revision);
 
       const map = { name: b.name, description: b.description, veg: b.veg,
                     prep_minutes: b.prepMinutes, tags: b.tags, aliases: b.aliases,
@@ -280,6 +312,141 @@ export default async function catalogRoutes(app) {
       await audit(req, { action: 'menu.delete', resource: 'menu_item', resourceId: cur.id,
                          outcome: 'ok', detail: { name: cur.name, vendor: vendorId } });
       return { deleted: true, id: cur.id };
+    });
+  });
+
+  /* ---------- bulk changes ---------------------------------------------------
+     Preview first: it changes nothing and reports every problem. Apply takes
+     the same list, re-validates it and writes all of it in one transaction, or
+     none of it, so one bad row cannot leave a half-updated menu live. */
+  async function checkBulk(c, vendorId, req, changes) {
+    if (!Array.isArray(changes) || !changes.length) throw BadRequest('List the items to change');
+    if (changes.length > 500) throw BadRequest('At most 500 items at a time');
+    const ids = changes.map((x) => String(x?.id ?? ''));
+    if (new Set(ids).size !== ids.length) throw BadRequest('The same item appears twice');
+    const { rows } = await c.query(`SELECT * FROM menu_item WHERE vendor_id = $1 AND id = ANY($2::uuid[]) FOR UPDATE`, [vendorId, ids]);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return changes.map((ch) => {
+      const cur = byId.get(String(ch?.id));
+      const problems = [];
+      const to = {};
+      if (!cur) return { id: ch?.id ?? null, problems: ['This item is not on this cafe\'s menu'], before: null, after: null };
+      if (ch.revision !== undefined && Number(ch.revision) !== cur.revision) problems.push('Someone else changed this item since you loaded it');
+      if (ch.price !== undefined) {
+        if (!can(req.actor, 'menu.price', { vendorId })) problems.push('You cannot change prices');
+        else {
+          try {
+            to.price_paise = toPaise(ch.price);
+          } catch (e) { problems.push(e.message); }
+        }
+      }
+      if (ch.available !== undefined) {
+        if (typeof ch.available !== 'boolean') problems.push('Availability must be yes or no');
+        else if (!can(req.actor, 'menu.availability', { vendorId })) problems.push('You cannot change availability');
+        else to.available = ch.available;
+      }
+      if (ch.name !== undefined) {
+        if (!String(ch.name).trim()) problems.push('A name cannot be empty');
+        else if (!can(req.actor, 'menu.update', { vendorId })) problems.push('You cannot rename items');
+        else to.name = String(ch.name).trim();
+      }
+      if (!Object.keys(to).length && !problems.length) problems.push('Nothing to change on this row');
+      const pick = (r) => ({ name: r.name, price_paise: r.price_paise, available: r.available });
+      return { id: cur.id, problems, before: pick(cur), after: { ...pick(cur), ...to }, to, oldPrice: cur.price_paise };
+    });
+  }
+  const bulkPublic = ({ to, oldPrice, ...r }) => r;
+
+  /* Anyone who can change anything on this menu may try; each row then checks
+     the exact capability it needs. */
+  const assertBulk = (req) => {
+    const v = { vendorId: req.params.id };
+    if (!['menu.update', 'menu.price', 'menu.availability'].some((cap) => can(req.actor, cap, v))) authorize(req.actor, 'menu.update', v);
+  };
+
+  app.post('/vendors/:id/menu/bulk/preview', async (req) => {
+    assertBulk(req);
+    const rows = await tx(async (c) => checkBulk(c, req.params.id, req, req.body?.changes));
+    return { ok: rows.every((r) => !r.problems.length), rows: rows.map(bulkPublic) };
+  });
+
+  app.post('/vendors/:id/menu/bulk/apply', async (req) => {
+    assertBulk(req);
+    return tx(async (c) => {
+      await setActor(c, req);
+      const rows = await checkBulk(c, req.params.id, req, req.body?.changes);
+      if (rows.some((r) => r.problems.length)) {
+        throw new HttpError(422, 'bulk_invalid', 'Nothing was changed: fix these rows first', rows.filter((r) => r.problems.length).map((r) => `${r.before?.name || r.id}: ${r.problems.join('; ')}`).join(' | '));
+      }
+      for (const r of rows) {
+        const set = [], vals = [r.id];
+        for (const [k, v] of Object.entries(r.to)) { vals.push(v); set.push(`${k} = $${vals.length}`); }
+        await c.query(`UPDATE menu_item SET ${set.join(', ')} WHERE id = $1`, vals);
+        if (r.to.price_paise !== undefined && r.to.price_paise !== r.oldPrice) {
+          await c.query(`INSERT INTO menu_price_history (item_id, old_paise, new_paise, changed_by) VALUES ($1,$2,$3,$4)`, [r.id, r.oldPrice, r.to.price_paise, req.actor.id]);
+        }
+      }
+      await auditTx(c, req, { action: 'menu.bulk', resource: 'vendor', resourceId: req.params.id, detail: { items: rows.length, priceChanges: rows.filter((r) => r.to.price_paise !== undefined).length } });
+      return { applied: rows.length };
+    });
+  });
+
+  /* What this item or cafe looked like at each saved revision, and who saved it. */
+  app.get('/catalog/:entity/:id/versions', async (req) => {
+    const entity = { vendor: 'vendor', menu: 'menu_item' }[req.params.entity];
+    if (!entity) throw BadRequest('Versions exist for vendor and menu');
+    const vendorId = entity === 'vendor' ? req.params.id : await vendorOfItem(req.params.id);
+    authorize(req.actor, entity === 'vendor' ? 'vendor.read' : 'menu.read', { vendorId });
+    const { rows } = await q(
+      `SELECT v.revision, v.snapshot, v.at, u.name AS actor_name FROM catalog_version v LEFT JOIN app_user u ON u.id = v.actor_id
+        WHERE v.entity = $1 AND v.entity_id = $2 ORDER BY v.revision DESC LIMIT 50`, [entity, req.params.id]);
+    return { versions: rows };
+  });
+
+  /* Puts a record back as it was at an earlier revision. This is a new edit, so it
+     gets its own revision and history row, and a form that is out of date is refused
+     like any other. Being archived or live is not restored: that has its own controls,
+     and archiving a cafe can need approval. */
+  const RESTORABLE = {
+    vendor: { table: 'vendor', fields: ['name', 'kind', 'description', 'prep_minutes', 'opens_at', 'closes_at', 'contact_phone', 'contact_public', 'photo_asset'] },
+    menu_item: { table: 'menu_item', fields: ['name', 'description', 'price_paise', 'veg', 'prep_minutes', 'tags', 'aliases', 'category_id', 'photo_asset'] },
+  };
+  app.post('/catalog/:entity/:id/restore', async (req) => {
+    const entity = { vendor: 'vendor', menu: 'menu_item' }[req.params.entity];
+    if (!entity) throw BadRequest('Only a cafe or a menu item can be restored');
+    const vendorId = entity === 'vendor' ? req.params.id : await vendorOfItem(req.params.id);
+    authorize(req.actor, entity === 'vendor' ? 'vendor.update' : 'menu.update', { vendorId });
+    const toRevision = Number(req.body?.toRevision);
+    if (!Number.isInteger(toRevision) || toRevision < 1) throw BadRequest('Say which revision to restore');
+    const { table, fields } = RESTORABLE[entity];
+    return tx(async (c) => {
+      await setActor(c, req);
+      const cur = (await c.query(`SELECT * FROM ${table} WHERE id = $1 FOR UPDATE`, [req.params.id])).rows[0];
+      if (!cur) throw NotFound('No such record');
+      assertRevision(req.body?.revision, cur.revision);
+      const version = (await c.query(
+        `SELECT snapshot FROM catalog_version WHERE entity = $1 AND entity_id = $2 AND revision = $3 ORDER BY id DESC LIMIT 1`,
+        [entity, req.params.id, toRevision])).rows[0];
+      if (!version) throw NotFound('No saved copy of that revision');
+      const present = fields.filter((f) => f in version.snapshot);
+      const was = (await c.query(`SELECT * FROM jsonb_populate_record(NULL::${table}, $1)`, [version.snapshot])).rows[0];
+      if (entity === 'menu_item' && was.price_paise !== cur.price_paise) authorize(req.actor, 'menu.price', { vendorId });
+      let row;
+      try {
+        row = (await c.query(
+          `UPDATE ${table} t SET ${present.map((f) => `${f} = r.${f}`).join(', ')}
+             FROM jsonb_populate_record(NULL::${table}, $2) r WHERE t.id = $1 RETURNING t.id, t.revision`,
+          [req.params.id, version.snapshot])).rows[0];
+      } catch (e) {
+        if (e.code === '23503') throw new HttpError(409, 'restore_reference_gone', 'That version points at a photo or category that no longer exists', 'Nothing was changed.');
+        throw e;
+      }
+      if (entity === 'menu_item' && was.price_paise !== cur.price_paise) {
+        await c.query(`INSERT INTO menu_price_history (item_id, old_paise, new_paise, changed_by) VALUES ($1,$2,$3,$4)`,
+          [cur.id, cur.price_paise, was.price_paise, req.actor.id]);
+      }
+      await auditTx(c, req, { action: 'catalog.restore', resource: table, resourceId: cur.id, detail: { fromRevision: cur.revision, toRevision, newRevision: row.revision } });
+      return { id: row.id, revision: row.revision, restoredFrom: toRevision };
     });
   });
 

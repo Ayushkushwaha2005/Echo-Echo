@@ -49,6 +49,19 @@
 .chat-person { display: flex; gap: 10px; align-items: center; padding: 8px; border-radius: 8px; cursor: pointer; }
 .chat-person:hover { background: var(--surface-2); }
 .chat-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* Loading, retrying and failure states: drawn in the list and thread panes, never over the page. */
+.chat-skel { display: grid; gap: 6px; padding: 12px 10px; }
+.chat-skel .skel { height: 12px; width: 70%; }
+.chat-skel .skel + .skel { height: 10px; width: 92%; opacity: .7; }
+.chat-msg-skel { width: 46%; min-height: 44px; }
+.chat-msg-skel .skel { display: block; height: 12px; width: 100%; margin: 8px 0; }
+.chat-note { margin: 0 0 6px; padding: 6px 8px; font-size: .8rem; color: var(--text-muted); border-radius: 8px; background: var(--surface-2); }
+.chat-note.is-warn { color: var(--warn); background: var(--warn-bg); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chat-state { display: grid; gap: 6px; justify-items: start; padding: 14px 10px; line-height: 1.45; }
+.chat-state span { color: var(--text-muted); font-size: .875rem; }
+.chat-state-offline b, .chat-state-timeout b, .chat-state-server b { color: var(--warn); }
+.chat-state-forbidden b, .chat-state-missing b, .chat-state-refused b, .chat-state-signed_out b { color: var(--danger); }
+.chat-pad { padding: 16px; margin: auto 0; }
 @media (max-width: 760px) {
   .chat { grid-template-columns: 1fr; height: calc(100vh - 220px); min-height: 420px; }
   .chat-list { border-right: 0; }

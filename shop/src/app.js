@@ -12,7 +12,7 @@
    API would refuse it anyway.
    ========================================================================== */
 import {
-  quad, session, gate, el, panel, toast, act, explain, rupees,
+  quad, session, gate, el, panel, claim, toast, act, explain, rupees,
   vendorVM, EmptyState, Loading, ErrorState, signOut, when, ORDER_LABEL,
 } from '../../packages/ui/runtime.js';
 import { esc, toggleTheme, restoreTheme, Mark, VegMark } from '../../packages/ui/kit.js';
@@ -139,7 +139,7 @@ function markNav() {
   root.querySelectorAll('.webnav-mobile [data-route]').forEach((b) =>
     b.setAttribute('aria-pressed', String(b.dataset.route === S.route)));
 }
-const route = () => { markNav(); return ({ orders: scrOrders, menu: scrMenu, outlet: scrOutlet,
+const route = () => { markNav(); claim(view()); return ({ orders: scrOrders, menu: scrMenu, outlet: scrOutlet,
                        finance: scrFinance, messages: scrMessages }[S.route] || scrOrders)(); };
 
 /* ========================================================================
@@ -240,6 +240,19 @@ function watchBoard() {
   }, 20_000);
 }
 
+/* Status and a first name for orders on their way. The counter never receives a
+   position: this endpoint does not have one to give. */
+async function fillDeliveryStatus() {
+  const slots = [...document.querySelectorAll('[data-delivery-status]')];
+  await Promise.all(slots.map(async (el) => {
+    const st = await quad.deliveryStatus(el.dataset.deliveryStatus).catch(() => null);
+    if (!st?.partnerFirstName || !el.isConnected) return;
+    el.textContent = st.deliveryStatus === 'on_the_way'
+      ? `${st.partnerFirstName} is on the way to the customer.`
+      : `${st.partnerFirstName} is coming for this order.`;
+  }));
+}
+
 async function scrOrders(quiet = false) {
   if (!quiet) watchBoard();
   setTitle('Orders', 'Paid orders only. An unpaid order never reaches this board.');
@@ -260,6 +273,7 @@ async function scrOrders(quiet = false) {
         </section>`;
     }).join('')}</div>`;
   }, { label: 'Loading orders', quiet });
+  fillDeliveryStatus();
 }
 
 const NEXT = { confirmed: ['preparing', 'Start preparing'], preparing: ['ready', 'Mark ready'] };
@@ -287,6 +301,8 @@ const ticket = (o) => {
              data-id="${o.id}" data-to="delivered" style="margin-top:8px">Handed to customer</button>` : ''}
       ${o.state === 'ready' && o.fulfilment === 'delivery'
         ? `<p class="t-xs faint" style="margin-top:8px">Waiting for a delivery partner to accept.</p>` : ''}
+      ${['assigned', 'picked_up'].includes(o.state) && o.fulfilment === 'delivery'
+        ? `<p class="t-xs" style="margin-top:8px" data-delivery-status="${o.id}">${o.state === 'picked_up' ? 'On the way to the customer.' : 'A partner is coming for this order.'}</p>` : ''}
       ${o.state === 'assigned' && o.fulfilment === 'delivery'
         ? `<button class="btn btn-primary btn-sm btn-block" data-act="pickupCode" data-id="${o.id}" data-code="${esc(o.code)}"
              style="margin-top:8px">Show pickup code</button>
@@ -569,6 +585,7 @@ const ACTIONS = {
         const file = form.querySelector('input[name=photo]').files[0];
         const photoAsset = file ? (await quad.uploadPhoto(file, 'food_photo')).id : undefined;
         return quad.updateItem(i.id, {
+          revision: i.revision,
           name: d.name, description: d.description, price: d.price,
           prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
           categoryId: d.categoryId || null,
@@ -654,5 +671,5 @@ function scrMessages() {
   head().innerHTML = '';
   const box = el('<div class="chat-root"></div>');
   view().replaceChildren(box);
-  mountChat(box, { quad, staff: false, toast, explain });
+  mountChat(box, { quad, staff: false, me: session.me?.user?.id, toast, explain });
 }

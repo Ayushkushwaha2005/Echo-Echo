@@ -60,14 +60,33 @@ const ALLOWED_BY_ROLE = {
   admin:    Object.keys(INCIDENT_CATEGORIES),
 };
 
+/* The policy in force, with its version number: 1 for the first ever
+   published, counting up with each new version. */
 export async function livePolicy(c = { query: q }) {
   return (await c.query(
-    `SELECT * FROM partner_deposit_policy WHERE effective_to IS NULL LIMIT 1`)).rows[0] || null;
+    `SELECT p.*, (SELECT count(*)::int FROM partner_deposit_policy x WHERE x.effective_from <= p.effective_from) AS version
+       FROM partner_deposit_policy p WHERE p.effective_to IS NULL LIMIT 1`)).rows[0] || null;
 }
-const shapePolicy = (p) => p && ({
-  id: p.id, amountPaise: p.amount_paise, disputeWindowHours: p.dispute_window_hours,
+export const shapePolicy = (p) => p && ({
+  id: p.id, version: p.version, amountPaise: p.amount_paise, disputeWindowHours: p.dispute_window_hours,
   terms: p.terms, effectiveFrom: p.effective_from,
 });
+
+/* What this person has accepted: the policy in force, and otherwise the
+   latest earlier version, which no longer counts for anything. */
+export async function consentOf(userId, policy) {
+  const current = policy && await one(
+    `SELECT accepted_at FROM partner_policy_consent WHERE user_id = $1 AND policy_id = $2`, [userId, policy.id]);
+  const earlier = current ? null : await one(
+    `SELECT k.accepted_at, (SELECT count(*)::int FROM partner_deposit_policy x WHERE x.effective_from <= d.effective_from) AS version
+       FROM partner_policy_consent k JOIN partner_deposit_policy d ON d.id = k.policy_id
+      WHERE k.user_id = $1 AND d.effective_to IS NOT NULL
+      ORDER BY d.effective_from DESC LIMIT 1`, [userId]);
+  return {
+    current: !!current, acceptedAt: current?.accepted_at || null,
+    earlier: earlier && { version: earlier.version, acceptedAt: earlier.accepted_at },
+  };
+}
 
 export const depositBalance = (partnerId) => balance(q, 'partner_deposit', { partnerId });
 
@@ -97,8 +116,7 @@ export async function refundBlockers(partnerId) {
 
 async function depositView(partnerId) {
   const policy = await livePolicy();
-  const consent = policy && await one(
-    `SELECT accepted_at FROM partner_policy_consent WHERE user_id = $1 AND policy_id = $2`, [partnerId, policy.id]);
+  const consent = await consentOf(partnerId, policy);
   const movements = (await q(
     `SELECT id, kind, amount_paise, method, external_reference, note, created_at
        FROM deposit_movement WHERE partner_id = $1 ORDER BY created_at DESC`, [partnerId])).rows;
@@ -116,7 +134,8 @@ async function depositView(partnerId) {
   const blockers = await refundBlockers(partnerId);
   return {
     policy: shapePolicy(policy),
-    consentedToLivePolicy: !!consent, consentedAt: consent?.accepted_at || null,
+    consentedToLivePolicy: consent.current, consentedAt: consent.acceptedAt,
+    earlierConsent: consent.earlier,
     requiredPaise: policy?.amount_paise || 0,
     balancePaise: bal,
     shortfallPaise: Math.max(0, (policy?.amount_paise || 0) - bal),
@@ -215,13 +234,50 @@ export default async function trustRoutes(app) {
     if (terms.length < 50) throw BadRequest('Write out the terms partners will agree to (at least 50 characters)');
     const row = await tx(async (c) => {
       await c.query(`UPDATE partner_deposit_policy SET effective_to = now() WHERE effective_to IS NULL`);
-      return (await c.query(
+      await c.query(
         `INSERT INTO partner_deposit_policy (amount_paise, dispute_window_hours, terms, created_by)
-         VALUES ($1,$2,$3,$4) RETURNING *`, [amount, window, terms, req.actor.id])).rows[0];
+         VALUES ($1,$2,$3,$4)`, [amount, window, terms, req.actor.id]);
+      return livePolicy(c);
     });
     await audit(req, { action: 'deposit.policy.publish', resource: 'partner_deposit_policy', resourceId: row.id,
                        outcome: 'ok', detail: { amountPaise: amount, disputeWindowHours: window } });
     return shapePolicy(row);
+  });
+
+  /* An applicant or partner accepting the version now in force, themselves.
+     A new version replaces every earlier acceptance: someone who applied
+     under version 1 cannot be approved until they accept version 2, and only
+     they can do it, signed in as themselves. The id they send is the one
+     they were shown, so a page left open across another change is refused
+     rather than counted as consent to text they never saw. */
+  app.post('/partner/policy/accept', async (req) => {
+    authorize(req.actor, 'partner.apply', { ownerId: req.actor?.id });
+    const profile = await one(`SELECT status FROM partner_profile WHERE user_id = $1`, [req.actor.id]);
+    if (!profile || !['pending', 'approved', 'suspended'].includes(profile.status)) {
+      throw Conflict('You have no partner application to accept the policy for',
+        'Apply to deliver: the application asks you to accept the policy.');
+    }
+    const policy = await livePolicy();
+    if (!policy) throw Conflict('No partner policy is published right now');
+    if (req.body?.acceptPolicyId !== policy.id) {
+      throw BadRequest('This is not the policy in force',
+        'The policy may have changed since you opened this page. Review it and accept again.');
+    }
+    const added = await one(
+      `INSERT INTO partner_policy_consent (user_id, policy_id, ip, user_agent) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (user_id, policy_id) DO NOTHING RETURNING accepted_at`,
+      [req.actor.id, policy.id, req.ip || null, String(req.headers['user-agent'] || '').slice(0, 300)]);
+    if (added) {
+      await audit(req, { action: 'partner.policy.accept', resource: 'partner_deposit_policy', resourceId: policy.id,
+                         outcome: 'ok', detail: { version: policy.version, partnerStatus: profile.status } });
+    }
+    const consent = await consentOf(req.actor.id, policy);
+    return {
+      policy: shapePolicy(policy), acceptedAt: consent.acceptedAt, alreadyAccepted: !added,
+      message: profile.status === 'pending'
+        ? `You accepted version ${policy.version} of the partner policy. Campus admin can now review your application.`
+        : `You accepted version ${policy.version} of the partner policy.`,
+    };
   });
 
   /* ======================= deposit: partner side ========================== */

@@ -41,7 +41,7 @@ test('GET /ready reports real database connectivity', async () => {
   assert.equal(r.status, 200);
   assert.equal(r.body.ready, true);
   assert.equal(r.body.checks.database.ok, true);
-  assert.ok(typeof r.body.checks.database.latencyMs === 'number');
+  assert.equal(r.body.checks.database.latencyMs, undefined, 'pool and timing detail is for administrators');
   assert.equal(r.body.checks.migrations.ok, true, 'every shipped migration is applied');
   assert.deepEqual(r.body.checks.migrations.pending, []);
 });
@@ -282,7 +282,7 @@ test('the owner CAN grant an admin, and that admin can grant a vendor owner', as
   const co = await as(owner);
   const g = await co.post('/admin/users/role', { phone: '9200000037', role: 'platform_admin', name: 'New Adm' });
   assert.equal(g.status, 200);
-  assert.equal(g.body.onboarding.method, 'phone_otp');
+  assert.equal(g.body.onboarding.method, 'invitation');
   /* No credential was invented. */
   assert.match(g.body.onboarding.note, /No credentials were generated/);
 

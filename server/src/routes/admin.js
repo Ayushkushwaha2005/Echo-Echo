@@ -7,8 +7,8 @@
    an admin cannot escalate themselves or a friend.
 
    Assigning a cafeteria owner does NOT create credentials. It creates (or
-   finds) the user by phone and grants the role; that person then signs in
-   with their own OTP like everybody else. There is no invented password.
+   finds) the user by phone and grants the role. They open Counter with an
+   enrolment code. Campus Control roles go through an invitation instead.
    ========================================================================== */
 import { q, one, tx } from '../db/index.js';
 import { authorize, assertGrantable, ROLES, BadRequest, NotFound, Conflict, Forbidden } from '../auth/rbac.js';
@@ -20,9 +20,50 @@ import { allFlags, setFlag } from '../services/flags.js';
 import { providerStatus } from '../config.js';
 import { audit } from '../audit.js';
 import { notifyAsync } from '../services/notify.js';
-import { livePolicy, depositBalance, partnerRating } from './trust.js';
+import { livePolicy, shapePolicy, consentOf, depositBalance, partnerRating } from './trust.js';
 import { readiness } from '../services/readiness.js';
 import { destinationChangeHold, payoutConfig } from '../services/wallet.js';
+
+/* A date as campus admin reads it. */
+const day = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+
+/* Every reason an application cannot be approved yet, in the order they are
+   checked, each with its next step. Empty means it can be approved. The
+   list Campus Control shows and the check on Approve are this one function,
+   so the screen never offers an approval the server will refuse. Nothing
+   here is assumed: verification, photo, consent to the version in force and
+   the deposit it requires are all read from the database. */
+export async function approvalBlockers(u, policy) {
+  const out = [];
+  if (u.student_status !== 'approved') {
+    out.push({ code: 'student_not_verified', error: 'This account is not a verified student',
+      detail: 'Approve their student ID verification first.' });
+  }
+  if (!u.partner_photo_asset) {
+    out.push({ code: 'no_photo', error: 'This applicant has no profile photo',
+      detail: 'Customers must be able to recognise their partner.' });
+  }
+  if (!policy) {
+    out.push({ code: 'no_policy', error: 'No partner policy is published', detail: 'Publish one under Incidents & deposits.' });
+    return out;
+  }
+  const consent = await consentOf(u.id, policy);
+  if (!consent.current) {
+    const now = `version ${policy.version}, in force since ${day(policy.effective_from)}`;
+    out.push({ code: 'policy_not_accepted', error: 'The applicant has not accepted the current partner policy',
+      detail: (consent.earlier
+        ? `They accepted version ${consent.earlier.version} on ${day(consent.earlier.acceptedAt)}; ${now}, replaced it. `
+        : `They have not accepted ${now}. `) +
+        'Only they can accept it, signed in to ECHO ECHO: Profile → Deliver with ECHO ECHO → Accept the updated policy. ' +
+        'This list updates by itself once they do.' });
+  }
+  const held = await depositBalance(u.id);
+  if (held < policy.amount_paise) {
+    out.push({ code: 'deposit_short', error: 'The security deposit has not been received',
+      detail: `Required: ${policy.amount_paise} paise; recorded: ${held} paise. Record the transfer first.` });
+  }
+  return out;
+}
 
 export default async function adminRoutes(app) {
   app.get('/admin/users', async (req) => {
@@ -122,15 +163,19 @@ export default async function adminRoutes(app) {
                                                 ...(explicit ? { permissions: explicit } : {}) } });
     return {
       ...out,
-      /* Honest about onboarding: no credential was created, because this
-         product has no passwords. They sign in with their own number. */
-      onboarding: {
-        method: 'phone_otp',
-        message: `${phone} can now sign in with an OTP and will land on ${
-          ['vendor_owner', 'vendor_staff'].includes(role) ? 'Counter' :
-          ['platform_admin', 'support'].includes(role) ? 'Campus Control' : 'the student site'}.`,
-        note: 'No credentials were generated. Notifying them is currently a manual step — ' +
-              'no notification provider is connected.',
+      /* Honest about onboarding: no credential was created here. */
+      onboarding: ['vendor_owner', 'vendor_staff'].includes(role) ? {
+        method: 'enrolment_code',
+        message: `${phone} holds this role now. They open Counter with an enrolment code from Cafés.`,
+        note: 'No credentials were generated, and they are not told automatically: give them the code yourself.',
+      } : ['platform_admin', 'support'].includes(role) ? {
+        method: 'invitation',
+        message: 'Administrators join through an invitation from Access Management, which is where their sign-in is set up.',
+        note: 'No credentials were generated.',
+      } : {
+        method: 'student_email',
+        message: `${phone} holds this role now and uses the student site with their university email code.`,
+        note: 'No credentials were generated.',
       },
     };
   });
@@ -196,13 +241,14 @@ export default async function adminRoutes(app) {
         ORDER BY p.applied_at`, [req.query?.status || 'pending']);
     const policy = await livePolicy();
     for (const p of rows) {
-      const u = await one(`SELECT partner_photo_asset, student_email FROM app_user WHERE id = $1`, [p.user_id]);
+      const u = await one(`SELECT id, student_status, partner_photo_asset, student_email FROM app_user WHERE id = $1`, [p.user_id]);
       p.has_photo = !!u.partner_photo_asset;
       p.student_email = u.student_email;
       p.deposit_paise = await depositBalance(p.user_id);
       p.deposit_required_paise = policy?.amount_paise || 0;
-      p.consented = !!(policy && await one(
-        `SELECT 1 FROM partner_policy_consent WHERE user_id = $1 AND policy_id = $2`, [p.user_id, policy.id]));
+      p.consent = await consentOf(p.user_id, policy);
+      p.consented = p.consent.current;
+      p.approval_blockers = p.status === 'pending' ? await approvalBlockers(u, policy) : [];
       p.rating = await partnerRating(p.user_id);
       /* Payout readiness, masked: the full number is held only by Cashfree. */
       const dest = await one(`SELECT id, partner_id, instrument, masked, verification_status, created_at
@@ -215,7 +261,7 @@ export default async function adminRoutes(app) {
       p.active_orders = (await one(`SELECT count(*)::int AS n FROM food_order WHERE partner_id = $1
                                       AND state IN ('assigned','picked_up')`, [p.user_id])).n;
     }
-    return { partners: rows, policy: policy && { id: policy.id, amountPaise: policy.amount_paise } };
+    return { partners: rows, policy: shapePolicy(policy) };
   });
 
   app.post('/admin/partners/:userId/decide', async (req) => {
@@ -230,27 +276,14 @@ export default async function adminRoutes(app) {
 
     const u = await one(`SELECT * FROM app_user WHERE id = $1`, [req.params.userId]);
     if (!u) throw NotFound('No such user');
-    if (decision === 'approve' && u.student_status !== 'approved') {
-      throw Conflict('This account is not a verified student',
-        'Approve their student ID verification first.');
-    }
     if (decision === 'approve') {
       /* Identification, consent to the terms in force, and the deposit those
          terms require - each read from the database, none assumed. */
-      if (!u.partner_photo_asset) {
-        throw Conflict('This applicant has no profile photo', 'Customers must be able to recognise their partner.');
-      }
-      const policy = await livePolicy();
-      const consent = policy && await one(
-        `SELECT 1 FROM partner_policy_consent WHERE user_id = $1 AND policy_id = $2`, [u.id, policy.id]);
-      if (!consent) {
-        throw Conflict('The applicant has not accepted the current partner policy',
-          'The policy changed after they applied. They must accept the current version.');
-      }
-      const held = await depositBalance(u.id);
-      if (held < policy.amount_paise) {
-        throw Conflict('The security deposit has not been received',
-          `Required: ${policy.amount_paise} paise; recorded: ${held} paise. Record the transfer first.`);
+      const [first] = await approvalBlockers(u, await livePolicy());
+      if (first) {
+        await audit(req, { action: 'partner.decide', resource: 'user', resourceId: u.id,
+                           outcome: 'denied', detail: { decision, blocked: first.code } });
+        throw Conflict(first.error, first.detail);
       }
     }
     const status = { approve: 'approved', reject: 'rejected', suspend: 'suspended' }[decision];

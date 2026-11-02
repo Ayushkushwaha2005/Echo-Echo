@@ -93,8 +93,9 @@ services:
         value: https://echo-echo-nu.vercel.app
 
       # ---- who owns the platform ------------------------------------------
+      # Set on the Render service. sync: false keeps the value already there.
       - key: PLATFORM_OWNER_EMAIL
-        value: ayush.17551@stu.upes.ac.in
+        sync: false
       - key: STUDENT_EMAIL_DOMAINS
         value: stu.upes.ac.in
       # Administrator powers always require a passkey. The boot guard refuses

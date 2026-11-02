@@ -484,17 +484,17 @@ export async function completePasswordReset({ token, password }) {
       WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()`, [challengeHash(token)]);
   if (!r) throw expired();
 
-  const u = await one(`SELECT student_email FROM app_user WHERE id = $1`, [r.user_id]);
+  const u = await one(`SELECT coalesce(staff_email, student_email) AS admin_email FROM app_user WHERE id = $1`, [r.user_id]);
   /* Validate BEFORE consuming, so a password that is merely too short does
      not burn the token and force the whole email round trip again. */
-  validatePassword(password, { email: u?.student_email || '' });
+  validatePassword(password, { email: u?.admin_email || '' });
 
   const spent = await one(
     `UPDATE admin_password_reset SET consumed_at = now()
       WHERE id = $1 AND consumed_at IS NULL RETURNING id`, [r.id]);
   if (!spent) throw expired();
 
-  await setPassword(r.user_id, password, { email: u?.student_email || '' });
+  await setPassword(r.user_id, password, { email: u?.admin_email || '' });
   /* Any half-finished sign-in that was riding on the OLD password dies here. */
   await clearLoginChallenges(null, r.user_id);
   return r.user_id;

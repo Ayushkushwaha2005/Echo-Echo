@@ -17,6 +17,8 @@
    the draft.
    ========================================================================== */
 import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/data/client.js';
+import { createPositionShare } from '../../packages/data/position-share.js';
+import { followChanges } from '../../packages/data/live.js';
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
 import { campusOption } from '../../packages/ui/campus-option.js';
 import { logo, mark, lockup } from '../../brand/logo.js';
@@ -203,8 +205,24 @@ function go(route, params = {}, { history: mode = 'push' } = {}) {
   if (route === 'tracking') {
     /* The order advances on the server. Re-read it, never simulate it. */
     poll = setInterval(() => { drop(`order:${S.params.id}`); render(); }, 15000);
+    followOrder(S.params.id);
   }
   render(true);
+}
+/* A faster nudge for an open tracking page, when streams are on. The server
+   checks the viewer and the order; the event carries no position, so the page
+   refetches through the usual route. Polling above carries on regardless. */
+let orderStream = null;
+async function followOrder(orderId) {
+  orderStream?.();
+  orderStream = null;
+  const out = await quad.trackingTicket(orderId).catch(() => null);
+  if (!out?.ticket || S.route !== 'tracking' || S.params.id !== orderId) return;
+  orderStream = followChanges(`/tracking/stream?ticket=${encodeURIComponent(out.ticket)}`, () => {
+    if (S.route !== 'tracking') { orderStream?.(); orderStream = null; return; }
+    drop(`order:${orderId}`); drop(`track:${orderId}`);
+    render();
+  }, { events: ['position', 'end'] });
 }
 function setSheet(name, params = {}) { S.sheet = name ? { name, ...params } : null; render(); }
 function toast(msg, tone = 'ok') {
@@ -775,19 +793,32 @@ const needVendors = () => {
 /* Cafés open and close by the clock, so a page left open at 7:59 or 5:59
    must change without a reload. Once a minute the server is asked again
    (it computes the status in campus time); the page re-renders only when
-   a café's status actually changed. */
-setInterval(async () => {
+   a café's status actually changed, or the open menu did. */
+const refreshCafes = async () => {
   if (document.hidden || S.sheet || !['home', 'cafes', 'welcome', 'menu'].includes(S.route) || S.campuses === null) return;
   try {
     const fresh = await loadVendors();
     const sig = (r) => (r?.vendors || []).map((v) => `${v.id}:${v.open_now}:${v.status?.line}`).join('|');
     const same = cache.vendors?.ok && sig(cache.vendors.v) === sig(fresh);
     keep('vendors', fresh);
-    if (same) return;
-    if (S.route === 'menu') drop(`menu:${S.params.caf}`);
+    /* An open menu follows its prices and sold-out items, not only the café's hours. */
+    let menuMoved = false;
+    if (S.route === 'menu' && S.params.caf) {
+      const key = `menu:${S.params.caf}`;
+      const menu = await quad.menu(S.params.caf);
+      menuMoved = !!cache[key]?.ok && JSON.stringify(cache[key].v.items) !== JSON.stringify(menu.items);
+      if (menuMoved) keep(key, menu);
+    }
+    if (same && !menuMoved) return;
+    if (!same && !menuMoved && S.route === 'menu') drop(`menu:${S.params.caf}`);
     render();
   } catch { /* offline: the next tick tries again */ }
-}, 60_000);
+};
+setInterval(refreshCafes, 60_000);
+/* The minute above is the fallback. When a stream is available, a change on the
+   server asks for the same refresh straight away. */
+let cafeNudge = null;
+followChanges('/live/stream', () => { clearTimeout(cafeNudge); cafeNudge = setTimeout(refreshCafes, 500); });
 const loadCampuses = () => quad.campuses().then((r) => { S.campuses = r.campuses; render(); return r; });
 
 function ScrSetup() {
@@ -1593,67 +1624,72 @@ const MapCard = (orderId, { self = false } = {}) => `
    Reported only while an order is actually in their care, and only to the
    order it belongs to. The server refuses it in any other state and drops
    whatever it held, so there is no way to accumulate a movement trail. */
-const SHARE_EVERY_MS = 20_000;
-let positionTimer = null;
 let sharingFor = null;
-/* What the partner is told about their own position: when it last reached
-   the server, or why the last attempt failed. */
-const share = { okAt: null, error: null };
-/* Called on every render of the partner screen; it only (re)starts when the
-   order being carried changes, so re-rendering does not re-send. */
+let positionShare = null;
+/* What the partner is told about their own position, from the sharing module. */
+let share = { status: 'idle', sentAt: null, error: null };
+let shareStatusShown = 'idle';
+/* Called on every render of the partner screen; it only acts when the order
+   being carried changes. It never starts sharing by itself: that is the
+   partner's choice, per delivery. */
 function shareWhileCarrying(orderId) {
   if (orderId === sharingFor) return;
   stopSharing();
   sharingFor = orderId;
   if (!orderId) return quad.clearLocation().catch(() => {});
-  sendPosition();
-  positionTimer = setInterval(sendPosition, SHARE_EVERY_MS);
+  positionShare = createPositionShare({
+    orderId,
+    start: (id) => quad.startSharing(id),
+    send: (body) => quad.sendPosition(body),
+    clear: (reason) => quad.clearLocation(reason),
+    onChange: (next) => {
+      share = next;
+      /* Re-render only when the message changes, never on every send: the
+         partner may be typing a handover code. */
+      const key = `${next.status}|${next.error?.code || ''}|${next.wakeLocked ? 1 : 0}`;
+      if (key !== shareStatusShown) { shareStatusShown = key; return render(); }
+      const at = document.querySelector('[data-share-at]');
+      if (at && next.sentAt) at.textContent = `, last sent at ${clockTime(next.sentAt)}`;
+    },
+  });
+  share = positionShare.state;
 }
 function stopSharing() {
-  if (positionTimer) clearInterval(positionTimer);
-  positionTimer = null; sharingFor = null; share.okAt = null; share.error = null;
-}
-async function sendPosition() {
-  const id = sharingFor;
-  if (!id) return;
-  const before = share.error?.code || '';
-  try {
-    await quad.reportLocation(id);
-    share.okAt = Date.now(); share.error = null;
-  } catch (e) {
-    share.error = { code: e.code || 'upload', message: e.message || 'Unknown error' };
-  }
-  if (sharingFor !== id) return;
-  /* Re-render only when the message changes (a failure appears or clears),
-     never on every success: the partner may be typing a handover code. */
-  if ((share.error?.code || '') !== before) return render();
-  const at = document.querySelector('[data-share-at]');
-  if (at && share.okAt) at.textContent = `, last sent at ${clockTime(share.okAt)}`;
+  positionShare?.end({ reason: 'partner' })?.catch?.(() => {});
+  positionShare = null; sharingFor = null;
+  share = { status: 'idle', sentAt: null, error: null }; shareStatusShown = 'idle';
 }
 const clockTime = (t) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
-/* A hidden page's timers are slowed and phones stop giving it positions;
-   coming back to the screen sends one straight away. */
-document.addEventListener('visibilitychange', () => { if (!document.hidden && sharingFor) sendPosition(); });
 
 /* What the partner reads about their own location sharing, on the card of
    the order they are carrying. It never claims more than a web page can do. */
 function ShareStatus() {
   const e = share.error;
-  if (e) {
-    const msg = e.code === 'denied'
-      ? 'Location is blocked for this site, so the student cannot see you on the map. Allow location for echoecho.tech in your browser’s site settings, then tap Try again.'
-      : e.code === 'unavailable'
-        ? 'Your phone could not get a location fix. Move near a window or outdoors. It tries again every 20 seconds.'
-        : e.code === 'offline'
-          ? 'Your location could not be sent: no internet connection. It tries again every 20 seconds.'
-          : `Your location could not be sent (${e.message}). It tries again every 20 seconds.`;
+  const status = share.status;
+  if (status === 'idle' || status === 'starting') {
+    return `<div class="campusnote">${Ico(I.pin, 18)}<div class="stack g2">
+      <p class="t-xs" style="color:var(--text-2)">Share your location so the student can see their food coming. It goes only to this student (after pickup) and to ECHO ECHO staff allowed to see the live map, only during this delivery, and no location history is kept.</p>
+      ${e ? `<p class="t-xs" role="alert" style="color:var(--text-2)">${esc(e.message)}</p>` : ''}
+      <button class="btn btn-primary btn-sm" style="align-self:flex-start" data-act="startLocation" ${status === 'starting' ? 'disabled' : ''}>${status === 'starting' ? 'Starting…' : 'Start sharing'}</button></div></div>`;
+  }
+  if (status === 'ended') {
+    return `<div class="campusnote">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">Location sharing has ended for this delivery.</p></div>`;
+  }
+  if (e || status === 'silent') {
+    const msg = e?.code === 'denied'
+      ? 'Location is blocked for this site, so the student cannot see you on the map. Allow location for echoecho.tech in your browser’s settings, then tap Start sharing.'
+      : e?.code === 'unsupported' ? 'This browser cannot share location.'
+      : e?.code === 'offline' ? 'Your location could not be sent: no internet connection. It carries on when you are back online.'
+      : e?.code === 'upload' ? `Your location could not be sent (${e.message}). It keeps trying.`
+      : 'Your phone is not giving a location fix. Move near a window or outdoors, and keep this screen open.';
     return `<div class="campusnote is-warn" role="alert">${Ico(I.warn, 18)}<div class="stack g2">
       <p class="t-xs" style="color:var(--text-2)">${esc(msg)}</p>
-      <button class="btn btn-secondary btn-sm" style="align-self:flex-start" data-act="retryLocation">Try again</button></div></div>`;
+      ${e?.code === 'denied' ? '<button class="btn btn-secondary btn-sm" style="align-self:flex-start" data-act="startLocation">Start sharing</button>' : ''}
+      ${status !== 'denied' ? '<button class="btn btn-ghost btn-sm" style="align-self:flex-start" data-act="stopLocation">Stop sharing</button>' : ''}</div></div>`;
   }
-  return `<div class="campusnote">${Ico(I.pin, 18)}<p class="t-xs" style="color:var(--text-2)">Sharing your location with the student
-    while you deliver<span data-share-at>${share.okAt ? `, last sent at ${clockTime(share.okAt)}` : ''}</span>.
-    Keep this screen open: sharing pauses when the browser is in the background or the phone is locked.</p></div>`;
+  return `<div class="campusnote"><span class="share-dot" aria-hidden="true"></span><div class="stack g2"><p class="t-xs" style="color:var(--text-2)"><b>Sharing your location</b> for this delivery<span data-share-at>${share.sentAt ? `, last sent at ${clockTime(share.sentAt)}` : ''}</span>.
+    Keep this screen open: ${share.wakeLocked ? 'it will stay on for now, and ' : ''}sharing pauses when the browser is in the background or the phone is locked. It stops by itself when the delivery ends.</p>
+    <button class="btn btn-ghost btn-sm" style="align-self:flex-start" data-act="stopLocation">Stop sharing</button></div></div>`;
 }
 
 /* Draws every map placeholder currently on screen. Called after each render;
@@ -1997,6 +2033,8 @@ function ScrProfile() {
       p?.status === 'approved' ? 'data-act="go" data-route="partner"' : 'data-act="go" data-route="join"'],
     [I.help, 'Help & report an issue', 'Reach a real person in campus admin', 'data-act="sheet" data-sheet="report"'],
     [I.moon, 'Appearance', 'Switch between light and dark', 'data-act="theme"'],
+    [I.receipt, 'Download my data', 'A copy of what ECHO ECHO holds about you', 'data-act="exportMyData"'],
+    [I.warn, 'Ask to delete my account', 'A person reviews this; some order records may have to be kept', 'data-act="askDeletion"'],
     [I.logout, 'Sign out', '', 'data-act="signout"'],
   ];
   return `<div class="screen">
@@ -2182,6 +2220,37 @@ function JoinApplication(me, cta = 'Apply to deliver') {
   </div>`;
 }
 
+/* A newer partner policy than the one accepted when applying. Campus admin
+   cannot approve the application until it is accepted, and only the
+   applicant can accept it, here. The server records the acceptance against
+   this account and the exact version shown, and refuses an older one. */
+const longDate = (t) => new Date(t).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+function PolicyUpdate() {
+  const d = need('deposit', () => quad.deposit());
+  if (!d) return Loading('Checking the partner policy');
+  if (!d.ok) return Problem(d.e);
+  const { policy, earlierConsent: was } = d.v;
+  if (!policy || d.v.consentedToLivePolicy) return '';
+  return `<div class="card card-pad stack g3" id="policy-update">
+    <div class="between">${Label('Action needed')}<span class="badge badge-warn">Policy not accepted</span></div>
+    <div class="t-h3">Accept the updated partner policy</div>
+    <p class="t-sm muted">${was ? `You accepted version ${was.version} on ${esc(longDate(was.acceptedAt))}. ` : ''}Version ${policy.version} has been in force since ${esc(longDate(policy.effectiveFrom))}. Campus admin can approve your application only after you read and accept it.</p>
+    <div class="sunken stack g2" style="padding:var(--s-3);max-height:260px;overflow:auto">
+      <div class="between"><span class="t-sm t-strong">Security deposit</span>
+        <span class="money t-sm">${policy.amountPaise ? money(policy.amountPaise) : 'None required'}</span></div>
+      <div class="between"><span class="t-xs muted">Time to dispute a proposed deduction</span>
+        <span class="t-xs">${Math.round(policy.disputeWindowHours / 24)} days</span></div>
+      <p class="t-xs" style="color:var(--text-2);white-space:pre-line">${esc(policy.terms)}</p>
+    </div>
+    <label class="row g2 t-sm" style="align-items:flex-start;cursor:pointer">
+      <input type="checkbox" id="accept-update" data-policy="${esc(policy.id)}" style="margin-top:3px">
+      <span>I have read version ${policy.version} of the delivery partner policy and I accept it.</span>
+    </label>
+    ${S.policyError ? `<p class="t-xs" style="color:var(--danger)">${esc(S.policyError)}</p>` : ''}
+    <button class="btn btn-primary btn-block" data-act="acceptPolicyUpdate">Accept version ${policy.version}</button>
+  </div>`;
+}
+
 /* Shown while an application waits: what deposit is still owed, if any. */
 function DepositDue() {
   const d = need('deposit', () => quad.deposit());
@@ -2221,7 +2290,7 @@ function ScrJoin() {
       action: () => JoinApplication(me) },
     pending: { badge: ['badge-warn', 'Application under review'], title: 'Application submitted',
       body: 'An administrator is reviewing your application. You will see it here, and in your notifications, once it is decided. You are not a delivery partner yet.',
-      action: () => `${DepositDue()}<button class="btn btn-secondary btn-block" data-act="refreshJoin">Check status</button>` },
+      action: () => `${PolicyUpdate()}${DepositDue()}<button class="btn btn-secondary btn-block" data-act="refreshJoin">Check status</button>` },
     approved: { badge: ['badge-open', 'Approved partner'], title: 'You are a delivery partner',
       body: 'Go online from your dashboard to start receiving delivery offers.',
       action: () => `<button class="btn btn-primary btn-lg btn-block" data-act="go" data-route="partner">Open partner dashboard</button>` },
@@ -2991,8 +3060,39 @@ document.addEventListener('click', async (e) => {
         }
       });
       break;
-    case 'retryLocation':
-      sendPosition();
+    case 'exportMyData':
+      try {
+        const data = await quad.myDataExport();
+        const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+        const link = document.createElement('a');
+        link.href = url; link.download = 'echoecho-my-data.json';
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      } catch (err) { toast(explain(err), 'bad'); }
+      break;
+    case 'askDeletion':
+      try {
+        const { request } = await quad.myDeletionRequest();
+        if (request?.status === 'open') {
+          if (!confirm('Your request is waiting for review. Cancel it?')) break;
+          await quad.cancelDeletion();
+          toast('Request cancelled. Your account stays as it is.');
+          break;
+        }
+        if (request?.status === 'in_review') { toast('A person is reviewing your request. You will be told the outcome.'); break; }
+        const last = request?.decision_note && ['completed', 'declined'].includes(request.status) ? `Your last request was ${request.status}: ${request.decision_note}
+
+` : '';
+        if (!confirm(`${last}Ask ECHO ECHO to delete your account? Nothing changes yet: a person reviews this and tells you what was deleted and what must be kept.`)) break;
+        await quad.requestDeletion();
+        toast('Request sent. Your account is unchanged for now.');
+      } catch (err) { toast(explain(err), 'bad'); }
+      break;
+    case 'startLocation':
+      positionShare?.begin();
+      break;
+    case 'stopLocation':
+      await positionShare?.end({ reason: 'partner' });
       break;
     case 'logout':
       await quad.logout().catch(() => {});
@@ -3249,9 +3349,28 @@ document.addEventListener('click', async (e) => {
         render();
       });
       break;
+    case 'acceptPolicyUpdate':
+      S.policyError = '';
+      await withBusy(t, async () => {
+        const box = document.getElementById('accept-update');
+        if (!box?.checked) {
+          S.policyError = 'Tick the box to confirm you have read and accept the updated policy.';
+          return render();
+        }
+        try {
+          const out = await quad.partnerAcceptPolicy(box.dataset.policy);
+          toast(out.message || 'Policy accepted');
+        } catch (e) {
+          /* Replaced again while this page was open: the newer one is shown. */
+          S.policyError = explain(e);
+        }
+        drop('deposit', 'policy', 'me');
+        render();
+      });
+      break;
     case 'refreshJoin':
-      S.joinError = '';
-      drop('me', 'notifs'); render();
+      S.joinError = ''; S.policyError = '';
+      drop('me', 'notifs', 'deposit'); render();
       quad.me().then((m) => { S.me = m; }).catch(() => {});
       break;
     case 'leavePartner':

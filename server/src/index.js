@@ -6,8 +6,10 @@ import multipart from '@fastify/multipart';
 
 import { HTTP, SESSION, STORAGE, assertBootable, providerStatus, PLATFORM } from './config.js';
 import { actorFromToken } from './auth/session.js';
-import { HttpError, Forbidden, Unauthenticated } from './auth/rbac.js';
+import { HttpError, Forbidden, Unauthenticated, can } from './auth/rbac.js';
 import { pool } from './db/index.js';
+import { installAtomicRoutes } from './atomic-routes.js';
+import { recordServerError } from './services/error-watch.js';
 import { startSweeper } from './services/sweeper.js';
 import { startSettlementScheduler } from './services/settlement.js';
 import { channelStatus } from './services/notify.js';
@@ -35,6 +37,11 @@ import adminSignInRoutes from './routes/admin-signin.js';
 import adminResetRoutes from './routes/admin-reset.js';
 import trackingRoutes from './routes/tracking.js';
 import adminAccessRoutes from './routes/admin-access.js';
+import adminInvitationRoutes from './routes/admin-invitation.js';
+import adminRecoveryRoutes from './routes/admin-recovery.js';
+import approvalRoutes from './routes/approvals.js';
+import dataRequestRoutes from './routes/data-requests.js';
+import liveStreamRoutes from './routes/live-stream.js';
 import geodataRoutes from './routes/geodata.js';
 import adminOpsRoutes from './routes/admin-ops.js';
 import siteRoutes from './routes/site.js';
@@ -50,6 +57,8 @@ if (!boot.ok) {
   process.exit(1);
 }
 boot.warn.forEach((w) => console.warn('  ! ' + w));
+
+export const REQUEST_ID_FORMAT = /^[A-Za-z0-9_-]{8,64}$/;
 
 export function build() {
   const app = Fastify({
@@ -80,7 +89,8 @@ export function build() {
         req: (r) => ({ method: r.method, url: r.url, id: r.id, ip: r.ip }),
       },
     },
-    genReqId: (req) => req.headers['x-request-id'] || randomUUID(),
+    /* A client's id is kept only if it could not inject anything into a log. */
+    genReqId: (req) => (REQUEST_ID_FORMAT.test(String(req.headers['x-request-id'] || '')) ? req.headers['x-request-id'] : randomUUID()),
     trustProxy: process.env.TRUST_PROXY === 'true',
     bodyLimit: 1_048_576,
     /* A static host in front of the surfaces normalises trailing slashes so
@@ -188,6 +198,12 @@ export function build() {
       /* Password reset proves an institutional mailbox with an emailed
          code. It issues no session and never bypasses the authenticator. */
       /^\/auth\/admin\/password-reset\/(request|verify|complete)$/,
+      /* An invitation link proves nothing by itself; the routes behind it ask
+         for the mailbox code before they reveal or accept anything. */
+      /^\/auth\/admin\/recovery\/(begin|complete)$/,
+      /* A stream carries only 'area X moved'; the tracking one checks its ticket. */
+      /^\/live\/stream$/, /^\/tracking\/stream$/,
+      /^\/auth\/invitation\/(open|email\/send|email\/verify|accept|password|authenticator\/begin|complete)$/,
       /* Redeeming an enrolment code is public in exactly the sense that
          verifying an email code is: it proves possession of a secret, and
          only then does a session exist. */
@@ -267,6 +283,7 @@ export function build() {
       }
       /* Never leak an internal message or stack to a client. */
       req.log.error({ err, reqId: req.id }, 'unhandled');
+      recordServerError(req.routeOptions?.url);
       return reply.code(500).send({ error: 'Something went wrong', code: 'internal', requestId: req.id });
     });
 
@@ -341,12 +358,26 @@ export function build() {
         checks.data = { developmentSeedRows: seeded,
                         ok: !(process.env.NODE_ENV === 'production' && seeded > 0) };
       }
+      const ready = db.ok && checks.migrations?.ok !== false && checks.data?.ok !== false;
+      /* Deploy gates and uptime checks need only these answers. Which providers
+         are configured, and how the pool is doing, are for an administrator. */
+      if (!can(req.actor, 'platform.read')) {
+        const m = checks.migrations;
+        return reply.code(ready ? 200 : 503).send({
+          ready,
+          checks: {
+            database: { ok: db.ok },
+            ...(m ? { migrations: { ok: m.ok, applied: m.applied, latest: m.latest, pending: m.pending } } : {}),
+            ...(checks.data ? { data: { ok: checks.data.ok } } : {}),
+          },
+        });
+      }
       checks.providers = providerStatus();
       checks.notifications = channelStatus();
-      const ready = db.ok && checks.migrations?.ok !== false && checks.data?.ok !== false;
       return reply.code(ready ? 200 : 503).send({ ready, checks });
     });
 
+    installAtomicRoutes(app);
     await app.register(authRoutes);
     await app.register(adminSignInRoutes);
     await app.register(adminResetRoutes);
@@ -368,6 +399,11 @@ export function build() {
     await app.register(trustRoutes);
     await app.register(passkeyRoutes);
     await app.register(adminAccessRoutes);
+    await app.register(adminInvitationRoutes);
+    await app.register(adminRecoveryRoutes);
+    await app.register(approvalRoutes);
+    await app.register(dataRequestRoutes);
+    await app.register(liveStreamRoutes);
     await app.register(geodataRoutes);
     await app.register(adminOpsRoutes);
     await app.register(siteRoutes);

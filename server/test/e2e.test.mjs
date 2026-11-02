@@ -98,7 +98,7 @@ test('FLOW F — admin creates a cafeteria, assigns an owner, builds the campus'
   const owner = await c.post('/admin/users/role',
     { phone: '9300000002', role: 'vendor_owner', vendorId: caf.body.id, name: 'Ravi' });
   assert.equal(owner.status, 200);
-  assert.equal(owner.body.onboarding.method, 'phone_otp');
+  assert.equal(owner.body.onboarding.method, 'enrolment_code');
 
   const zone = await c.post('/campus/nodes', { kind: 'zone', name: 'Academic Area' });
   const block = await c.post('/campus/nodes',

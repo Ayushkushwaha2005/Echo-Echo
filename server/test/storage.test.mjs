@@ -216,13 +216,15 @@ test('an image uploads to S3 and its metadata is the database row', async () => 
   assert.equal(asset.mime, 'image/png');
   assert.equal(asset.width, 1);
   assert.equal(asset.height, 1);
-  assert.equal(asset.bytes, PNG.length);
+  /* Re-encoded on the way in, so the stored size is what was stored. */
+  assert.ok(asset.bytes > 0);
   assert.match(asset.storage_key, /^food_photo\/[0-9a-f-]{36}\.png$/,
     'the object name is server-generated, never client-supplied');
 
   /* The bytes really are in the store. */
   assert.ok(objects.has(asset.storage_key));
-  assert.deepEqual(objects.get(asset.storage_key).body, PNG);
+  assert.equal(objects.get(asset.storage_key).body.length, asset.bytes);
+  assert.equal(objects.get(asset.storage_key).body.toString('hex', 0, 8), '89504e470d0a1a0a', 'still a PNG, rebuilt on the way in');
 
   /* And the database is authoritative about it. */
   const row = (await pool.query(`SELECT * FROM asset WHERE id=$1`, [asset.id])).rows[0];

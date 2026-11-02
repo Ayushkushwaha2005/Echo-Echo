@@ -79,7 +79,6 @@ async function owner() {
   return { u, c, auth };
 }
 
-const inviteCodeIn = (email) => [...mailbox].reverse().find((m) => m.to?.[0] === email)?.text.match(/invitation code: ([A-Z0-9-]+)/)?.[1];
 const loginCodeIn = (email) => [...mailbox].reverse().find((m) => m.to?.[0] === email)?.text.match(/code is: (\d{6})/)?.[1];
 
 async function emailSignIn(email) {
@@ -91,90 +90,65 @@ async function emailSignIn(email) {
   return client(app, cookieOf(r));
 }
 
-/* Owner invites; the invitee signs in with their mailbox and registers a passkey. */
+/* Owner invites; the invitee walks the invitation link to an active account.
+   Sign-in itself is covered by admin-invitation.test.mjs; these tests go on to
+   what an active administrator can and cannot do, so a passkey is registered
+   to reach the routes that still honour one. */
+const linkTokenIn = (email) => [...mailbox].reverse().find((m) => m.to?.[0] === email)?.text.match(/#invite=([\w-]+)/)?.[1];
+async function completeInviteLink(email) {
+  const adminAuth = await import('../src/services/admin-auth.js');
+  const token = linkTokenIn(email);
+  assert.ok(token, 'the invitation email carries a link');
+  assert.equal((await anon().post('/auth/invitation/email/send', { token })).status, 200);
+  const otp = [...mailbox].reverse().find((m) => m.to?.[0] === email)?.text.match(/is: (\d{6})/)?.[1];
+  const v = await anon().post('/auth/invitation/email/verify', { token, code: otp });
+  assert.equal(v.status, 200, JSON.stringify(v.body));
+  const setup = v.body.setup;
+  assert.equal((await anon().post('/auth/invitation/accept', { token, setup })).status, 200);
+  assert.equal((await anon().post('/auth/invitation/password', { token, setup, password: 'Correct-Horse-Battery-77!' })).status, 200);
+  const begin = await anon().post('/auth/invitation/authenticator/begin', { token, setup });
+  const done = await anon().post('/auth/invitation/complete', { token, setup, code: adminAuth.totpAt(begin.body.secret, adminAuth.stepNow()) });
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+  return (await pool.query(`SELECT id FROM app_user WHERE student_email = $1 OR staff_email = $1`, [email])).rows[0].id;
+}
+
 async function invitedAdmin(o, permissions, name = 'Second Admin') {
   const email = `admin.${++seq}${Date.now() % 1000}@stu.upes.ac.in`;
   const inv = await o.c.post('/admin/access/invitations', { name, email, permissions });
   assert.equal(inv.status, 200, JSON.stringify(inv.body));
-  const code = inviteCodeIn(email);
-  const c = await emailSignIn(email);
+  const id = await completeInviteLink(email);
   mailbox.length = 0;
+  const c = client(app, await sessionFor(pool, id));
+  const { code } = await creds.issueInvite(id);
   const { reg, auth } = await registerWith(c, code);
   assert.equal(reg.status, 200, JSON.stringify(reg.body));
-  const id = (await c.get('/auth/me')).body.user.id;
   return { id, email, c, auth, code };
 }
 
 /* ======================================================================== */
 
-test('invitation: emailed one-time code, invited account holds nothing until its passkey is registered', async () => {
+/* The invitation lifecycle itself lives in admin-invitation.test.mjs. This
+   keeps the property these tests exist for: what the grant does afterwards. */
+test('an invited administrator holds exactly what was granted, once activated', async () => {
   const o = await owner();
-  const email = 'anushka.test@stu.upes.ac.in';
-  const inv = await o.c.post('/admin/access/invitations', { name: 'Anushka', email: ' Anushka.Test@STU.UPES.AC.IN ', permissions: ['students.view', 'orders.view'] });
-  assert.equal(inv.status, 200, JSON.stringify(inv.body));
-  assert.equal(inv.body.emailed, true);
-  assert.equal(inv.body.inviteCode, undefined, 'an emailed code is never also shown to the owner');
-  const code = inviteCodeIn(email);
-  assert.match(code, /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
-  const logged = await pool.query(`SELECT detail::text FROM audit_log WHERE action = 'admin.invite'`);
-  assert.ok(!logged.rows[0].detail.includes(code), 'the invite code is not in the audit log');
-
-  assert.equal(inv.body.administrator.id, null, 'no account is created for an unproven mailbox');
-  assert.equal((await pool.query(`SELECT count(*)::int n FROM app_user WHERE student_email = $1`, [email])).rows[0].n, 0);
-  const c = await emailSignIn(email);
-  const me = (await c.get('/auth/me')).body;
-  inv.body.administrator.id = me.user.id;
-  assert.deepEqual(me.roles, ['student']);
-  assert.deepEqual(me.passkey.withheldRoles, ['platform_admin']);
-  assert.equal((await c.get('/admin/users')).status, 403);
-
-  assert.equal((await registerWith(c, 'AAAA-BBBB-CCCC')).opts.status, 400, 'wrong code');
-  const { reg } = await registerWith(c, code);
-  assert.equal(reg.status, 200);
-  assert.equal(reg.body.recoveryCodes.length, 10);
-  assert.equal((await pool.query(`SELECT status FROM admin_account WHERE user_id = $1`, [inv.body.administrator.id])).rows[0].status, 'active');
-
-  const me2 = (await c.get('/auth/me')).body;
-  assert.deepEqual(me2.permissions.sort(), ['orders.view', 'students.view']);
-  assert.equal((await c.get('/admin/users')).status, 200, 'granted');
-  const denied = await c.get('/admin/audit');
+  const a = await invitedAdmin(o, ['students.view', 'orders.view']);
+  const me = (await a.c.get('/auth/me')).body;
+  assert.deepEqual(me.permissions.sort(), ['orders.view', 'students.view']);
+  assert.equal((await a.c.get('/admin/users')).status, 200, 'granted');
+  const denied = await a.c.get('/admin/audit');
   assert.equal(denied.status, 403, 'not granted');
   assert.equal(denied.body.code, 'permission_required');
-  assert.equal((await c.get('/admin/partners')).status, 403);
-  assert.equal((await c.put('/admin/flags/delivery', { enabled: false })).status, 403);
-
-  /* Single use: the code cannot open a second registration. */
-  const other = client(app, await sessionFor(pool, inv.body.administrator.id));
-  assert.notEqual((await registerWith(other, code)).opts.status, 200);
+  assert.equal((await a.c.get('/admin/partners')).status, 403);
+  assert.equal((await a.c.put('/admin/flags/delivery', { enabled: false })).status, 403);
 });
 
-test('expired invitation is refused', async () => {
-  const o = await owner();
-  const email = 'late.admin@stu.upes.ac.in';
-  await o.c.post('/admin/access/invitations', { name: 'Late', email, permissions: ['students.view'] });
-  const code = inviteCodeIn(email);
-  await pool.query(`UPDATE admin_invitation SET expires_at = now() - interval '1 minute'`);
-  const c = await emailSignIn(email);
-  const me = (await c.get('/auth/me')).body;
-  assert.deepEqual(me.passkey.withheldRoles, [], 'an expired invitation grants no role at all');
-  assert.notEqual((await registerWith(c, code)).opts.status, 200);
-
-  /* Expiry after acceptance, before the passkey ceremony, is refused too. */
-  const email2 = 'late.admin2@stu.upes.ac.in';
-  await o.c.post('/admin/access/invitations', { name: 'Late Two', email: email2, permissions: ['students.view'] });
-  const code2 = inviteCodeIn(email2);
-  const c2 = await emailSignIn(email2);
-  await pool.query(`UPDATE admin_passkey_invite SET expires_at = now() - interval '1 minute'`);
-  assert.equal((await registerWith(c2, code2)).opts.status, 400);
-});
-
-test('when email cannot be sent the owner sees the code once; provider errors never reach the client', async () => {
+test('when email cannot be sent the owner sees the link once; provider errors never reach the client', async () => {
   const o = await owner();
   stubStatus = 429;
   const inv = await o.c.post('/admin/access/invitations', { name: 'No Mail', email: 'nomail.1@stu.upes.ac.in', permissions: ['students.view'] });
   assert.equal(inv.status, 200);
   assert.equal(inv.body.emailed, false);
-  assert.match(inv.body.inviteCode, /^[A-Z0-9-]{14}$/);
+  assert.match(inv.body.inviteLink, /#invite=[\w-]{43}$/);
   const r = await anon().post('/auth/email/send', { email: 'quota.student@stu.upes.ac.in' });
   assert.equal(r.status, 503);
   assert.equal(r.body.code, 'email_unavailable');
@@ -254,12 +228,12 @@ test('revocation removes roles, passkeys, recovery codes and sessions; the stude
   assert.equal((await registerWith(fresh, a.code)).opts.status, 403, 'old invite cannot be reused after revocation');
 
   const restored = await o.c.post(`/admin/access/admins/${a.id}/restore`, { reason: 'rejoined' });
-  assert.equal(restored.body.status, 'invited', 'needs a new passkey invitation');
+  assert.equal(restored.body.status, 'invited', 'needs a new invitation');
   const again = await o.c.post(`/admin/access/admins/${a.id}/invite`);
   assert.equal(again.status, 200);
-  const { reg } = await registerWith(fresh, inviteCodeIn(a.email));
-  assert.equal(reg.status, 200);
-  assert.equal((await fresh.get('/admin/users')).status, 200);
+  assert.equal((await fresh.get('/admin/users')).status, 403, 'restored but invited holds nothing');
+  assert.equal(await completeInviteLink(a.email), a.id, 'the same account is repaired');
+  assert.equal((await pool.query(`SELECT status FROM admin_account WHERE user_id = $1`, [a.id])).rows[0].status, 'active');
 });
 
 test('owner-only powers: a fully-permissioned admin cannot invite, change permissions, revoke, restore or touch the owner', async () => {

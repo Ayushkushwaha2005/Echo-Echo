@@ -19,6 +19,7 @@
    Nothing here returns a webhook payload, a full account number, a secret or
    a session; personal data is limited to what orders.view already shows.
    ========================================================================== */
+import { serverErrorSummary } from '../services/error-watch.js';
 import { q, one } from '../db/index.js';
 import { authorize, can, BadRequest, NotFound } from '../auth/rbac.js';
 import { audit } from '../audit.js';
@@ -289,6 +290,10 @@ export default async function adminOpsRoutes(app) {
 
     check('database', 'Database answers', db.ok, db.ok ? `${db.latencyMs} ms` : 'unreachable',
       'Check the Neon project status and DATABASE_URL on Render.');
+    const serverErrors = serverErrorSummary();
+    check('server_errors', 'Unexpected server errors (5 min)', serverErrors.lastFiveMinutes === 0,
+      serverErrors.lastFiveMinutes ? `${serverErrors.lastFiveMinutes}: ${serverErrors.routes.join(', ')}` : '0',
+      'Read the Render logs for these routes. A cluster also emails the owner.', 'warn');
     check('migrations', 'Every shipped migration is applied', pending.length === 0,
       pending.length ? `pending: ${pending.join(', ')}` : `${state.count || 0} applied`,
       'Apply with owner approval after a snapshot (docs/RUNBOOK.md, Migrations).');
@@ -421,6 +426,9 @@ export default async function adminOpsRoutes(app) {
     const spec = REPORTS[req.params.kind];
     if (!spec) throw NotFound(`No report "${req.params.kind}". Reports: ${Object.keys(REPORTS).join(', ')}`);
     authorize(req.actor, spec.cap);
+    /* Exporting is a separate power from viewing. Financial reports keep their
+       finance check alone until payment work is unfrozen. */
+    if (!String(spec.cap).startsWith('finance.')) authorize(req.actor, 'report.export');
     const from = dateParam(req.query?.from, 'from');
     const toRaw = dateParam(req.query?.to, 'to');
     if (!from || !toRaw) throw BadRequest('from and to are required (YYYY-MM-DD)');

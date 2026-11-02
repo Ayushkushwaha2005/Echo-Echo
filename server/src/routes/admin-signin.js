@@ -104,7 +104,7 @@ export default async function adminSignInRoutes(app) {
     /* Re-read the account as it stands NOW. Between the two screens an owner
        may have suspended it, and the older single-call route checked this
        before letting anyone in; so does this one. */
-    const u = await one(`SELECT id, name, status, student_email FROM app_user WHERE id = $1`, [userId]);
+    const u = await one(`SELECT id, name, status, coalesce(staff_email, student_email) AS admin_email FROM app_user WHERE id = $1`, [userId]);
     const roles = u && u.status === 'active' ? await platformRolesOf(u.id, { allowInvited: false }) : [];
     if (!roles.length) {
       await audit(req, { action: 'auth.admin.login', resource: 'admin', resourceId: userId,
@@ -122,7 +122,7 @@ export default async function adminSignInRoutes(app) {
 
     const all = (await q(`SELECT role FROM user_role WHERE user_id = $1 AND status = 'active'`, [u.id]))
       .rows.map((r) => r.role);
-    return { user: { id: u.id, name: u.name, email: u.student_email }, roles: all, surface: landingSurface(all) };
+    return { user: { id: u.id, name: u.name, email: u.admin_email }, roles: all, surface: landingSurface(all) };
   });
 
   /* Re-confirmation for money, permissions and campus boundaries. Same two
@@ -131,7 +131,7 @@ export default async function adminSignInRoutes(app) {
     config: { rateLimit: { max: RATE_LIMITS.adminLogin, timeWindow: RATE_LIMITS.windowMinutes * 60_000 }, edgeLimit: true },
   }, async (req) => {
     if (!req.actor) throw Forbidden('Sign in required');
-    const email = req.actor.studentEmail;
+    const email = req.actor.adminEmail;
     if (!email) throw Forbidden('This account has no administrator mailbox');
     try {
       await verifyAdminSignIn({ userId: req.actor.id, email, password: req.body?.password, code: req.body?.code });
@@ -162,10 +162,10 @@ export default async function adminSignInRoutes(app) {
        first one needs the proven mailbox, which is how you got here. */
     if (current.passwordSet) {
       if (!req.actor.passkeyAt) assertRecentPasskey(req.actor, 'changing your administrator password');
-      await verifyAdminSignIn({ userId: req.actor.id, email: req.actor.studentEmail,
+      await verifyAdminSignIn({ userId: req.actor.id, email: req.actor.adminEmail,
                                 password: req.body?.currentPassword, code: req.body?.code });
     }
-    await setPassword(req.actor.id, req.body?.password, { email: req.actor.studentEmail || '' });
+    await setPassword(req.actor.id, req.body?.password, { email: req.actor.adminEmail || '' });
     await audit(req, { action: 'admin.password.set', resourceId: req.actor.id, outcome: 'ok',
                        detail: { replaced: current.passwordSet } });
     /* A new password ends every other session for this account. */
@@ -183,7 +183,7 @@ export default async function adminSignInRoutes(app) {
     }
     /* Replacing a working one is held as pending: the current authenticator
        keeps signing in until a code from the new one is confirmed. */
-    const out = await beginAuthenticator(req.actor.id, req.actor.studentEmail, { replace: 'pending' });
+    const out = await beginAuthenticator(req.actor.id, req.actor.adminEmail, { replace: 'pending' });
     await audit(req, { action: 'admin.authenticator.begin', resourceId: req.actor.id, outcome: 'ok',
                        detail: { replacement: !!out.pending } });
     /* The secret and URI are returned exactly once, to the administrator
@@ -227,7 +227,7 @@ async function adminAccountFor(req, email, action) {
   };
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw GENERIC_SIGNIN();
 
-  const u = await one(`SELECT id, name, status FROM app_user WHERE student_email = $1`, [email]);
+  const u = await one(`SELECT id, name, status FROM app_user WHERE student_email = $1 OR staff_email = $1`, [email]);
   if (!u) return deny('no_account');
   if (u.status !== 'active') return deny(u.status);
   /* allowInvited:false — an invited administrator has to finish enrolling
@@ -244,14 +244,16 @@ function assertAdminAuthConfigured() {
     'Set ADMIN_TOTP_KEY (or a COOKIE_SECRET of at least 32 characters) so authenticator secrets can be stored.');
 }
 
-/* Only an account that already holds a platform role — including one still
-   `invited` — may set administrator credentials. A student cannot give
-   themselves a password and an authenticator and become an administrator,
-   because holding the role is the precondition, not the consequence. */
+/* Only an account that already holds a working platform role may set
+   administrator credentials. A student cannot give themselves a password and
+   an authenticator and become an administrator, because holding the role is
+   the precondition, not the consequence. An `invited` account does not qualify
+   either: it finishes through its invitation link, which is what checks the
+   invitation (services/admin-invitation.js). */
 async function assertEnrollable(actor) {
-  const roles = await platformRolesOf(actor.id, { allowInvited: true });
-  if (!roles.length) throw Forbidden('This account is not an administrator');
-  if (!actor.studentEmail) {
+  const roles = await platformRolesOf(actor.id, { allowInvited: false });
+  if (!roles.length) throw Forbidden('This account is not an administrator', 'If you were invited, open the link in your invitation email.');
+  if (!actor.adminEmail) {
     throw BadRequest('Confirm your institutional email first',
       'An administrator account is identified by its university mailbox.');
   }

@@ -29,6 +29,7 @@ import { q, one, tx } from '../db/index.js';
 import { authorize, can, BadRequest, NotFound, Conflict, HttpError } from '../auth/rbac.js';
 import { assertRecentPasskey } from '../auth/passkey-policy.js';
 import { audit } from '../audit.js';
+import { HANDLERS, needsApproval, requestApproval } from '../services/approvals.js';
 import {
   validate, checkReferences, defaults, SCHEMA_VERSION, FONTS, DENSITIES, APPEARANCES, TONES,
   HOME_SECTIONS, ROUTES, LIMITS,
@@ -103,6 +104,20 @@ const noteOf = (body) => {
   const n = body?.note == null ? '' : String(body.note).trim();
   if (n.length > 200) throw BadRequest('The note can be at most 200 characters');
   return n;
+};
+
+HANDLERS['site.publish'] = {
+  label: 'Publish the website',
+  async run(c, { revision }, actorId) {
+    const d = (await c.query(`SELECT config, revision FROM site_config_draft WHERE id FOR UPDATE`)).rows[0];
+    if (!d) throw Conflict('There is no saved draft to publish');
+    if (d.revision !== revision) throw Conflict(`The draft moved from revision ${revision} to ${d.revision} after this was requested`);
+    const v = await check(d.config, { q: (t, p) => c.query(t, p) });
+    if (!v.ok) throw Conflict('The draft no longer passes its checks');
+    const version = await publishVersion(c, { config: v.config, actorId, note: 'Published after approval', kind: 'publish' });
+    await c.query(`UPDATE site_config_draft SET base_version = $1 WHERE id`, [version]);
+    return { version, revision };
+  },
 };
 
 export default async function siteRoutes(app) {
@@ -204,6 +219,16 @@ export default async function siteRoutes(app) {
     assertRecentPasskey(req.actor, 'publishing the website');
     const revision = revisionOf(req.body);
     const note = noteOf(req.body);
+
+    /* With the owner's policy on, an administrator's publish waits for a decision.
+       The request freezes this revision; a later edit to the draft makes it fail. */
+    if (await needsApproval(req.actor, 'site.publish')) {
+      const request = await requestApproval(req, {
+        actionType: 'site.publish', payload: { revision }, summary: `Publish website draft revision ${revision}`,
+        reason: req.body?.reason || note, idempotencyKey: req.headers['idempotency-key'],
+      });
+      return { pendingApproval: true, requestId: request.id, status: request.status };
+    }
 
     const version = await tx(async (c) => {
       const d = (await c.query(`SELECT config, revision FROM site_config_draft WHERE id FOR UPDATE`)).rows[0];

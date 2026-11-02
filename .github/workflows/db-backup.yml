@@ -259,6 +259,34 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "uploaded $BACKUP_NAME ($local_size bytes, verified)"
 
+      # After the upload, so a failure here can never cost the night's backup. Nothing
+      # leaves this runner: no email, storage or payment provider is configured, and the
+      # background worker is off. Only status codes and timings are printed.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: The application starts on the restored database
+        run: |
+          set -euo pipefail
+          (cd server && npm ci --omit=dev --no-audit --no-fund > /dev/null)
+          # Forward to this commit's schema, on the throwaway copy only, which also proves
+          # any pending migration applies to real data. The owner step only touches this copy.
+          DRILL_DB="postgres://postgres:drill-only-not-a-secret@localhost:5432/postgres"
+          (cd server && NODE_ENV=restore-drill DATABASE_URL="$DRILL_DB" DB_SSL=false PLATFORM_OWNER_PHONE=+919000000000 node src/db/migrate.js > /dev/null) \
+            || { echo "::error title=Restore drill::a migration failed on the restored copy"; exit 1; }
+          PGPASSWORD=drill-only-not-a-secret psql "$DRILL_DB" -Atc "SELECT 'schema_migration', count(*) FROM schema_migration UNION ALL SELECT 'app_user', count(*) FROM app_user UNION ALL SELECT 'food_order', count(*) FROM food_order" | paste -sd' ' | sed 's/^/- Restored copy after migrating: /' >> "$GITHUB_STEP_SUMMARY"
+          s=$(date +%s)
+          (cd server && NODE_ENV=restore-drill PORT=8090 DATABASE_URL="postgres://postgres:drill-only-not-a-secret@localhost:5432/postgres" DB_SSL=false SWEEPER=off \
+            COOKIE_SECRET=drill-only-not-a-secret-at-least-32-characters ADMIN_TOTP_KEY=drill-only-not-a-secret-0123456789ab \
+            WEB_ORIGIN=http://localhost:3000 PLATFORM_OWNER_PHONE=+919000000000 LOG_LEVEL=silent node src/index.js > /dev/null 2>&1 &)
+          for i in $(seq 1 60); do curl -sf http://localhost:8090/health > /dev/null && break; sleep 1; done
+          curl -sf http://localhost:8090/health > /dev/null || { echo "::error title=Restore drill::the API did not start on the restored database"; exit 1; }
+          ready=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/ready)
+          vendors=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/vendors)
+          echo "- App on the restored database: started in $(( $(date +%s)-s )) s, /ready $ready, /vendors $vendors" >> "$GITHUB_STEP_SUMMARY"
+          [ "$vendors" = 200 ] || { echo "::error title=Restore drill::/vendors answered $vendors"; exit 1; }
+
       - name: Remove local artefacts
         if: always()
         run: rm -f -- *.dump *.dump.gpg counts-*.txt restore.log

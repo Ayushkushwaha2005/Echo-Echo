@@ -1,6 +1,11 @@
 /* Image intake. Validation is done on the bytes we received, not on the
    filename or the client-declared content type: a .jpg that is really a
-   script is rejected by its magic number. */
+   script is rejected by its magic number.
+
+   What gets stored is never what was uploaded. Every image is fully decoded
+   and re-encoded here, which proves it is really an image of that format,
+   bakes in its orientation, and drops EXIF, GPS and anything hidden after the
+   picture. A file that will not decode is refused. */
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -9,6 +14,31 @@ import { BadRequest, NotFound } from '../auth/rbac.js';
 import { q, one } from '../db/index.js';
 import { sha256 } from './verification.js';
 import * as s3 from './s3.js';
+import sharp from 'sharp';
+
+/* One image at a time and no decoded-pixel cache: this runs on a small instance. */
+sharp.cache(false);
+sharp.concurrency(1);
+/* A small file can declare enormous dimensions. Refuse before decoding it. */
+export const MAX_IMAGE_PIXELS = 40_000_000;
+export const MAX_IMAGE_SIDE = 12_000;
+
+async function reencode(buf, mime) {
+  try {
+    const img = sharp(buf, { failOn: 'error', limitInputPixels: MAX_IMAGE_PIXELS, animated: false }).rotate();
+    const meta = await sharp(buf, { failOn: 'error', limitInputPixels: MAX_IMAGE_PIXELS }).metadata();
+    const expected = { jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }[meta.format];
+    if (expected !== mime) throw new Error('format mismatch');
+    if ((meta.width || 0) > MAX_IMAGE_SIDE || (meta.height || 0) > MAX_IMAGE_SIDE) throw new Error('too large');
+    const out = mime === 'image/jpeg' ? img.jpeg({ quality: 90, mozjpeg: true })
+      : mime === 'image/png' ? img.png({ compressionLevel: 8 })
+      : img.webp({ quality: 90 });
+    const { data, info } = await out.toBuffer({ resolveWithObject: true });
+    return { data, width: info.width, height: info.height };
+  } catch {
+    throw BadRequest('That image could not be read', 'Upload a complete JPEG, PNG or WebP photo.');
+  }
+}
 
 /* Magic numbers, so the real format is known before anything is stored. */
 function sniff(buf) {
@@ -16,29 +46,6 @@ function sniff(buf) {
   if (buf.length > 8 && buf.toString('hex', 0, 8) === '89504e470d0a1a0a') return 'image/png';
   if (buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
   return null;
-}
-
-/* Dimensions read from the header — enough for the quality gate without
-   pulling in an image library. */
-function dimensions(buf, mime) {
-  try {
-    if (mime === 'image/png') return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
-    if (mime === 'image/webp' && buf.toString('ascii', 12, 16) === 'VP8X') {
-      return { width: (buf.readUIntLE(24, 3) & 0xffffff) + 1, height: (buf.readUIntLE(27, 3) & 0xffffff) + 1 };
-    }
-    if (mime === 'image/jpeg') {
-      let i = 2;
-      while (i < buf.length - 9) {
-        if (buf[i] !== 0xff) { i++; continue; }
-        const marker = buf[i + 1];
-        if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
-          return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
-        }
-        i += 2 + buf.readUInt16BE(i + 2);
-      }
-    }
-  } catch { /* fall through */ }
-  return { width: null, height: null };
 }
 
 export async function putImage(buf, { ownerId, kind }) {
@@ -51,7 +58,12 @@ export async function putImage(buf, { ownerId, kind }) {
   if (!mime || !STORAGE.allowedMime.includes(mime)) {
     throw BadRequest('Unsupported image format', 'Upload a JPEG, PNG or WebP photo.');
   }
-  const { width, height } = dimensions(buf, mime);
+  /* The fingerprint is of what was uploaded, so the same photo uploaded twice
+     is still recognised even though the stored bytes are rebuilt. */
+  const uploadedSha = sha256(buf);
+  const clean = await reencode(buf, mime);
+  buf = clean.data;
+  const { width, height } = clean;
   const key = `${kind}/${randomUUID()}.${mime.split('/')[1]}`;
 
   if (STORAGE.provider === 's3') {
@@ -65,7 +77,7 @@ export async function putImage(buf, { ownerId, kind }) {
   return one(
     `INSERT INTO asset (owner_id, kind, mime, bytes, width, height, storage_key, sha256)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [ownerId, kind, mime, buf.length, width, height, key, sha256(buf)]);
+    [ownerId, kind, mime, buf.length, width, height, key, uploadedSha]);
 }
 
 export async function getImage(assetId) {

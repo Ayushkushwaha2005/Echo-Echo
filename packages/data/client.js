@@ -124,7 +124,9 @@ async function call(method, path, body, opts = {}) {
           ? `This is a preview deployment (${here?.origin}). It can show live data but never change it. Make the change at ${where}.`
           : `This page is open at ${here?.origin}, which the server does not accept changes from. Make the change at ${where}.` });
     }
-    throw new ApiError(res.status, json || { error: hostError(res.status) });
+    /* On staff screens a non-JSON answer keeps its status as a code, so the
+       screen can say "not found (404)" rather than "cannot reach". */
+    throw new ApiError(res.status, json || { error: hostError(res.status), code: STAFF ? `http_${res.status}` : undefined });
   }
   return json;
 }
@@ -206,6 +208,14 @@ export const quad = {
   inviteAdministrator: (body) => post('/admin/access/invitations', body),
   cancelInvitation: (id) => post(`/admin/access/invitations/${id}/revoke`),
   reissueAdminInvite: (id) => post(`/admin/access/admins/${id}/invite`),
+  resendInvitation: (id) => post(`/admin/access/invitations/${id}/resend`),
+  invitationOpen: (token) => post('/auth/invitation/open', { token }),
+  invitationSendCode: (token) => post('/auth/invitation/email/send', { token }),
+  invitationVerifyCode: (token, code) => post('/auth/invitation/email/verify', { token, code }),
+  invitationAccept: (token, setup) => post('/auth/invitation/accept', { token, setup }),
+  invitationSetPassword: (token, setup, password) => post('/auth/invitation/password', { token, setup, password }),
+  invitationBeginAuthenticator: (token, setup) => post('/auth/invitation/authenticator/begin', { token, setup }),
+  invitationComplete: (token, setup, code) => post('/auth/invitation/complete', { token, setup, code }),
   setAdminPermissions: (id, permissions, reason) => put(`/admin/access/admins/${id}/permissions`, { permissions, reason }),
   suspendAdmin: (id, reason) => post(`/admin/access/admins/${id}/suspend`, { reason }),
   restoreAdmin: (id, reason) => post(`/admin/access/admins/${id}/restore`, { reason }),
@@ -328,21 +338,32 @@ export const quad = {
      The server decides what a map may draw, including whether the partner's
      position is disclosed at all. */
   tracking: (orderId) => get(`/orders/${orderId}/tracking`),
-  reportLocation: (orderId) => new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error('This browser cannot share location'));
-    navigator.geolocation.getCurrentPosition(
-      (pos) => post('/partner/location', {
-        orderId, lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy,
-        takenAt: pos.timestamp }).then(resolve, reject),
-      /* `code` says which kind of failure it was, so the screen can say what
-         to do about it: 'denied' needs the browser's permission changed,
-         'unavailable' usually passes on its own. */
-      (err) => reject(Object.assign(new Error(err.code === err.PERMISSION_DENIED
-        ? 'Location permission was denied' : 'Your location is unavailable'),
-      { code: err.code === err.PERMISSION_DENIED ? 'denied' : 'unavailable' })),
-      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 5_000 });
-  }),
-  clearLocation: () => post('/partner/location/clear'),
+  trackingTicket: (orderId) => post(`/orders/${orderId}/tracking/ticket`),
+  myDataExport: () => get('/me/data-export'),
+  myDeletionRequest: () => get('/me/deletion-request'),
+  requestDeletion: (note) => post('/me/deletion-request', { note }),
+  cancelDeletion: () => del('/me/deletion-request'),
+  dataRequests: () => get('/admin/data-requests'),
+  dataRequestRetention: (id) => get(`/admin/data-requests/${id}/retention`),
+  decideDataRequest: (id, status, note) => post(`/admin/data-requests/${id}`, { status, note }),
+  restoreCatalog: (entity, id, toRevision, revision) => post(`/catalog/${entity}/${id}/restore`, { toRevision, revision }),
+  startSharing: (orderId) => post('/partner/location/start', { orderId }),
+  sendPosition: (body) => post('/partner/location', body),
+  clearLocation: (reason) => post('/partner/location/clear', reason ? { reason } : undefined),
+  deliveryStatus: (orderId) => get(`/orders/${orderId}/delivery-status`),
+  menuBulkPreview: (vendorId, changes) => post(`/vendors/${vendorId}/menu/bulk/preview`, { changes }),
+  menuBulkApply: (vendorId, changes) => post(`/vendors/${vendorId}/menu/bulk/apply`, { changes }),
+  catalogVersions: (entity, id) => get(`/catalog/${entity}/${id}/versions`),
+  recoveryStatus: () => get('/auth/admin/recovery-codes'),
+  newRecoveryCodes: () => post('/auth/admin/recovery-codes'),
+  setAlertEmail: (email) => put('/auth/admin/alert-email', { email }),
+  recoveryBegin: (body) => post('/auth/admin/recovery/begin', body),
+  recoveryComplete: (body) => post('/auth/admin/recovery/complete', body),
+  revokeOneAdminSession: (id, handle, reason) => post(`/admin/access/admins/${id}/sessions/${handle}/revoke`, { reason }),
+  approvals: () => get('/admin/approvals'),
+  approvalPolicies: () => get('/admin/approvals/policy'),
+  setApprovalPolicy: (type, body) => put(`/admin/approvals/policy/${type}`, body),
+  decideApproval: (id, decision, note) => post(`/admin/approvals/${id}/decide`, { decision, note }),
   orders: (opts) => get('/orders' + qs(opts)),
   order: (id) => get(`/orders/${id}`),
   transition: (id, to, note) => post(`/orders/${id}/transition`, { to, note }),
@@ -385,6 +406,8 @@ export const quad = {
   retryWithdrawal: (id) => post(`/partner/withdrawals/${id}/retry`),
   partnerPolicy: () => get('/partner/policy'),
   partnerApplyWithConsent: (acceptPolicyId) => post('/partner/apply', { acceptPolicyId }),
+  /* An applicant or partner accepting a newer version of the policy, as themselves. */
+  partnerAcceptPolicy: (acceptPolicyId) => post('/partner/policy/accept', { acceptPolicyId }),
   uploadPartnerPhoto: (file) => {
     const fd = new FormData();
     fd.append('photo', file);
@@ -471,9 +494,10 @@ export const quad = {
 
   /* Team Chat: membership is checked on the server for every call. */
   chatPeople: (audience, q, role) => get('/chat/people' + qs({ audience, q: q || undefined, role })),
-  chatConversations: (audience) => get('/chat/conversations' + qs({ audience })),
+  /* Reads take { signal, timeoutMs } so a screen can cancel one it no longer needs. */
+  chatConversations: (audience, opts) => call('GET', '/chat/conversations' + qs({ audience }), null, opts),
   chatStart: (body) => post('/chat/conversations', body),
-  chatMessages: (id, o = {}) => get(`/chat/conversations/${encodeURIComponent(id)}/messages` + qs({ after: o.after, before: o.before, limit: o.limit })),
+  chatMessages: (id, o = {}, opts) => call('GET', `/chat/conversations/${encodeURIComponent(id)}/messages` + qs({ after: o.after, before: o.before, limit: o.limit }), null, opts),
   chatSend: (id, body) => post(`/chat/conversations/${encodeURIComponent(id)}/messages`, body),
   chatRead: (id) => post(`/chat/conversations/${encodeURIComponent(id)}/read`, {}),
   chatAddMembers: (id, userIds) => post(`/chat/conversations/${encodeURIComponent(id)}/members`, { userIds }),

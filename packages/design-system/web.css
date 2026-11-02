@@ -938,3 +938,9 @@ textarea.input { resize: vertical; min-height: 72px; }
   word-break: break-all; background: var(--bg-sunken); border-radius: 10px; padding: 10px 12px; user-select: all; }
 .enrol-recovery { margin-top: 14px; }
 .enrol-recovery code { font-family: var(--font-mono); font-size: .85em; }
+.invite-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 8px 0 14px; }
+.invite-facts dt { color: var(--muted, inherit); opacity: .75; }
+.invite-facts dd { margin: 0; word-break: break-word; }
+.invite-perms { margin: 2px 0 10px; padding-left: 18px; font-size: 13px; }
+
+.share-dot { flex: none; width: 10px; height: 10px; margin-top: 3px; border-radius: 50%; background: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, .25); }
