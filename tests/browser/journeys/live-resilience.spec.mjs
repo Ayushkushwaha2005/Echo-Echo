@@ -63,11 +63,14 @@ test('a menu left open shows a new price and a sold-out item within the refresh,
   await db.query(`INSERT INTO menu_item (vendor_id, name, price_paise, available, active) VALUES ($1,'Open Menu Bun',4000,true,true)`, [v.id]);
   await page.goto(`/web/#/menu/${v.id}`);
   await expect(page.getByText('Open Menu Tea').first()).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText('₹25', { exact: true }).first()).toBeVisible();
   await page.evaluate(() => { window.__sameDocument = true; });
   await db.query(`UPDATE menu_item SET price_paise = 3700 WHERE id = $1`, [item.id]);
   await db.query(`UPDATE menu_item SET available = false WHERE vendor_id = $1 AND name = 'Open Menu Bun'`, [v.id]);
-  await expect(page.getByText(/37/).first()).toBeVisible({ timeout: 90_000 });
-  await expect(page.getByText('Sold out').first()).toBeVisible();
+  /* Exact prices: the cafe's name carries digits of its own. */
+  await expect(page.getByText('₹37', { exact: true }).first()).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByText('₹25', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Sold out').first()).toBeVisible({ timeout: 90_000 });
   expect(await page.evaluate(() => window.__sameDocument), 'no reload').toBe(true);
 });
 
