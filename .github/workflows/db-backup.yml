@@ -262,7 +262,7 @@ jobs:
       # After the upload, so a failure here can never cost the night's backup. Nothing
       # leaves this runner: no email, storage or payment provider is configured, and the
       # background worker is off. Only status codes and timings are printed.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
