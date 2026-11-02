@@ -139,6 +139,8 @@ function safeEqual(a, b) {
    estimating them. An estimated fee presented as a fact is how a net
    revenue line stops being true.
    ========================================================================== */
+const PAYMENT_SESSION_MINUTES = 20;
+
 /* PAYMENT status vocabulary. Note USER_DROPPED is its own outcome: an
    abandoned checkout is not a failure to retry silently and is certainly not
    a success, and giving it its own word is what stops a caller treating
@@ -205,6 +207,10 @@ export const cashfree = {
         /* Rupee decimal string, converted exactly from integer paise. */
         order_amount: paiseToRupeeString(amountPaise),
         order_currency: PAYMENTS.currency,
+        /* Cashfree's default is 30 days; its minimum is 15 minutes. An unpaid
+           order is given up on after 20, so the session must not outlive that
+           by weeks if closing it ever fails. */
+        order_expiry_time: new Date(Date.now() + PAYMENT_SESSION_MINUTES * 60_000).toISOString(),
         customer_details: {
           customer_id: customer.id,
           customer_phone: customer.phone,
@@ -305,7 +311,7 @@ export const cashfree = {
       providerPaymentId: payment.cf_payment_id != null ? String(payment.cf_payment_id) : null,
       /* The amount ACTUALLY paid, not the amount ordered. These differ
          under a partial payment, and it is the paid one that must match. */
-      amountPaise: rupeesToPaise(payment.payment_amount ?? order.order_amount),
+      amountPaise: rupeesToPaise(payment.payment_amount),
       currency: String(payment.payment_currency || order.order_currency || '').toUpperCase() || null,
       feePaise: null,             // not reported on the PG webhook; see header
       raw: body,

@@ -18,6 +18,7 @@ import { assignDelivery } from './delivery.js';
 import { purgeExpiredIdImages } from './storage.js';
 import { notifyAsync } from './notify.js';
 import { pruneFinished } from './partner-location.js';
+import { settleBeforeClosing } from '../routes/payments.js';
 
 const MAX_ROUNDS = 3;
 const ABANDON_AFTER_MINUTES = 20;
@@ -50,13 +51,24 @@ export async function expireOffers() {
   return { expired: rows.length, reoffered };
 }
 
-/* An order that reached awaiting_payment and was never captured. */
+/* An order that reached awaiting_payment and was never captured. Cashfree is
+   asked before each one is given up on: a lost webhook must not cancel an order
+   the customer paid for, and an outage must not cancel one that may be paid. */
 export async function abandonUnpaidOrders() {
-  const { rows } = await q(
-    `UPDATE food_order SET state = 'cancelled'
+  const { rows: due } = await q(
+    `SELECT id FROM food_order
       WHERE state = 'awaiting_payment'
         AND created_at < now() - ($1 || ' minutes')::interval
-      RETURNING id, customer_id, code`, [String(ABANDON_AFTER_MINUTES)]);
+      ORDER BY created_at LIMIT 50`, [String(ABANDON_AFTER_MINUTES)]);
+  const rows = [];
+  for (const { id } of due) {
+    if (await settleBeforeClosing(null, id) !== 'clear') continue;
+    const closed = await one(
+      `UPDATE food_order SET state = 'cancelled'
+        WHERE id = $1 AND state = 'awaiting_payment'
+        RETURNING id, customer_id, code`, [id]);
+    if (closed) rows.push(closed);
+  }
   for (const o of rows) {
     await q(`INSERT INTO order_event (order_id, from_state, to_state, actor_role, note)
              VALUES ($1,'awaiting_payment','cancelled','system','payment not completed')`, [o.id]);

@@ -79,6 +79,7 @@ function startStub() {
             payment_session_id: 'session_' + b.order_id,
           });
         }
+        if (orderState.status === 'DOWN') return json(500, { message: 'stub outage' });
         let m = /^\/pg\/orders\/([^/]+)\/payments$/.exec(req.url);
         if (m && req.method === 'GET') return json(200, orderState.payments);
         m = /^\/pg\/orders\/([^/?]+)$/.exec(req.url);
@@ -753,4 +754,146 @@ test('the webhook path is audited and no secret ever reaches the log or the clie
 
   const dump = JSON.stringify(rows) + JSON.stringify(intent);
   assert.ok(!dump.includes(SECRET), 'the Cashfree secret key must never be logged or returned');
+});
+
+/* ======================= 11. closing what is left open ==================== */
+
+const terminated = () => stubCalls.filter((x) => x.method === 'PATCH'
+  && x.body?.order_status === 'TERMINATED').map((x) => x.url);
+const age = (id) => pool.query(
+  `UPDATE food_order SET created_at = now() - interval '30 minutes' WHERE id=$1`, [id]);
+const sweep = async () => (await import('../src/services/sweeper.js')).abandonUnpaidOrders();
+const paidAtCashfree = (cf) => ({ status: 'PAID', payments: [{ cf_payment_id: cf, payment_status: 'SUCCESS',
+  payment_amount: '140.00', payment_currency: 'INR' }] });
+
+/* The same customer, same café, a second order: what a retry after closing
+   the checkout produces. */
+async function secondOrder(first) {
+  const v = (await pool.query(`SELECT vendor_id, destination_id FROM food_order WHERE id=$1`, [first.draft.id])).rows[0];
+  const it = (await pool.query(`SELECT id FROM menu_item WHERE vendor_id=$1 LIMIT 1`, [v.vendor_id])).rows[0];
+  const draft = (await first.c.post('/orders/draft', { vendorId: v.vendor_id,
+    lines: [{ itemId: it.id, qty: 2 }], fulfilment: 'delivery', destinationId: v.destination_id })).body;
+  return { draft, res: await first.c.post('/payments/intent', { orderId: draft.id }) };
+}
+
+test('every Cashfree session is created with an expiry, so an abandoned one cannot be paid for days', async () => {
+  await orderAwaitingPayment('+919600000101');
+  const made = stubCalls.find((x) => x.method === 'POST' && x.url === '/pg/orders');
+  const ms = new Date(made.body.order_expiry_time).getTime() - Date.now();
+  assert.ok(ms >= 15 * 60e3 && ms <= 25 * 60e3, `expiry ${ms} ms away`);
+});
+
+test('a webhook whose processing failed is reprocessed on the retry, not lost as a duplicate', async () => {
+  const { draft } = await orderAwaitingPayment('+919600000102');
+  const pay = await paymentOf(draft.id);
+  await pool.query(`CREATE FUNCTION boom() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'transient'; END $$ LANGUAGE plpgsql`);
+  await pool.query(`CREATE TRIGGER boom BEFORE UPDATE ON payment FOR EACH ROW EXECUTE FUNCTION boom()`);
+  const delivery = signedWebhook(successEvent(pay.id), { key: 'retry-me' });
+  let first;
+  try { first = await app.inject(delivery); }
+  finally {
+    await pool.query(`DROP TRIGGER boom ON payment`);
+    await pool.query(`DROP FUNCTION boom()`);
+  }
+  assert.equal(first.statusCode, 500, 'the provider must be told to retry');
+  assert.equal(await stateOf(draft.id), 'awaiting_payment');
+  const second = await app.inject(delivery);
+  assert.equal(second.statusCode, 200);
+  assert.equal(await stateOf(draft.id), 'confirmed');
+});
+
+test('a paid event that states no currency cannot confirm an order', async () => {
+  const { draft } = await orderAwaitingPayment('+919600000103');
+  const pay = await paymentOf(draft.id);
+  const ev = successEvent(pay.id);
+  delete ev.data.payment.payment_currency;
+  delete ev.data.order.order_currency;
+  assert.equal((await app.inject(signedWebhook(ev))).statusCode, 200);
+  assert.equal(await stateOf(draft.id), 'awaiting_payment');
+  assert.match((await paymentOf(draft.id)).flagged_reason || '', /currency_mismatch/);
+});
+
+test('a paid event with no paid amount cannot borrow the order amount', async () => {
+  const { draft } = await orderAwaitingPayment('+919600000104');
+  const pay = await paymentOf(draft.id);
+  const ev = successEvent(pay.id);
+  delete ev.data.payment.payment_amount;
+  assert.equal((await app.inject(signedWebhook(ev))).statusCode, 200);
+  assert.equal(await stateOf(draft.id), 'awaiting_payment');
+  assert.match((await paymentOf(draft.id)).flagged_reason || '', /amount_mismatch/);
+});
+
+test('abandoning asks Cashfree first: money that arrived with a lost webhook confirms the order', async () => {
+  const { draft } = await orderAwaitingPayment('+919600000105');
+  await age(draft.id);
+  orderState = paidAtCashfree(7001);
+  const out = await sweep();
+  assert.equal(out.abandoned, 0);
+  assert.equal(await stateOf(draft.id), 'confirmed');
+  assert.equal(terminated().length, 0);
+});
+
+test('an abandoned order is cancelled AND its Cashfree session closed', async () => {
+  const { draft } = await orderAwaitingPayment('+919600000106');
+  const pay = await paymentOf(draft.id);
+  await age(draft.id);
+  assert.equal((await sweep()).abandoned, 1);
+  assert.equal(await stateOf(draft.id), 'cancelled');
+  assert.equal((await paymentOf(draft.id)).status, 'cancelled');
+  assert.deepEqual(terminated(), [`/pg/orders/${pay.id}`]);
+});
+
+test('an order is not abandoned while Cashfree cannot be asked', async () => {
+  const { draft } = await orderAwaitingPayment('+919600000107');
+  await age(draft.id);
+  orderState = { status: 'DOWN', payments: [] };
+  assert.equal((await sweep()).abandoned, 0);
+  assert.equal(await stateOf(draft.id), 'awaiting_payment');
+});
+
+test('a success arriving after abandonment is flagged, audited, and never confirms', async () => {
+  const { draft } = await orderAwaitingPayment('+919600000108');
+  const pay = await paymentOf(draft.id);
+  await age(draft.id);
+  await sweep();
+  assert.equal((await app.inject(signedWebhook(successEvent(pay.id)))).statusCode, 200);
+  assert.equal(await stateOf(draft.id), 'cancelled');
+  assert.match((await paymentOf(draft.id)).flagged_reason || '', /paid_but_order_state=cancelled/);
+  const a = await pool.query(`SELECT 1 FROM audit_log WHERE action='payment.flagged' AND resource_id=$1`, [pay.id]);
+  assert.equal(a.rowCount, 1);
+});
+
+test('retrying with a new order closes the earlier attempt, so both cannot be paid', async () => {
+  const first = await orderAwaitingPayment('+919600000109');
+  const pay = await paymentOf(first.draft.id);
+  const { draft, res } = await secondOrder(first);
+  assert.equal(res.status, 200);
+  assert.equal(await stateOf(first.draft.id), 'cancelled');
+  assert.equal(await stateOf(draft.id), 'awaiting_payment');
+  assert.deepEqual(terminated(), [`/pg/orders/${pay.id}`]);
+});
+
+test('retrying after the earlier attempt actually succeeded charges nothing new', async () => {
+  const first = await orderAwaitingPayment('+919600000110');
+  orderState = paidAtCashfree(7002);
+  const made = () => stubCalls.filter((x) => x.method === 'POST' && x.url === '/pg/orders').length;
+  const before = made();
+  const { res } = await secondOrder(first);
+  assert.equal(res.status, 409);
+  assert.equal(await stateOf(first.draft.id), 'confirmed');
+  assert.equal(made(), before);
+});
+
+test('cancelling at checkout closes the Cashfree session, and money already taken confirms instead', async () => {
+  const a = await orderAwaitingPayment('+919600000111');
+  const pay = await paymentOf(a.draft.id);
+  assert.equal((await a.c.post('/payments/cancel', { orderId: a.draft.id })).status, 200);
+  assert.deepEqual(terminated(), [`/pg/orders/${pay.id}`]);
+
+  const b = await orderAwaitingPayment('+919600000112');
+  orderState = paidAtCashfree(7003);
+  const r = await b.c.post('/payments/cancel', { orderId: b.draft.id });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.state, 'confirmed');
+  assert.equal(await stateOf(b.draft.id), 'confirmed');
 });

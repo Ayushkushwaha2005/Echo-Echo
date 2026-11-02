@@ -123,7 +123,9 @@ export async function applyOutcome(req, pay, ev, source) {
      lands here, because null !== an integer. That is the fail-closed
      direction on purpose. */
   const amountOk = Number.isInteger(ev.amountPaise) && ev.amountPaise === pay.amount_paise;
-  const currencyOk = !ev.currency || ev.currency === PAYMENTS.currency;
+  /* A paid event that names no currency is refused like one naming the wrong
+     one: nothing is assumed about money the provider did not describe. */
+  const currencyOk = ev.currency === PAYMENTS.currency;
 
   if (!amountOk || !currencyOk) {
     const reason = !amountOk
@@ -153,6 +155,7 @@ export async function applyOutcome(req, pay, ev, source) {
      transaction. A confirmed order without ledger entries is not a state
      this database can be in. */
   let confirmed = false;
+  let lateMoney = null;
   await tx(async (c) => {
     /* Re-read under a row lock. This is what makes the webhook and the
        status pull safe to race: whichever gets the lock first confirms, and
@@ -173,6 +176,7 @@ export async function applyOutcome(req, pay, ev, source) {
         `UPDATE payment SET status='failed', flagged_reason=$2, flagged_at=now(),
                 provider_payment_id=$3 WHERE id=$1`,
         [locked.id, `paid_but_order_state=${order?.state ?? 'missing'}`, ev.providerPaymentId]);
+      lateMoney = order?.state ?? 'missing';
       return;
     }
 
@@ -207,6 +211,18 @@ export async function applyOutcome(req, pay, ev, source) {
     confirmed = true;
   });
 
+  if (lateMoney) {
+    /* Real money with no order to give it to. Nobody is refunded automatically
+       here, so somebody must be told at once. */
+    await audit(req, { action: 'payment.flagged', resource: 'payment', resourceId: pay.id,
+                       outcome: 'denied',
+                       detail: { reason: `paid_but_order_state=${lateMoney}`, source, order_id: pay.order_id,
+                                 amount_paise: pay.amount_paise } });
+    alertOwnerAsync('payment_mismatch', 'A customer paid for an order that is no longer open',
+      [`The order was already ${lateMoney} when the payment succeeded, so it was NOT confirmed.`,
+       'The customer has been charged. Campus Control > Finance shows the flagged payment; refund it from there after checking the Cashfree dashboard.']);
+    return { ok: true, rejected: 'order no longer awaiting payment' };
+  }
   if (!confirmed) return { ok: true, duplicate: true };
 
   await audit(req, { action: 'payment.captured', resource: 'order', resourceId: pay.order_id,
@@ -221,6 +237,52 @@ export async function applyOutcome(req, pay, ev, source) {
      un-confirm a paid order, so it is deliberately not in the tx. */
   assignDelivery(pay.order_id).catch((e) => req.log?.error({ e }, 'assignment failed'));
   return { ok: true, confirmed: true };
+}
+
+/* ==========================================================================
+   settleBeforeClosing — call before an unpaid order is given up on.
+
+   Cashfree is asked first, because "no webhook yet" is not "not paid". If the
+   money arrived, the order confirms through applyOutcome and is NOT closed.
+   Otherwise every session the order still has is terminated, so it cannot be
+   paid after we stop expecting it.
+
+     'paid'         the order is confirmed now; do not close it
+     'unreachable'  the provider could not be asked; closing would be a guess
+     'clear'        nothing arrived; sessions closed; safe to cancel
+
+   Termination is best effort. A payment already in flight can still land, and
+   applyOutcome then flags it and alerts the owner rather than confirming.
+   ========================================================================== */
+export async function settleBeforeClosing(req, orderId) {
+  if (!PAYMENTS.configured) return 'clear';
+  const attempts = (await q(
+    `SELECT * FROM payment
+      WHERE order_id=$1 AND provider_order_id IS NOT NULL AND flagged_reason IS NULL
+        AND status IN ('pending','failed')`, [orderId])).rows;
+  if (!attempts.length) return 'clear';
+
+  const adapter = requireAdapter();
+  const mine = attempts.filter((a) => a.provider === adapter.id);
+  let unreachable = false;
+  for (const a of mine) {
+    let ev;
+    try { ev = await adapter.fetchOrder(a.provider_order_id); }
+    catch (e) {
+      unreachable = true;
+      req?.log?.warn({ err: String(e.message) }, 'payment status check before closing failed');
+      continue;
+    }
+    if (ev.outcome === 'paid') {
+      const r = await applyOutcome(req, a, ev, 'status_pull');
+      if (r.confirmed) return 'paid';
+    }
+  }
+  if (unreachable) return 'unreachable';
+  if (typeof adapter.terminateOrder === 'function') {
+    for (const a of mine) await adapter.terminateOrder(a.provider_order_id).catch(() => false);
+  }
+  return 'clear';
 }
 
 export default async function paymentRoutes(app) {
@@ -277,6 +339,27 @@ export default async function paymentRoutes(app) {
         `order.total_paise=${order.total_paise}, snapshot=${snap.customer_total_paise}.`);
     }
     const amountPaise = snap.customer_total_paise;
+
+    /* A customer who closed the checkout and tried again has a second order at
+       the same café. Left open, both could be paid: a UPI request approved late
+       charges them twice. So the earlier one is settled or closed first. */
+    const earlier = (await q(
+      `SELECT id, code FROM food_order
+        WHERE customer_id=$1 AND vendor_id=$2 AND state='awaiting_payment' AND id<>$3`,
+      [order.customer_id, order.vendor_id, order.id])).rows;
+    for (const e of earlier) {
+      const verdict = await settleBeforeClosing(req, e.id);
+      if (verdict === 'paid') {
+        throw Conflict(`Your payment for order ${e.code} went through`,
+          'That order is confirmed. Nothing has been charged for this one.');
+      }
+      if (verdict === 'unreachable') {
+        throw Conflict('Your earlier payment could not be checked yet',
+          'Nothing has been charged for this order. Please try again in a moment.');
+      }
+      await q(`UPDATE payment SET status='cancelled' WHERE order_id=$1 AND status='pending'`, [e.id]);
+      await tx((c) => transition(c, e.id, 'cancelled', null, 'replaced by a newer order'));
+    }
 
     /* Resume rather than duplicate. A customer who reloads the checkout page
        — or double-taps Pay — gets the SAME provider order back instead of a
@@ -438,24 +521,33 @@ export default async function paymentRoutes(app) {
        itself — but a duplicate does no work at all. */
     if (!fresh.inserted) return { ok: true, duplicate: true };
 
-    /* Refund status webhooks: Cashfree refunds are asynchronous, so the
-       money reaching the customer is learned here (or by reconciliation). */
-    if (adapter.readRefundEvent) {
-      const rf = adapter.readRefundEvent(evt);
-      if (rf) return applyRefundOutcome(req, rf);
+    try {
+      /* Refund status webhooks: Cashfree refunds are asynchronous, so the
+         money reaching the customer is learned here (or by reconciliation). */
+      if (adapter.readRefundEvent) {
+        const rf = adapter.readRefundEvent(evt);
+        if (rf) return await applyRefundOutcome(req, rf);
+      }
+
+      const ev = adapter.readEvent(evt, req.headers);
+      if (!ev.providerOrderId) return { ok: true, ignored: true };
+
+      const pay = await one(
+        `SELECT * FROM payment WHERE provider = $1 AND provider_order_id = $2`,
+        [adapter.id, ev.providerOrderId]);
+      /* An event for an order this deployment never created. Not guessed at,
+         not matched on amount, not matched on anything else: ignored. */
+      if (!pay) return { ok: true, ignored: 'unknown payment' };
+
+      return await applyOutcome(req, pay, ev, 'webhook');
+    } catch (e) {
+      /* Nothing was applied, and the 500 makes the provider retry. The record
+         of this delivery goes, or that retry would be taken for a duplicate
+         and a real payment would never confirm. */
+      await q(`DELETE FROM payment_webhook WHERE provider=$1 AND event_id=$2`,
+              [adapter.id, String(eventId)]).catch(() => {});
+      throw e;
     }
-
-    const ev = adapter.readEvent(evt, req.headers);
-    if (!ev.providerOrderId) return { ok: true, ignored: true };
-
-    const pay = await one(
-      `SELECT * FROM payment WHERE provider = $1 AND provider_order_id = $2`,
-      [adapter.id, ev.providerOrderId]);
-    /* An event for an order this deployment never created. Not guessed at,
-       not matched on amount, not matched on anything else: ignored. */
-    if (!pay) return { ok: true, ignored: 'unknown payment' };
-
-    return applyOutcome(req, pay, ev, 'webhook');
   });
 
   /* ---------- the browser's return from checkout -------------------------
@@ -519,6 +611,11 @@ export default async function paymentRoutes(app) {
     if (!order) throw NotFound('No such order');
     if (order.customer_id !== req.actor?.id) throw Forbidden('That order is not yours');
     if (order.state !== 'awaiting_payment') throw Conflict(`Cannot cancel a ${order.state} order here`);
+    /* If the money already arrived the order stands. If Cashfree cannot be asked
+       the customer may still cancel; a late success is flagged and alerted. */
+    if (await settleBeforeClosing(req, order.id) === 'paid') {
+      return { ok: true, state: 'confirmed' };
+    }
     await q(`UPDATE payment SET status = 'cancelled'
               WHERE order_id = $1 AND status = 'pending'`, [order.id]);
     await tx((c) => transition(c, order.id, 'cancelled', req.actor, 'payment cancelled by customer'));

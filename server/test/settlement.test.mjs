@@ -108,7 +108,7 @@ async function paidOrder({ partner = null } = {}) {
   assert.equal(draft.status, 200, JSON.stringify(draft.body));
 
   const intent = await cs.post('/payments/intent', { orderId: draft.body.id });
-  const payload = { event: 'payment.captured', payload: { payment: { entity: {
+  const payload = { event: 'payment.captured', payload: { payment: { entity: { currency: 'INR',
     id: 'pay_' + Math.random(), order_id: intent.body.gatewayOrderId,
     amount: intent.body.amountPaise, status: 'captured' } } } };
   const raw = JSON.stringify(payload);
