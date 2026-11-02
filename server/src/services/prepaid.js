@@ -18,7 +18,7 @@ const ONLINE = new Set(['online', 'upi', 'card', 'netbanking', 'cashfree']);
 const CASH_FLAGS = ['cod', 'cashOnDelivery', 'cash_on_delivery', 'payOnDelivery', 'pay_on_delivery', 'payAtCounter', 'pay_at_counter'];
 
 export const OnlineOnly = () => BadRequest('Online payment only',
-  'ECHO ECHO takes UPI and card payments online before the order goes to the counter. There is no cash on delivery or pay-at-counter, for pickup or delivery.');
+  'ECHO ECHO takes UPI, card and net banking payments online before the order goes to the counter. There is no cash on delivery or pay-at-counter, for pickup or delivery.');
 
 export function assertOnlinePayment(body) {
   if (!body || typeof body !== 'object') return;

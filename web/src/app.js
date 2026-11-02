@@ -3601,32 +3601,52 @@ async function openRazorpay(intent) {
    The gateway's own callback only stops the spinner. The order is confirmed
    by the server's webhook, so we poll the SERVER for the real state rather
    than believing anything the browser was told. */
+const PAYING_KEY = 'echo.paying';
+const remember = (id) => { try { localStorage.setItem(PAYING_KEY, id); } catch { /* storage blocked */ } };
+const forget = () => { try { localStorage.removeItem(PAYING_KEY); } catch { /* storage blocked */ } };
+
+/* Asks the SERVER what happened to a payment and shows the answer. The browser
+   decides nothing here. `quiet` is a return to the site: with no answer about
+   that order (somebody else's, or the network), nothing is shown. */
+async function followPayment(orderId, { quiet = false } = {}) {
+  let known = false;
+  for (let i = 0; i < 10; i++) {
+    const st = await quad.paymentStatus(orderId).catch(() => null);
+    known ||= !!st;
+    if (st?.confirmed) { S.cart = []; go('tracking', { id: orderId }); return toast('Paid · order placed'); }
+    if (st?.underReview) { go('tracking', { id: orderId }); return toast(st.message, 'bad'); }
+    if (st?.payment === 'failed') { go('checkout'); return toast('Payment failed — the order was not placed.', 'bad'); }
+    if (st?.orderState === 'cancelled') { go('checkout'); return toast('Payment cancelled — the order was not placed.', 'bad'); }
+    if (!st && quiet) return;
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+  if (quiet && !known) return;
+  go('tracking', { id: orderId });
+  toast('Waiting for confirmation from the payment gateway.');
+}
+
 async function openGateway(intent, draft) {
   const proceed = confirm(
     `${draft.items.map((i) => `${i.qty}× ${i.name}`).join('\n')}\n\n` +
     `Total: ${intent.amountDisplay}\n\nContinue to payment?`);
   if (!proceed) { await quad.cancelPayment(draft.id).catch(() => {}); return; }
 
+  /* A bank or UPI app can take the whole page away and return to the site's
+     front door. This is how the customer finds their payment again. */
+  remember(draft.id);
   try {
     if (intent.provider === 'cashfree') await openCashfree(intent);
     else if (intent.provider === 'razorpay') await openRazorpay(intent);
     else throw new Error(`Unknown payment provider "${intent.provider}"`);
   } catch (e) {
+    forget();
     toast(e.message || 'The payment gateway could not be opened.', 'bad');
     return;
   }
 
   drop('orders', `order:${draft.id}`);
-  for (let i = 0; i < 10; i++) {
-    const st = await quad.paymentStatus(draft.id).catch(() => null);
-    if (st?.confirmed) { S.cart = []; go('tracking', { id: draft.id }); return toast('Paid · order placed'); }
-    if (st?.underReview) { go('tracking', { id: draft.id }); return toast(st.message, 'bad'); }
-    if (st?.payment === 'failed') { go('checkout'); return toast('Payment failed — the order was not placed.', 'bad'); }
-    if (st?.orderState === 'cancelled') { go('checkout'); return toast('Payment cancelled — the order was not placed.', 'bad'); }
-    await new Promise((r) => setTimeout(r, 1200));
-  }
-  go('tracking', { id: draft.id });
-  toast('Waiting for confirmation from the payment gateway.');
+  await followPayment(draft.id);
+  forget();
 }
 
 /* ===================== boot ============================================= */
@@ -3674,6 +3694,14 @@ async function openGateway(intent, draft) {
     go(gate, {}, { history: 'replace' });
   } else if (wanted) go(wanted.route, wanted.params, { history: 'replace' });
   else go(signedIn() ? 'home' : 'welcome', {}, { history: 'replace' });
+
+  /* Back from a checkout that left the page. */
+  let paying = null;
+  try { paying = localStorage.getItem(PAYING_KEY); } catch { /* storage blocked */ }
+  if (paying && signedIn() && !PREVIEW) {
+    forget();
+    followPayment(paying, { quiet: true });
+  }
 })();
 
 /* Campus Control's preview asks for a screen by name: public screens only. */
