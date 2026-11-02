@@ -128,6 +128,8 @@ test('a student signs in with their university mailbox and reaches a cart that s
   await page.getByRole('button', { name: 'Save and continue' }).click();
   await expect.poll(async () => (await db.query(`SELECT name FROM app_user WHERE student_email = $1`, [email])).rows[0]?.name, { timeout: 15000 }).toBe('First Student');
 
+  /* Saving moves on by itself; opening the menu before that finishes would be overridden. */
+  await expect(page.getByRole('button', { name: 'Save and continue' })).toHaveCount(0, { timeout: 15000 });
   await page.goto(`/web/#/menu/${v.id}`);
   await page.locator('[data-act=add]').first().click();
   await page.goto('/web/#/cart');
@@ -285,6 +287,9 @@ test('a lost authenticator: recovery codes, password and a new authenticator, th
   await p.locator('input[name=password]').fill(PASSWORD);
   await p.locator('input[name=recoveryCode]').fill(code);
   await p.locator('button[type=submit]').click();
+  /* If the server refuses, fail with what it said rather than a timeout. */
+  await p.locator('.enrol-key, .auth-error').first().waitFor();
+  expect(await p.locator('.auth-error').allTextContents(), 'recovery refused').toEqual([]);
   await p.locator('.enrol-key summary').click();
   const newSecret = (await p.locator('.enrol-secret').textContent()).replace(/\s/g, '');
   await p.locator('input[name=code]').fill(totp(newSecret));

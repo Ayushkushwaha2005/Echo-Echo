@@ -10,9 +10,9 @@ Status of each finding in section 9 of the 31 Oct 2026 audit, on branch
 | S3 CSP report-only | PARTIAL | Enforced on Campus Control and Counter, verified in a browser: injected scripts blocked, no violations on tested journeys | The student site stays report-only, because it loads the checkout SDK and checkout can't be tested while payments are frozen |
 | S4 Owner recovery | PARTIAL | Recovery codes, alert address, tested | Owner identity is still a student mailbox: change `PLATFORM_OWNER_EMAIL` before graduation |
 | S5 Exposed authenticator secret | BLOCKED | Nothing could be checked: telling needs the owner | Owner replaces it in My Profile (below) |
-| S6 High-risk approvals | PARTIAL | Framework for non-payment actions; DB refuses self-decision | Audit's actual examples are payout and finance actions, excluded while frozen |
+| S6 High-risk approvals | PARTIAL | Café archive and website publish, the audit's two non-payment actions, are wired, off by default. DB refuses self-decision | Audit's main examples are payout and finance actions, excluded while frozen. A second approver for the owner doesn't exist |
 | S7 Branch protection | BLOCKED | Confirmed `main` is unprotected; command prepared | Owner's decision |
-| S8 Audit outside the transaction | PARTIAL | `auditTx` used for invitations, sessions, recovery, approvals and bulk menu; a failed audit stops the action | Other older routes still use the best-effort `audit()`, including all finance routes |
+| S8 Audit outside the transaction | PARTIAL | `atomic-routes.js` runs 44 privileged non-payment routes in one transaction with their audit row, and `auditTx` covers invitations, sessions, recovery, approvals and bulk menu. Proved by making the audit log fail: the change is undone | Finance, wallet, payment, refund and deposit routes keep best-effort audit, because they are frozen. Sign-in keeps it on purpose, so a logging fault can't lock everyone out |
 | S9 Coordinates via `orders.view` | COMPLETE | `delivery.track`; views audited | Owner grants it deliberately |
 | S10 Database roles | PARTIAL | `deploy/db-roles.sql`, proved on a throwaway database | Production change needs an owner decision and a backup |
 | S11 Plaintext secrets on this PC | BLOCKED | Inventory done, all gitignored, history scanned | Owner moves them to a password manager, and checks `server/.env`, which points at a remote database |
@@ -23,7 +23,7 @@ Status of each finding in section 9 of the 31 Oct 2026 audit, on branch
 | S16 Image re-encoding | COMPLETE | Decoded and rebuilt server-side with `sharp` | Adds a native dependency: check the production image builds |
 | S17 Request ids | COMPLETE | Strict format, otherwise generated | |
 | S18 Session timeout | COMPLETE | 60 idle minutes, `last_seen_at` per session | |
-| S19 Auto-deploy mismatch | BLOCKED | `render.yaml` is correct | Owner checks the Render dashboard |
+| S19 Auto-deploy mismatch | BLOCKED | Confirmed on 2 Nov 2026: Render reports `autoDeploy: yes`, trigger `commit`. Last 5 deploys were `api` | The change was refused by session permission controls. Owner turns it off in the dashboard |
 
 ## S5: replacing the authenticator (owner only)
 
@@ -43,11 +43,12 @@ replaced. Whether it is still active can't be told from here, and it was not loo
 - **Revoked certificate warning.** On 2 Nov 2026, Windows reported `udyamregistration.gov.in` as revoked. That's a
   government site, unrelated to ECHO ECHO, and already raised with the owner.
 - **`sharp` 0.33.5 had a high-severity advisory** when first chosen, so 0.35.5 is pinned.
+- **The Menu café picker ignored a keyboard or phone selection.** This is live on `main`. The dropdown showed the new café while the page kept the old café's menu, so an edit could land on the wrong café. Found by a browser journey and fixed.
+- **Test isolation:** the test helper could connect to another checkout's database on the same port and drop it. It now checks the data directory first.
 - **A stream start race** could miss a change made right after connecting. Found by a test and fixed.
 - **Duplicate-photo detection** would have silently stopped working once images were re-encoded. Found by an
   existing test and fixed: the fingerprint is now of the uploaded bytes.
 
 ## Not done
 
-This work was not a penetration test. The audit's unreviewed 52 `innerHTML` uses in the admin app were not reviewed
-line by line either; enforced CSP limits the damage, but that review and an external test are still worth doing.
+This work was not a penetration test, and one is still worth having. The audit's `innerHTML` uses were checked two ways rather than read line by line: a browser journey stores script payloads in cafés, dishes, names, notes, reviews, support cases, delivery addresses and data requests, then opens every Campus Control page and six student pages; and a scan found no unescaped user-text field in the three apps outside `modal()` titles, which it escapes.

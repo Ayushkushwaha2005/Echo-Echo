@@ -1,5 +1,7 @@
 # Privacy and data retention: DPDP gap report
 
+**Deletion requests** run open, in review, then completed or declined, or the person cancels while still open. Campus Control's Data requests page lists what is held about the person, as counts, and the owner records the outcome, which the person is told. Recording an outcome deletes nothing: nothing erases a record until retention periods are decided.
+
 **This is an engineering review, not legal advice, and it does not say ECHO ECHO complies
 with the Digital Personal Data Protection Act, 2023.** A qualified lawyer needs to review it,
 including which DPDP Rules apply and from when, because that was not checked here.
@@ -47,7 +49,7 @@ including which DPDP Rules apply and from when, because that was not checked her
 
 ## Logo
 
-The audit flagged a resemblance between the logo and an existing character. This could not be
+See `LOGO-ASSESSMENT.md` for the technical look done since. The audit flagged a resemblance between the logo and an existing character. This could not be
 assessed here: `brand/logo/` holds the logo but no design files or record of who made it or from
 what. This work is not legal clearance. The owner should find the designer's source files, have a
 trademark lawyer compare the mark, and commission a distinct mark if needed. The logo was not changed.

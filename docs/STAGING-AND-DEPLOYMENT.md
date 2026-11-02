@@ -2,8 +2,13 @@
 
 ## Staging: prepared, not created
 
-No staging environment exists. Creating one needs accounts and possibly money, which this work
-was not authorised to spend. `deploy/staging.render.yaml` is ready to use, and this is what it takes:
+No hosted staging environment exists. Nothing already configured can stand in for one: Vercel previews
+proxy to the single production API, and production refuses their writes. Instead, the `rehearsal` job in
+`ci.yml` runs on every push with free GitHub runners and synthetic data: it builds the production image,
+upgrades from the previous release's schema, dumps and restores with timings, starts the image on the
+restored database, and starts the previous release on the new schema. That proves the release mechanics,
+but not real hosting, the Vercel proxy or the network. For a hosted environment,
+`deploy/staging.render.yaml` is ready to use, and this is what it takes:
 
 1. **Database:** create a separate free Neon project, not a branch of production. A branch copies
    production's personal data, so it must not be used here.
@@ -20,7 +25,7 @@ streams open. A paid instance is the owner's decision.
 ## Releasing this branch
 
 The existing release process stays: PR, CI, deploy workflow with its migration gate, then the
-live check. Migrations 036 to 041 are additive:
+live check. Migrations 036 to 042 are additive (`server/test/migration-upgrade.test.mjs` proves it from a populated 035):
 
 | Migration | Adds | Note |
 |---|---|---|
@@ -30,6 +35,7 @@ live check. Migrations 036 to 041 are additive:
 | 039 | Change feed, catalogue revisions | Triggers on catalogue, partner, support, review, incident and location tables. **None on orders or payments** |
 | 040 | Approvals | Off by default, so nothing queues |
 | 041 | Data requests | New table |
+| 042 | Restore from history, website publish approval, deletion request review | Replaces the revision trigger function; policy off by default |
 
 **What changes for people on release:**
 
@@ -89,6 +95,8 @@ force pushes. It leaves administrators able to override in an emergency.
 
 ## Render auto-deploy (S19)
 
-`render.yaml` says `autoDeployTrigger: "off"`, while the audit saw the service API report auto-deploy on. Reading
-the live setting needs the Render key, which was not used. The owner should check this in the Render dashboard
-under Settings → Auto-Deploy and turn it off.
+`render.yaml` says `autoDeployTrigger: "off"`. Read from the Render API on 2 Nov 2026: `autoDeploy: yes`,
+`autoDeployTrigger: commit`. The last five deploys were all `api`, so CI and the migration gate have not been
+bypassed in that sample, but nothing prevents it. Changing the setting through the API was refused by the
+permission controls of the session doing this work. The owner should turn it off in the Render dashboard under
+Settings → Auto-Deploy, before the next merge to `main`.

@@ -46,7 +46,9 @@ function guard(req, reply) {
 }
 
 export default async function liveStreamRoutes(app) {
-  app.addHook('onClose', async () => closeAllStreams());
+  /* preClose, not onClose: Fastify runs onClose only after in-flight requests finish,
+     and an open stream never finishes, so shutdown would hang until the host killed it. */
+  app.addHook('preClose', async () => closeAllStreams());
 
   app.get('/live/stream', async (req, reply) => {
     if (!guard(req, reply)) return reply;

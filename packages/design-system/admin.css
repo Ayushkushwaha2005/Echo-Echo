@@ -914,7 +914,12 @@ body { background: var(--cc-c-canvas); color: var(--cc-c-text); font-family: var
 /* ---------- Cafés: a card per café, its own photograph on top ------------------ */
 .cafe-grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 .cafe-card { padding: 0; overflow: hidden; border: 1px solid var(--cc-c-border-strong); border-radius: 14px; display: flex; flex-direction: column; }
-.cafe-card.is-archived { opacity: .7; }
+.cafe-card.is-archived .cafe-img { opacity: .6; }
+.cafe-card.is-archived { background: var(--bg-sunken); }
+@media (max-width: 640px) {
+  .cc-frame .item { flex-wrap: wrap; }
+  .cc-frame .item > .row { flex-wrap: wrap; width: 100%; }
+}
 .cafe-img { position: relative; aspect-ratio: 16 / 9; overflow: hidden; display: grid; place-items: center; }
 .cafe-img .cafmark { width: 64px; height: 64px; border-radius: 18px; display: grid; place-items: center; font-weight: 700;
   font-size: 1.4rem; color: var(--text-on-ink); }

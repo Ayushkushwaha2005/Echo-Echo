@@ -53,6 +53,22 @@ test('five server errors in five minutes are counted by route, with no detail ab
   assert.equal(serverErrorSummary(now + 6 * 60 * 1000).lastFiveMinutes, 0);
 });
 
+test('an open stream does not stop the server shutting down', async () => {
+  const before = process.env.LIVE_STREAMS_ENABLED;
+  process.env.LIVE_STREAMS_ENABLED = 'true';
+  const server = await makeApp();
+  try {
+    const base = await server.listen({ port: 0, host: '127.0.0.1' });
+    const res = await fetch(`${base}/live/stream`);
+    assert.equal(res.status, 200);
+    const closed = await Promise.race([server.close().then(() => true), new Promise((r) => setTimeout(() => r(false), 5000))]);
+    assert.equal(closed, true, 'close() was still waiting after five seconds');
+    await res.body.cancel().catch(() => {});
+  } finally {
+    process.env.LIVE_STREAMS_ENABLED = before;
+  }
+});
+
 test('no finance, payment, wallet or refund route is in the atomic list', () => {
   for (const r of atomicRoutes.ATOMIC_ROUTES) assert.doesNotMatch(r, /financ|payment|wallet|refund|payout|settle|webhook|deposit/i, r);
 });

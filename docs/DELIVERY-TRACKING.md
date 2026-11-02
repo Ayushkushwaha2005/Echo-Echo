@@ -35,6 +35,8 @@ people who need the map.
 - Only one row per partner exists, so no trail can build up.
 - Age is measured on the server's clock.
 
+A fix held back by the throttle, or lost to a dropped network, is kept and retried every 5 s, so the last move isn't lost if the phone reports nothing new. A device clock in the wrong unit or year is replaced by the time the fix arrived. Emulated Pixel (Chromium) and iPhone (WebKit) journeys in `tests/browser/journeys/devices.spec.mjs` cover moving, offline and hidden-screen cases. They test the page and the browser engine, not a real phone's GPS, lock screen or battery.
+
 Never done: simulated movement, IP-based positions, or an old position presented as live.
 After 60 s the marker goes grey, and after 5 minutes it is not drawn.
 
