@@ -56,6 +56,21 @@ test('an open public page picks up a cafe change with no stream', async ({ page 
   await expect(page.getByText(v.name)).toHaveCount(0, { timeout: 150_000 });
 });
 
+test('a menu left open shows a new price and a sold-out item within the refresh, with no stream or reload', async ({ page }) => {
+  test.setTimeout(200_000);
+  const v = await vendor(`Open Menu Cafe ${Date.now() % 100000}`);
+  const { rows: [item] } = await db.query(`INSERT INTO menu_item (vendor_id, name, price_paise, available, active) VALUES ($1,'Open Menu Tea',2500,true,true) RETURNING id`, [v.id]);
+  await db.query(`INSERT INTO menu_item (vendor_id, name, price_paise, available, active) VALUES ($1,'Open Menu Bun',4000,true,true)`, [v.id]);
+  await page.goto(`/web/#/menu/${v.id}`);
+  await expect(page.getByText('Open Menu Tea').first()).toBeVisible({ timeout: 15000 });
+  await page.evaluate(() => { window.__sameDocument = true; });
+  await db.query(`UPDATE menu_item SET price_paise = 3700 WHERE id = $1`, [item.id]);
+  await db.query(`UPDATE menu_item SET available = false WHERE vendor_id = $1 AND name = 'Open Menu Bun'`, [v.id]);
+  await expect(page.getByText(/37/).first()).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByText('Sold out').first()).toBeVisible();
+  expect(await page.evaluate(() => window.__sameDocument), 'no reload').toBe(true);
+});
+
 test('a real stream is cut: the browser reconnects by itself and is told what it missed', async ({ page }) => {
   test.setTimeout(120_000);
   let api = startStreamApi();

@@ -793,7 +793,7 @@ const needVendors = () => {
 /* Cafés open and close by the clock, so a page left open at 7:59 or 5:59
    must change without a reload. Once a minute the server is asked again
    (it computes the status in campus time); the page re-renders only when
-   a café's status actually changed. */
+   a café's status actually changed, or the open menu did. */
 const refreshCafes = async () => {
   if (document.hidden || S.sheet || !['home', 'cafes', 'welcome', 'menu'].includes(S.route) || S.campuses === null) return;
   try {
@@ -801,8 +801,16 @@ const refreshCafes = async () => {
     const sig = (r) => (r?.vendors || []).map((v) => `${v.id}:${v.open_now}:${v.status?.line}`).join('|');
     const same = cache.vendors?.ok && sig(cache.vendors.v) === sig(fresh);
     keep('vendors', fresh);
-    if (same) return;
-    if (S.route === 'menu') drop(`menu:${S.params.caf}`);
+    /* An open menu follows its prices and sold-out items, not only the café's hours. */
+    let menuMoved = false;
+    if (S.route === 'menu' && S.params.caf) {
+      const key = `menu:${S.params.caf}`;
+      const menu = await quad.menu(S.params.caf);
+      menuMoved = !!cache[key]?.ok && JSON.stringify(cache[key].v.items) !== JSON.stringify(menu.items);
+      if (menuMoved) keep(key, menu);
+    }
+    if (same && !menuMoved) return;
+    if (!same && !menuMoved && S.route === 'menu') drop(`menu:${S.params.caf}`);
     render();
   } catch { /* offline: the next tick tries again */ }
 };

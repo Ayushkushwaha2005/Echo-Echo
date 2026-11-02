@@ -1,24 +1,20 @@
 # Test results
 
-Run on 2 Nov 2026, on Windows with Node 24, against a disposable PostgreSQL with synthetic data. Nothing here
-ran against production.
+The record is CI on the PR: GitHub's runners, Ubuntu, Node 22, disposable PostgreSQL, synthetic data. Nothing here ran against production. The peak-load figures come from this Windows PC.
 
 ## Totals
 
 | Suite | Result |
 |---|---|
-| Baseline: merged base `1331bbd`, before any remediation | 917 passed, 0 failed |
-| Server suite: remediation branch | 999 passed, 0 failed |
-| Browser journeys: Playwright, Chromium, real bundle and API, enforced CSP | 25 passed, 0 failed |
-| Static frontend QA, bundle smoke, asset version | Passed |
+| Server suite | See the PR's `test` job. 1011 passed, 0 failed locally on 2 Nov 2026, before the last two tests were added |
+| Browser journeys | See the PR's `browser` job: Chromium, plus emulated Pixel and iPhone engines, real bundle and API, enforced CSP |
+| Release rehearsal | See the PR's `rehearsal` job: image, `sharp` in the image, upgrade from `8880959`, dump and restore, start on the restored database, previous release on the new schema |
+| Static frontend QA, bundle smoke, asset version, media paths | Passed |
 | `npm audit` in `server` | 0 vulnerabilities |
 
-Two earlier baseline runs were thrown away: one overlapped with my edits, the other with a second run. The 917
-figure is the third run, with nothing else using a database. Browser-suite failures along the way were mostly
-wrong test assumptions, but they also found the two real bugs in `SECURITY-HARDENING.md`.
+Local runs were spoiled twice. On 2 Nov 2026 a second checkout's test suite shared this machine's test port, so the two dropped each other's database: the test helper now checks whose cluster it has reached, and local runs use `TEST_PG_PORT=56432`. A later local full run was stopped by the machine's memory guard and not restarted, which is why CI is the record.
 
-The journeys were run from a stack started by hand. CI's browser job is new, and its first run is what the PR
-shows, so check that result rather than this file.
+One journey (lost authenticator) failed once in CI by timeout and passed on the next run with no related change. It now fails with the server's message if the server refuses. Treat it as possibly flaky until several runs say otherwise.
 
 ## Requested coverage
 
@@ -41,46 +37,37 @@ shows, so check that result rather than this file.
 | 15 | Stale GPS replay | Run | `remediation` |
 | 16 | GPS denial | Run | `position-share`, browser with a stubbed denial |
 | 17 | Tracking privacy | Run | `tracking-privacy`, `remediation`, browser |
-| 18 | SSE reconnection | Partly | Last-Event-ID catch-up is tested. A browser's automatic reconnect is not |
-| 19 | Network interruption | Simulated | `position-share` only. A real network drop is on the device checklist |
-| 20 | Concurrent orders | Partly | Partner-accept race only. Concurrent order creation is not run, because it would go through checkout |
-| 21 | Database failure and recovery | Partly | Audit-failure and transaction rollback, the nightly restore drill. No live outage test |
-| 22 | CSP and XSS | Partly | Injected and remote scripts blocked in a real browser. The 52 `innerHTML` uses are not reviewed |
+| 18 | SSE reconnection | Run | `live-resilience.spec`: a real browser, a real server process stopped and restarted, automatic reconnect, and the missed change delivered |
+| 19 | Network interruption | Emulated | `devices.spec`: real browser offline on Pixel and iPhone engines. A real signal loss is on the device checklist |
+| 20 | Concurrent orders | Partly | `perf-peak`: 100 orders moving through kitchen states with 500 pages polling. Concurrent order creation is not run, because it goes through checkout |
+| 21 | Database failure and recovery | Run, locally | Every connection cut mid-load (`perf-peak`), audit failure rolls back the action, restore rehearsal. No managed-database outage test |
+| 22 | CSP and XSS | Run | Injected and remote scripts blocked; stored payloads across every admin page and six student pages. Not a penetration test |
 | 23 | Upload security | Run | `remediation`: EXIF, trailing data, truncation, disguise, pixel bomb |
 | 24 | Rate-limit spoofing | Run | `remediation`, `edge-limit` |
-| 25 | Responsive and accessibility | Partly | 6 Campus Control pages at 3 widths; axe on 3 screens. Not all 23 pages, and not the student site |
-| 26 | Admin browser journeys | Partly | Below |
+| 25 | Responsive and accessibility | Partly | Every Campus Control page at 390 px with axe at 1440 px. Student site: widths via emulated phones, axe not run |
+| 26 | Admin browser journeys | Run | Below |
 
 ## Browser journeys
 
-**Covered:** employee invitation end to end with real sign-in, used link, sessions, permission restrictions, audit
-log, live map with and without `delivery.track`, approvals, stale form, widths, accessibility, café discovery, partner
-sharing, GPS denial, Counter's delivery status, CSP on sign-in, CSP report-only on the student site, script injection,
-customer tracking, menu, Team Chat, website draft and preview, partner applicant and refused approval, data download.
+**Covered:** every Campus Control page signed in; employee invitation end to end with real sign-in; lost authenticator; sessions; permission restrictions; audit log; live map with and without `delivery.track`; approvals; stale form; bulk prices with a conflict; restoring a menu item; website draft and preview; Team Chat; partner applicant and refused approval. Student sign-in by mailbox through profile setup to a cart with no payment call; applying to deliver with a real photo upload; delivery from offer to handoff; customer tracking; menu; data download; deletion request end to end. Counter's delivery status. CSP and script injection. Polling fallback on admin, café list and open menu; a cut stream reconnecting.
 
-**Not covered in a browser** (most have API-level tests): student sign-in through the location gate, cart and order
-draft, full partner onboarding, delivery assignment, handoff code, and the bulk-price screens.
+**Not covered in a browser:** paying and anything after it (frozen), finance actions (frozen), and the two-person approval of a website publish (API tests only).
 
 ## Measured performance
 
-From `tools/perf-local.mjs`. API and database on one Windows PC with no network, so **these numbers say nothing about
-production capacity**.
+From `tools/perf-peak.mjs` and `tools/perf-local.mjs`. API and database on one Windows PC with no network, so **these numbers say nothing about production capacity**.
 
 | Measurement | Result |
 |---|---|
-| Café list, 1000 requests at 20 concurrent, warm | p95 12.5 ms, 0% errors |
-| Menu, 1000 requests at 20 concurrent, warm | p95 13.2 ms, 0% errors |
-| `/admin/changes`, 500 at 10 concurrent | p95 11.1 ms |
-| Admin order history, 200 at 5 concurrent | p95 9.3 ms |
-| Change stamp cost, 320 menu items | 0.9 ms hashing the table, 0.1 ms with the feed |
-| Menu edit to a connected stream | About 1.8 s median, 2 s poll interval |
-| GPS report, including all checks | p95 9.6 ms |
-| Streams from one address | Exactly 20 of 40 accepted: the per-address cap works |
-| Memory after the run | 97 MB |
+| 500 open pages at their real poll intervals, 60 s, 3811 requests | p95 3.9 ms, p99 7.5 ms, 0% errors |
+| 100 orders through kitchen states in 60 s (15 times the audit's rate) | p95 14.5 ms, 0 server errors. 200 moves succeeded; the 100 refused were an illegal step, sent on purpose |
+| Every database connection cut during that load (10 connections) | Serving again in 213 ms, 0 failed requests of 553 |
+| Cold start, process to first answer, 3 runs | 582 to 646 ms, excluding the instance waking: Render took about 13 s on 26 Oct 2026 |
+| Earlier: café list and menu, warm | p95 about 13 ms |
+| Earlier: change stamp, 320 items | 0.9 ms hashing, 0.1 ms with the feed |
+| Earlier: menu edit to a connected stream | About 1.8 s |
 
-**Not measured, so not claimed:** p95 under 500 ms on real infrastructure, 100 orders in 15 minutes, 500 open pages,
-0.5% errors under load, and cold-start behaviour. These need the staging environment. The measured sub-5-second figure
-excludes the Vercel proxy and the client's refetch.
+**Not measured, so not claimed:** p95 under 500 ms from India on real hosting, and error rate under load through Render, Vercel and Neon. These need real hosting.
 
 ## Backup and restore
 
@@ -88,9 +75,10 @@ Not run locally, because this machine has no `pg_dump`. GitHub Actions' nightly 
 into a throwaway database and compares row counts. The last three runs (30 Oct to 1 Nov 2026) succeeded. In the 1 Nov run,
 the dump took 12 s and the decrypt and restore check took 1 s.
 
-**Not done:** starting the application against a restored database, and a written recovery time from a real
-incident. The recovery point is about a day, because the backup runs daily at 03:00 IST.
+CI's `rehearsal` job also upgrades, dumps, restores, starts the production image on the restored database and starts the previous release on the new schema, with synthetic data. The nightly drill now starts the application on the restored copy of real data once this workflow is on `main`.
+
+**Not done:** a Neon point-in-time restore, and a written recovery time from a real incident. The recovery point is about a day, because the backup runs daily at 03:00 IST.
 
 ## Physical devices
 
-**Not tested.** No phone was available. See the checklist in `DELIVERY-TRACKING.md`.
+**Not tested.** No phone was available. Emulated engines pass, but they don't exercise real GPS, a locked screen or battery. See the checklist in `DELIVERY-TRACKING.md`.
