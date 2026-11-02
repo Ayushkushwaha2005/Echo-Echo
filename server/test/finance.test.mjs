@@ -113,7 +113,7 @@ function signedWebhook(payload, { eventId = 'evt_' + Math.random() } = {}) {
 
 const captureEvent = (gatewayOrderId, amount, paymentId = 'pay_' + Math.random()) => ({
   event: 'payment.captured',
-  payload: { payment: { entity: { id: paymentId, order_id: gatewayOrderId,
+  payload: { payment: { entity: { currency: 'INR', id: paymentId, order_id: gatewayOrderId,
                                   amount, status: 'captured' } } },
 });
 

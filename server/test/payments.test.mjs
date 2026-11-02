@@ -123,7 +123,7 @@ function signedWebhook(payload, { secret = WEBHOOK_SECRET, eventId = 'evt_' + Ma
 
 const captured = (gatewayOrderId, amount, paymentId = 'pay_stub_1') => ({
   event: 'payment.captured',
-  payload: { payment: { entity: { id: paymentId, order_id: gatewayOrderId, amount, status: 'captured' } } },
+  payload: { payment: { entity: { currency: 'INR', id: paymentId, order_id: gatewayOrderId, amount, status: 'captured' } } },
 });
 
 /* A paid-up order, ready for a webhook. */

@@ -116,7 +116,7 @@ async function assignedOrder() {
   assert.equal(intent.status, 200, JSON.stringify(intent.body));
   const raw = JSON.stringify({
     event: 'payment.captured',
-    payload: { payment: { entity: { id: 'pay_' + Math.random(),
+    payload: { payment: { entity: { currency: 'INR', id: 'pay_' + Math.random(),
       order_id: intent.body.gatewayOrderId, amount: intent.body.amountPaise,
       status: 'captured' } } } });
   const res = await app.inject({ method: 'POST', url: '/payments/webhook', payload: raw,
