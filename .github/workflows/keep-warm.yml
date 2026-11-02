@@ -40,7 +40,7 @@ jobs:
     # 2 probes x (4 attempts x 60 s timeout + 50 s of backoff) at worst.
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: tools/keep-warm.mjs
           sparse-checkout-cone-mode: false
