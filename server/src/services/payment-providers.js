@@ -222,7 +222,7 @@ export const cashfree = {
         /* Carried back on the webhook and the status pull. Used only as a
            cross-check against our own mapping — never as the mapping. */
         order_tags: { quad_order_id: order.id, quad_order_code: order.code },
-        /* Online payment only, and only UPI and cards: no pay-later, no
+        /* Online payment only, and only UPI, cards and net banking: no pay-later, no
            wallets, no EMI. Cashfree enforces this on the hosted checkout. */
         order_meta: {
           ...(returnUrl ? { return_url: returnUrl } : {}),
