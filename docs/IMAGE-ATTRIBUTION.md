@@ -9,12 +9,20 @@ Generated from `tools/dish-photos.json`, the record kept when these photographs 
 - The site currently shows no credits, because the Photo credits link was removed at the owner's choice (AUDIT-REPORT.md section 3).
 - The café photographs in `packages/media/cafes` are the owner's own, taken on campus on 16 Sep 2026 (`packages/media/photos.js`). They are not in this register. Taking a photo does not by itself settle a café's or a person's permission, so confirm that with each café.
 
+## Licences re-checked on 2 Nov 2026
+
+Each source page was fetched and the licence it states was compared with this record. No credit was added or changed.
+
+- **78 of 80 match:** the source page states the recorded licence and version.
+- **2 could not be read:** `green-tea` and `softy-vanilla`, both recorded as CC0 on rawpixel.com. The site answers automated requests with HTTP 403, so a person has to open those two pages. Nothing was found that contradicts the record.
+- **A licence on the page today is not proof of the rights chain:** an uploader can mislabel a photograph or change the licence later. This check says the record is accurate, not that the photographs are cleared.
+
 ## The open decision
 
 This cannot be finished in code, because it needs a decision and permission from people:
 
 1. **Best: replace them.** Use photographs each café supplies with written permission, and record that permission here.
-2. **Or: show credits again.** Restore a credits page generated from this register, which meets the attribution condition for the 76 photos. Ask a lawyer about the BY-SA adaptation condition.
+2. **Or: show credits again.** `git revert 849d485` restores the footer link and the credits sheet exactly as they were, which you removed on purpose on 26 Oct 2026, so this was not reversed for you. It gives the 76 photos their credit. Ask a lawyer about the BY-SA adaptation condition.
 3. **Until then:** the 76 photographs are displayed without the credit their licences ask for. Nothing was replaced in this work, because no authorised replacement images exist yet.
 
 ## Register

@@ -11,6 +11,7 @@ import { assertRecentPasskey } from '../auth/passkey-policy.js';
 import { q, tx } from '../db/index.js';
 import { auditTx } from '../audit.js';
 import { HANDLERS, decideApproval, listApprovals } from '../services/approvals.js';
+import { notifyAsync } from '../services/notify.js';
 
 const assertAdmin = (actor) => {
   if (!actor) throw Unauthenticated('Sign in required');
@@ -58,6 +59,8 @@ export default async function approvalRoutes(app) {
     assertRecentPasskey(req.actor, 'deciding an approval request');
     const d = req.body?.decision;
     if (d !== 'approve' && d !== 'reject') throw BadRequest('Decision must be approve or reject');
-    return decideApproval(req, req.params.id, { approve: d === 'approve', note: req.body?.note });
+    const row = await decideApproval(req, req.params.id, { approve: d === 'approve', note: req.body?.note });
+    notifyAsync(row.requested_by, 'approval_decided', { title: `Your request was ${row.status}`, body: row.summary, data: { requestId: row.id } });
+    return row;
   });
 }

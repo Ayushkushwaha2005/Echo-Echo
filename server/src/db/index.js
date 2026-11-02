@@ -6,6 +6,7 @@
    rather than left to whatever the driver defaults to on the day.
    ========================================================================== */
 import pg from 'pg';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { DB } from '../config.js';
 
 /* Money is integer paise everywhere. Stop node-postgres turning int8 into a
@@ -38,14 +39,36 @@ pool.on('error', (err) => {
   }));
 });
 
-export const q = (text, params) => pool.query(text, params);
+/* Set only inside atomic(). Everywhere else this is empty and q, one and tx behave
+   exactly as they always have. */
+const held = new AsyncLocalStorage();
+
+/* A straggler that outlives its atomic() must not touch a connection already back in
+   the pool, where it would land in someone else's transaction. */
+const live = () => { const s = held.getStore(); return s && !s.done ? s : null; };
+
+export const q = (text, params) => (live()?.client || pool).query(text, params);
 
 export async function one(text, params) {
-  const { rows } = await pool.query(text, params);
+  const { rows } = await q(text, params);
   return rows[0] || null;
 }
 
 export async function tx(fn) {
+  const store = live();
+  if (store) {
+    /* Already inside atomic(): one connection, one commit. A second connection
+       here could wait forever on a lock this request holds. */
+    await store.client.query('SAVEPOINT nested_tx');
+    try {
+      const out = await fn(store.client);
+      await store.client.query('RELEASE SAVEPOINT nested_tx');
+      return out;
+    } catch (e) {
+      await store.client.query('ROLLBACK TO SAVEPOINT nested_tx').catch(() => {});
+      throw e;
+    }
+  }
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
@@ -59,6 +82,25 @@ export async function tx(fn) {
     c.release();
   }
 }
+
+/* Runs fn so that every q, one and tx inside it, however deep, is one transaction:
+   the whole of it commits or none of it does. `after` work (a refusal's audit row)
+   runs once the transaction has ended, on its own connection, so it survives the
+   rollback and cannot wait on a lock the transaction held. */
+export async function atomic(fn) {
+  if (live()) return fn();
+  const store = { client: null, after: [], done: false };
+  try {
+    return await tx((client) => { store.client = client; return held.run(store, fn); });
+  } finally {
+    store.done = true;
+    await Promise.all(store.after.map((work) => work()));
+  }
+}
+export const atomicStore = () => live();
+/* For work that must not join the caller's transaction, such as a notification
+   sent without waiting for it. */
+export const detached = (fn) => held.exit(fn);
 
 /* Used by /ready. Reports latency and pool saturation, so a slow database
    is visible before it becomes a failing one. */

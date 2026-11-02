@@ -2,3 +2,4 @@ node_modules/
 results.json
 test-results/
 playwright-report/
+var/

@@ -20,6 +20,7 @@ export const MIN_MOVE_M = 10;
 export const SILENT_AFTER_MS = 30_000;
 /* The server refuses older than 120 s. Do not even try. */
 export const MAX_FIX_AGE_MS = 120_000;
+const MAX_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000;
 
 export function metresBetween(a, b) {
   const rad = (d) => (d * Math.PI) / 180;
@@ -47,7 +48,7 @@ export function createPositionShare({
   setTimer = setInterval, clearTimer = clearInterval,
 }) {
   const state = { status: 'idle', sentAt: null, fixAt: null, error: null, wakeLocked: false };
-  let watchId = null, last = null, lock = null, timer = null, inFlight = false, stopped = true;
+  let watchId = null, last = null, pending = null, lock = null, timer = null, inFlight = false, stopped = true;
 
   const emit = () => onChange?.({ ...state });
 
@@ -73,12 +74,25 @@ export function createPositionShare({
     lock = null; state.wakeLocked = false;
   };
 
+  /* A device clock in the wrong unit or year would have every fix refused as dated in
+     the future. The moment it reached us is then the honest time for it. */
+  const fixTime = (t) => (Number.isFinite(t) && Math.abs(t - now()) < MAX_CLOCK_SKEW_MS ? t : now());
+
   const onFix = async (pos) => {
     if (stopped) return;
-    const fix = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy, takenAt: pos.timestamp };
+    pending = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy, takenAt: fixTime(pos.timestamp) };
     state.fixAt = now();
     if (state.status === 'silent' || state.error?.code === 'unavailable') { state.status = 'sharing'; state.error = null; emit(); }
-    if (inFlight || !shouldSend(fix, last, now())) return;
+    await flush();
+  };
+
+  /* The newest fix waits here until it may be sent. The timer tries again, so the last
+     move before someone stops, or one that failed on a dropped network, is not lost
+     just because the phone reports nothing new. */
+  const flush = async () => {
+    const fix = pending;
+    if (stopped || !fix || inFlight || !shouldSend(fix, last, now())) return;
+    pending = null;
     inFlight = true;
     try {
       await send({ orderId, lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy, takenAt: fix.takenAt });
@@ -92,6 +106,7 @@ export function createPositionShare({
         state.status = 'ended'; state.error = null;
       } else if (e?.status !== 409) {
         /* 409 is the server refusing an out-of-order fix: nothing is wrong. */
+        pending ??= fix;
         state.error = { code: globalThis.navigator?.onLine === false ? 'offline' : 'upload', message: e?.message || 'Unknown error' };
       }
     } finally { inFlight = false; }
@@ -132,6 +147,7 @@ export function createPositionShare({
       state.status = 'sharing'; state.fixAt = now();
       watchId = geolocation.watchPosition(onFix, onError, { enableHighAccuracy: true, timeout: 20_000, maximumAge: 5_000 });
       timer = setTimer(() => {
+        flush();
         if (!stopped && state.fixAt && now() - state.fixAt > SILENT_AFTER_MS && state.status === 'sharing') { state.status = 'silent'; emit(); }
       }, 5_000);
       doc?.addEventListener?.('visibilitychange', onVisibility);

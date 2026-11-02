@@ -91,6 +91,8 @@ const FILES = [
   ['auth', 'test/admin-access.test.mjs'],
   ['auth', 'test/admin-invitation.test.mjs'],
   ['e2e', 'test/remediation.test.mjs'],
+  ['e2e', 'test/audit-completion.test.mjs'],
+  ['e2e', 'test/migration-upgrade.test.mjs'],
   ['finance', 'test/finance.test.mjs'],
   ['settlement', 'test/settlement.test.mjs'],
   ['settlement', 'test/reconciliation.test.mjs'],

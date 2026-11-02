@@ -14,7 +14,7 @@
    always works (it is just a database row the surface reads), the student
    still sees it when they open the app.
    ========================================================================== */
-import { q, one } from '../db/index.js';
+import { q, one, detached } from '../db/index.js';
 import { NOTIFY, OTP } from '../config.js';
 import { sendEmail } from './email.js';
 
@@ -85,6 +85,8 @@ export const KINDS = {
   deposit_refunded:     { channels: ['inapp', 'email'], title: 'Security deposit returned' },
   support_reply:        { channels: ['inapp', 'sms'], title: 'Support replied to your case' },
   payout_destination_changed: { channels: ['inapp', 'email'], title: 'Your payout details were changed' },
+  approval_decided:     { channels: ['inapp'], title: 'Your request was decided' },
+  data_deletion_decided: { channels: ['inapp', 'email'], title: 'Your deletion request was decided' },
 };
 
 /**
@@ -122,7 +124,7 @@ export async function notify(userId, kind, { body, data, title } = {}) {
 
 /* Fire-and-forget wrapper for call sites inside request handlers. */
 export const notifyAsync = (userId, kind, opts) =>
-  notify(userId, kind, opts).catch(() => {});
+  detached(() => notify(userId, kind, opts)).catch(() => {});
 
 /* One page of the inbox, newest first. `before` is the created_at of the
    last row already shown, so older pages load without repeats. */

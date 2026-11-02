@@ -1,20 +1,23 @@
 /* Every sensitive action lands here: who, what, when, resource, result.
    Denials are recorded too — an audit log that only shows successes tells
    you nothing about who is probing. */
-import { q } from './db/index.js';
+import { pool, atomicStore } from './db/index.js';
 
 export async function audit(req, { action, resource, resourceId, outcome, detail }) {
   const a = req?.actor;
-  try {
-    await q(
-      `INSERT INTO audit_log (actor_id, actor_role, action, resource, resource_id, outcome, detail, ip)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [a?.id || null, a?.roles?.[0] || null, action, resource || null,
-       resourceId ? String(resourceId) : null, outcome,
-       detail ? JSON.stringify(detail) : null, req?.ip || null]);
-  } catch (e) {
-    req?.log?.error({ e }, 'audit write failed');
-  }
+  const row = [a?.id || null, a?.roles?.[0] || null, action, resource || null,
+    resourceId ? String(resourceId) : null, outcome,
+    detail ? JSON.stringify(detail) : null, req?.ip || null];
+  const sql = `INSERT INTO audit_log (actor_id, actor_role, action, resource, resource_id, outcome, detail, ip)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`;
+  /* Inside a privileged route (atomic-routes.js), a success is written on the
+     route's own transaction and a failure to write it undoes the action. A refusal
+     waits until that transaction has rolled back, or it would be rolled back too. */
+  const store = atomicStore();
+  if (store && outcome === 'ok') { await store.client.query(sql, row); return; }
+  const write = () => pool.query(sql, row).catch((e) => { req?.log?.error({ e }, 'audit write failed'); });
+  if (store) { store.after.push(write); return; }
+  await write();
 }
 
 /* The privileged form: written on the caller's transaction, so the action and

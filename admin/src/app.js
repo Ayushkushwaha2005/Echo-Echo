@@ -57,7 +57,7 @@ const NAV_GROUPS = [
   ]],
   ['Access & system', [
     ['profile', 'My Profile', 'user'], ['admins', 'Access Management', 'key'], ['sessions', 'Sessions', 'device'],
-    ['approvals', 'Approvals', 'shield'], ['audit', 'Audit Logs', 'log'], ['reliability', 'System Health', 'pulse'], ['platform', 'Platform settings', 'cog'],
+    ['approvals', 'Approvals', 'shield'], ['privacy', 'Data requests', 'id'], ['audit', 'Audit Logs', 'log'], ['reliability', 'System Health', 'pulse'], ['platform', 'Platform settings', 'cog'],
   ]],
 ];
 const NAV = NAV_GROUPS.flatMap(([, items]) => items);
@@ -72,7 +72,7 @@ const NAV_PERM = {
   finance: ['finance.view'], admins: ['admins.view'], platform: ['platform.view'], audit: ['audit.view'],
   payments: ['finance.view'], reports: ['reports.export', 'finance.view'], reliability: ['platform.view'],
   website: ['website.customize', 'website.publish'], deliveries: ['orders.view'],
-  sessions: ['sessions.read'], order: ['orders.view'],
+  sessions: ['sessions.read'], order: ['orders.view'], privacy: ['students.view'],
 };
 const allowed = (r) => !NAV_PERM[r] || session.can(...NAV_PERM[r]);
 const allowedNav = () => NAV.filter(([r]) => allowed(r));
@@ -273,7 +273,7 @@ const SCREENS = {
   platform: scrPlatform, audit: scrAudit,
   payments: scrPayments, reliability: scrReliability, reports: scrReports,
   website: scrWebsite, deliveries: scrDeliveries, sessions: scrSessions, order: scrOrderDetail, profile: scrProfile,
-  chat: scrChat, approvals: scrApprovals,
+  chat: scrChat, approvals: scrApprovals, privacy: scrPrivacy,
 };
 
 /* The current page is marked with aria-current / aria-pressed, which is what
@@ -705,7 +705,7 @@ async function scrMenu() {
   if (!vs.length) { view().innerHTML = EmptyState('No cafeterias yet.', 'Add one first.'); return; }
   S.vendorId = S.vendorId && vs.some((v) => v.id === S.vendorId) ? S.vendorId : vs[0].id;
   head().innerHTML = `
-    <select class="input" data-act="pickVendor" style="max-width:220px">
+    <select class="input" data-act="pickVendor" aria-label="Café" style="max-width:220px">
       ${vs.map((v) => `<option value="${v.id}" ${v.id === S.vendorId ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}
     </select>
     <button class="btn btn-secondary btn-sm" data-act="categories">Categories</button>
@@ -2001,6 +2001,8 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('change', (e) => {
   if (e.target.matches?.('[data-pf-photo]')) { pfPhotoChosen(e.target); return; }
   if (e.target.matches?.('[data-cafe-photo]')) { cafePhotoChosen(e.target); return; }
+  /* A keyboard or a phone's picker changes a select without the click handler seeing the new value. */
+  if (e.target.matches?.('select[data-act=pickVendor]')) { ACTIONS.pickVendor(e.target); return; }
   if (e.target.matches?.('input[name="perm"]')) {
     const f = e.target.closest('form');
     const c = f?.querySelector('[data-perm-count]');
@@ -2369,7 +2371,7 @@ ${added.length ? `Grant: ${added.join(', ')}
   menuFor: (t) => { S.vendorId = t.dataset.id; S.route = 'menu'; route(); },
 
   /* ---- menu ---- */
-  pickVendor: (t) => { S.vendorId = t.value; paintMenu(); },
+  pickVendor: (t) => { if (t.value === S.vendorId) return; S.vendorId = t.value; paintMenu(); },
 
   newItem: async () => modal('Add food', `
     ${field('name', 'Name')}${field('description', 'Description')}
@@ -2455,9 +2457,24 @@ ${added.length ? `Grant: ${added.join(', ')}
   itemHistory: async (t) => {
     const { versions } = await quad.catalogVersions('menu', t.dataset.id);
     modal(`History · ${t.dataset.name}`, versions.length
-      ? table(['Revision', 'Saved', 'By', 'Price', 'Name'], versions.map((v) => [String(v.revision), when(v.at), esc(v.actor_name || 'System'),
-          v.snapshot.price_paise == null ? '—' : rupees(v.snapshot.price_paise), esc(v.snapshot.name || '')]))
+      ? table(['Revision', 'Saved', 'By', 'Price', 'Name', ''], versions.map((v, i) => [String(v.revision), when(v.at), esc(v.actor_name || 'System'),
+          v.snapshot.price_paise == null ? '—' : rupees(v.snapshot.price_paise), esc(v.snapshot.name || ''),
+          i === 0 ? '<span class="t-xs faint">Current</span>' : `<button type="button" class="btn btn-ghost btn-sm" data-act="itemRestore" data-id="${esc(t.dataset.id)}" data-v="${esc(v.revision)}" data-cur="${esc(versions[0].revision)}">Restore</button>`]))
       : '<p class="t-sm muted">No edits have been saved since history began. Availability changes are not listed here.</p>', DONE);
+  },
+  /* The server refuses this if someone edited the item after the history was opened. */
+  itemRestore: (t) => act(t, () => quad.restoreCatalog('menu', t.dataset.id, Number(t.dataset.v), Number(t.dataset.cur)), {
+    after: () => { closeModal(); toast(`Restored revision ${t.dataset.v}`); return paintMenu(); },
+  }),
+  reviewDataRequest: async (t) => {
+    const r = await quad.dataRequestRetention(t.dataset.id);
+    modal(`Review · ${t.dataset.name}`, `
+      <p class="t-sm muted">What is held about this person. This list changes nothing. Whether a record must be kept is a legal question.</p>
+      ${table(['Record', 'Held', 'Note'], r.held.map((h) => [esc(h.label), String(h.count), esc(h.note || '')]))}
+      ${r.canDecide ? `<label class="field"><span class="t-label">Outcome</span><select class="input" name="status">
+        <option value="in_review">Start the review</option><option value="completed">Completed: say what was deleted and kept</option><option value="declined">Declined: say why</option></select></label>
+      ${field('note', 'What was done (the person sees this)')}` : '<p class="t-xs faint">Only the owner records an outcome.</p>'}`,
+    r.canDecide ? async (d) => { await quad.decideDataRequest(t.dataset.id, d.status, d.note); toast('Recorded'); render(); } : DONE);
   },
   itemAvail: (t) => act(t, () => quad.updateItem(t.dataset.id, { available: t.dataset.v === '1' }),
     { after: paintMenu }),
@@ -3730,6 +3747,7 @@ async function wzPublish(btn) {
   async (d) => {
     const t0 = performance.now();
     const out = await quad.publishSite(W.revision, d.note || '');
+    if (out.pendingApproval) { toast('Sent to the owner for approval. Nothing is published yet.'); return out; }
     toast(`Published version ${out.version}. Checking the public website…`);
     announcePublished(out.version);
     measurePublic(out.version, t0);
@@ -3922,6 +3940,22 @@ async function paintTrackMap() {
 /* ========================================================================
    APPROVALS — high-risk, non-payment actions
    ======================================================================== */
+/* A person's request about their own data. Recording an outcome deletes nothing:
+   the retention list says what is held, and what may be erased is a human decision. */
+const DATA_BADGE = { open: 'badge-warn', in_review: 'badge-warn', completed: 'badge-ok', declined: 'badge-bad', cancelled: '' };
+async function scrPrivacy() {
+  setTitle('Data requests', 'Requests from people to delete their account. Nothing here deletes anything by itself.');
+  head().innerHTML = '';
+  await panel(view(), () => quad.dataRequests(), (d) => `
+    <section class="card card-pad cc-section">
+      ${d.requests.length ? table(['Person', 'Asked', 'Their note', 'Status', 'Outcome', ''], d.requests.map((r) => [
+        `${esc(r.name || '')}<div class="t-xs muted">${esc(r.email || '')}</div>`, when(r.requested_at), esc(r.note || ''),
+        `<span class="badge ${DATA_BADGE[r.status] || ''}">${esc(r.status.replace('_', ' '))}</span>`, esc(r.decision_note || ''),
+        ['open', 'in_review'].includes(r.status) ? `<button class="btn btn-secondary btn-sm" data-act="reviewDataRequest" data-id="${r.id}" data-name="${esc(r.name || 'this person')}">Review</button>` : '',
+      ])) : EmptyState('No requests.', 'A person asks from their profile on the student site.')}
+    </section>`, { label: 'Loading data requests' });
+}
+
 const APPROVAL_BADGE = { pending: 'badge-warn', executed: 'badge-ok', rejected: 'badge-bad', expired: '', failed: 'badge-bad' };
 async function scrApprovals() {
   setTitle('Approvals', 'High-risk actions another administrator has asked for. Payment actions are not part of this queue.');

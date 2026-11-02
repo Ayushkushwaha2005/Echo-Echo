@@ -3063,8 +3063,19 @@ document.addEventListener('click', async (e) => {
       } catch (err) { toast(explain(err), 'bad'); }
       break;
     case 'askDeletion':
-      if (!confirm('Ask ECHO ECHO to delete your account? Nothing changes yet: a person reviews this and tells you what was deleted and what must be kept.')) break;
       try {
+        const { request } = await quad.myDeletionRequest();
+        if (request?.status === 'open') {
+          if (!confirm('Your request is waiting for review. Cancel it?')) break;
+          await quad.cancelDeletion();
+          toast('Request cancelled. Your account stays as it is.');
+          break;
+        }
+        if (request?.status === 'in_review') { toast('A person is reviewing your request. You will be told the outcome.'); break; }
+        const last = request?.decision_note && ['completed', 'declined'].includes(request.status) ? `Your last request was ${request.status}: ${request.decision_note}
+
+` : '';
+        if (!confirm(`${last}Ask ECHO ECHO to delete your account? Nothing changes yet: a person reviews this and tells you what was deleted and what must be kept.`)) break;
         await quad.requestDeletion();
         toast('Request sent. Your account is unchanged for now.');
       } catch (err) { toast(explain(err), 'bad'); }

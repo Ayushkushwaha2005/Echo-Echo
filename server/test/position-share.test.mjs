@@ -42,6 +42,42 @@ function rig({ wakeLock = true, startFails = false } = {}) {
 }
 const settle = () => new Promise((r) => setImmediate(r));
 
+test('a device clock in the wrong unit is replaced by the arrival time, so fixes are not refused', async () => {
+  const sent = [];
+  const geo = { watchPosition(ok) { geo.ok = ok; return 1; }, clearWatch() {} };
+  const at = 1_700_000_000_000;
+  const share = createPositionShare({ orderId: 'o', start: async () => {}, send: async (f) => sent.push(f), geolocation: geo, wakeLock: null, doc: null, now: () => at, setTimer: () => 1, clearTimer: () => {} });
+  await share.begin();
+  await geo.ok({ coords: { latitude: 30.4, longitude: 77.9, accuracy: 5 }, timestamp: at * 1000 });
+  assert.equal(sent[0].takenAt, at);
+});
+
+test('a fix held back by the throttle, or lost to a dropped network, is sent by the timer with no new fix', async () => {
+  const sent = [];
+  let fail = false, tick, at = 1_700_000_000_000;
+  const geo = { watchPosition(ok) { geo.ok = ok; return 1; }, clearWatch() {} };
+  const fix = (lat) => ({ coords: { latitude: lat, longitude: 77.9, accuracy: 5 }, timestamp: at });
+  const share = createPositionShare({ orderId: 'o', start: async () => {}, send: async (f) => { if (fail) throw new Error('offline'); sent.push(f); }, geolocation: geo, wakeLock: null, doc: null, now: () => at, setTimer: (fn) => { tick = fn; return 1; }, clearTimer: () => {} });
+  await share.begin();
+  await geo.ok(fix(30.4));
+  at += 1000;
+  await geo.ok(fix(30.41));
+  assert.equal(sent.length, 1, 'held back: inside the five seconds');
+  at += 5000;
+  await tick();
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].lat, 30.41);
+
+  fail = true;
+  at += 6000;
+  await geo.ok(fix(30.42));
+  assert.equal(sent.length, 2);
+  fail = false;
+  at += 5000;
+  await tick();
+  assert.equal(sent.at(-1).lat, 30.42);
+});
+
 test('nothing happens until Start sharing: no watch, no send, no wake lock', () => {
   const r = rig();
   assert.equal(r.geo.watchCalls, 0);

@@ -8,6 +8,8 @@ import { HTTP, SESSION, STORAGE, assertBootable, providerStatus, PLATFORM } from
 import { actorFromToken } from './auth/session.js';
 import { HttpError, Forbidden, Unauthenticated, can } from './auth/rbac.js';
 import { pool } from './db/index.js';
+import { installAtomicRoutes } from './atomic-routes.js';
+import { recordServerError } from './services/error-watch.js';
 import { startSweeper } from './services/sweeper.js';
 import { startSettlementScheduler } from './services/settlement.js';
 import { channelStatus } from './services/notify.js';
@@ -281,6 +283,7 @@ export function build() {
       }
       /* Never leak an internal message or stack to a client. */
       req.log.error({ err, reqId: req.id }, 'unhandled');
+      recordServerError(req.routeOptions?.url);
       return reply.code(500).send({ error: 'Something went wrong', code: 'internal', requestId: req.id });
     });
 
@@ -374,6 +377,7 @@ export function build() {
       return reply.code(ready ? 200 : 503).send({ ready, checks });
     });
 
+    installAtomicRoutes(app);
     await app.register(authRoutes);
     await app.register(adminSignInRoutes);
     await app.register(adminResetRoutes);

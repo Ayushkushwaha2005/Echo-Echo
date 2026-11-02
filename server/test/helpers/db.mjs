@@ -183,6 +183,22 @@ async function reclaim(port) {
   return killedSomething;
 }
 
+/* Another checkout on this machine can be listening on the port this one remembers.
+   prepareDatabase() drops quad_test, so connecting to its cluster would wreck its run. */
+async function isOurs(port) {
+  const c = new pg.Client({ connectionString: urlFor(port, 'postgres'), connectionTimeoutMillis: 2500 });
+  try {
+    await c.connect();
+    const { rows } = await c.query('SHOW data_directory');
+    await c.end();
+    const norm = (p) => String(p).replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+    return norm(rows[0].data_directory) === norm(dataDir);
+  } catch {
+    try { await c.end(); } catch { /* already broken */ }
+    return false;
+  }
+}
+
 /* ---------- start -------------------------------------------------------- */
 /**
  * @param reuse  Keep whatever is already in quad_test instead of dropping
@@ -199,7 +215,7 @@ export async function startDb({ reuse = false } = {}) {
   /* A sibling process (or the parent runner) may already have one up. */
   const known = Number(process.env.QUAD_TEST_PG_PORT) ||
     Number(await readFile(portFile, 'utf8').catch(() => 0));
-  if (known && await canConnect(known)) {
+  if (known && await canConnect(known) && await isOurs(known)) {
     activePort = known;
     return prepareDatabase(known, reuse);
   }

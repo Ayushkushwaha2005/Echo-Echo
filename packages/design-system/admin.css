@@ -917,7 +917,7 @@ body { background: var(--cc-c-canvas); color: var(--cc-c-text); font-family: var
 .cafe-card.is-archived { opacity: .7; }
 .cafe-img { position: relative; aspect-ratio: 16 / 9; overflow: hidden; display: grid; place-items: center; }
 .cafe-img .cafmark { width: 64px; height: 64px; border-radius: 18px; display: grid; place-items: center; font-weight: 700;
-  font-size: 1.4rem; color: #30323C; }
+  font-size: 1.4rem; color: var(--text-on-ink); }
 .cafe-img img, .cafe-img picture { position: absolute; inset: 0; width: 100%; height: 100%; }
 .cafe-img img { object-fit: cover; }
 .cafe-body { padding: 16px 18px 18px; display: grid; gap: 12px; }

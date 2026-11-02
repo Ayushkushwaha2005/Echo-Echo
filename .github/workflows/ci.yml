@@ -123,7 +123,7 @@ jobs:
         working-directory: tests/browser
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps chromium webkit
       - name: Prepare the test database
         working-directory: server
         run: node test/helpers/db.mjs init
@@ -133,6 +133,93 @@ jobs:
           node harness.mjs > harness.log 2>&1 &
           for i in $(seq 1 60); do curl -sf http://127.0.0.1:4173/api/health > /dev/null && break; sleep 2; done
           npx playwright test --config playwright.config.mjs
+
+  # A release, rehearsed with nothing real: the production image, an upgrade from the
+  # schema production runs today, a timed dump and restore, the app started on the
+  # restored database, and the previous release started on the new schema, which is
+  # what a rollback relies on. Synthetic data and throwaway databases only.
+  rehearsal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: rehearsal-only-not-a-secret
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PGPASSWORD: rehearsal-only-not-a-secret
+      OLD: postgres://postgres:rehearsal-only-not-a-secret@localhost:5432/rehearsal
+      NEW: postgres://postgres:rehearsal-only-not-a-secret@localhost:5432/restored
+      PREVIOUS_RELEASE: '8880959'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: PostgreSQL 18 client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+      - name: The production image builds, and sharp works inside it
+        run: |
+          set -euo pipefail
+          docker build -t echo-api server
+          docker run --rm echo-api node -e "import('sharp').then(async ({default:s})=>{const b=await s({create:{width:4,height:4,channels:3,background:'red'}}).webp().toBuffer();if(!b.length)process.exit(1);console.log('sharp works in the image')})"
+      - name: Upgrade from the previous release's schema, with its data in place
+        run: |
+          set -euo pipefail
+          psql -h localhost -U postgres -c 'CREATE DATABASE rehearsal' -c 'CREATE DATABASE restored'
+          git worktree add -q ../previous "$PREVIOUS_RELEASE"
+          (cd ../previous/server && npm ci --no-audit --no-fund > /dev/null)
+          (cd ../previous/server && DATABASE_URL="$OLD" DB_SSL=false PLATFORM_OWNER_PHONE=+919000000000 NODE_ENV=rehearsal node src/db/migrate.js | tail -2)
+          (cd ../previous/server && DATABASE_URL="$OLD" DB_SSL=false PLATFORM_OWNER_PHONE=+919000000000 NODE_ENV=rehearsal node src/db/seed.js | tail -2)
+          psql "$OLD" -Atc "SELECT count(*) FROM schema_migration" > before-migrations.txt
+          psql "$OLD" -AtF' ' -c "SELECT 'vendor', count(*) FROM vendor UNION ALL SELECT 'menu_item', count(*) FROM menu_item UNION ALL SELECT 'app_user', count(*) FROM app_user" > before.txt
+          docker run --rm --network host -e NODE_ENV=rehearsal -e DATABASE_URL="$OLD" -e DB_SSL=false -e PLATFORM_OWNER_PHONE=+919000000000 echo-api node src/db/migrate.js | tail -8
+          psql "$OLD" -AtF' ' -c "SELECT 'vendor', count(*) FROM vendor UNION ALL SELECT 'menu_item', count(*) FROM menu_item UNION ALL SELECT 'app_user', count(*) FROM app_user" > after.txt
+          diff before.txt after.txt
+          echo "migrations $(cat before-migrations.txt) -> $(psql "$OLD" -Atc 'SELECT count(*) FROM schema_migration'), row counts unchanged"
+      - name: Dump and restore, timed
+        run: |
+          set -euo pipefail
+          s=$(date +%s); pg_dump "$OLD" -Fc -f rehearsal.dump; d=$(date +%s)
+          pg_restore --no-owner --no-privileges --dbname="$NEW" rehearsal.dump; r=$(date +%s)
+          [ "$(psql "$OLD" -Atc 'SELECT count(*) FROM schema_migration')" = "$(psql "$NEW" -Atc 'SELECT count(*) FROM schema_migration')" ]
+          echo "dump $((d-s)) s, restore $((r-d)) s (synthetic data, so small)" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: The image starts on the restored database and serves
+        run: |
+          set -euo pipefail
+          s=$(date +%s)
+          docker run -d --name api --network host -e NODE_ENV=rehearsal -e PORT=8080 -e DATABASE_URL="$NEW" -e DB_SSL=false -e SWEEPER=off \
+            -e COOKIE_SECRET=rehearsal-secret-at-least-32-characters-long -e ADMIN_TOTP_KEY=rehearsal-totp-key-0123456789abcdef \
+            -e PLATFORM_OWNER_PHONE=+919000000000 -e WEB_ORIGIN=http://localhost:3000 echo-api
+          for i in $(seq 1 60); do curl -sf http://localhost:8080/health > /dev/null && break; sleep 1; done
+          curl -sf http://localhost:8080/health > /dev/null || { docker logs api | tail -30; exit 1; }
+          echo "started in $(( $(date +%s)-s )) s" | tee -a "$GITHUB_STEP_SUMMARY"
+          curl -s -o /dev/null -w 'ready %{http_code}\n' http://localhost:8080/ready
+          curl -sf http://localhost:8080/vendors > /dev/null
+          docker rm -f api > /dev/null
+      - name: Rollback, the previous release runs on the new schema
+        working-directory: ../previous/server
+        run: |
+          set -euo pipefail
+          NODE_ENV=rehearsal PORT=8081 DATABASE_URL="$NEW" DB_SSL=false SWEEPER=off COOKIE_SECRET=rehearsal-secret-at-least-32-characters-long \
+            ADMIN_TOTP_KEY=rehearsal-totp-key-0123456789abcdef PLATFORM_OWNER_PHONE=+919000000000 WEB_ORIGIN=http://localhost:3000 node src/index.js > api.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:8081/health > /dev/null && break; sleep 1; done
+          curl -sf http://localhost:8081/health > /dev/null || { tail -30 api.log; exit 1; }
+          curl -sf http://localhost:8081/vendors > /dev/null
+          vendor=$(curl -sf http://localhost:8081/vendors | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const a=j.vendors||j;console.log(a[0]?.id||"")})')
+          [ -z "$vendor" ] || curl -sf "http://localhost:8081/vendors/$vendor/menu" > /dev/null
+          echo "the previous release serves on the new schema" | tee -a "$GITHUB_STEP_SUMMARY"
 
   workflows:
     runs-on: ubuntu-24.04

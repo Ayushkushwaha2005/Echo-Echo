@@ -403,6 +403,53 @@ export default async function catalogRoutes(app) {
     return { versions: rows };
   });
 
+  /* Puts a record back as it was at an earlier revision. This is a new edit, so it
+     gets its own revision and history row, and a form that is out of date is refused
+     like any other. Being archived or live is not restored: that has its own controls,
+     and archiving a cafe can need approval. */
+  const RESTORABLE = {
+    vendor: { table: 'vendor', fields: ['name', 'kind', 'description', 'prep_minutes', 'opens_at', 'closes_at', 'contact_phone', 'contact_public', 'photo_asset'] },
+    menu_item: { table: 'menu_item', fields: ['name', 'description', 'price_paise', 'veg', 'prep_minutes', 'tags', 'aliases', 'category_id', 'photo_asset'] },
+  };
+  app.post('/catalog/:entity/:id/restore', async (req) => {
+    const entity = { vendor: 'vendor', menu: 'menu_item' }[req.params.entity];
+    if (!entity) throw BadRequest('Only a cafe or a menu item can be restored');
+    const vendorId = entity === 'vendor' ? req.params.id : await vendorOfItem(req.params.id);
+    authorize(req.actor, entity === 'vendor' ? 'vendor.update' : 'menu.update', { vendorId });
+    const toRevision = Number(req.body?.toRevision);
+    if (!Number.isInteger(toRevision) || toRevision < 1) throw BadRequest('Say which revision to restore');
+    const { table, fields } = RESTORABLE[entity];
+    return tx(async (c) => {
+      await setActor(c, req);
+      const cur = (await c.query(`SELECT * FROM ${table} WHERE id = $1 FOR UPDATE`, [req.params.id])).rows[0];
+      if (!cur) throw NotFound('No such record');
+      assertRevision(req.body?.revision, cur.revision);
+      const version = (await c.query(
+        `SELECT snapshot FROM catalog_version WHERE entity = $1 AND entity_id = $2 AND revision = $3 ORDER BY id DESC LIMIT 1`,
+        [entity, req.params.id, toRevision])).rows[0];
+      if (!version) throw NotFound('No saved copy of that revision');
+      const present = fields.filter((f) => f in version.snapshot);
+      const was = (await c.query(`SELECT * FROM jsonb_populate_record(NULL::${table}, $1)`, [version.snapshot])).rows[0];
+      if (entity === 'menu_item' && was.price_paise !== cur.price_paise) authorize(req.actor, 'menu.price', { vendorId });
+      let row;
+      try {
+        row = (await c.query(
+          `UPDATE ${table} t SET ${present.map((f) => `${f} = r.${f}`).join(', ')}
+             FROM jsonb_populate_record(NULL::${table}, $2) r WHERE t.id = $1 RETURNING t.id, t.revision`,
+          [req.params.id, version.snapshot])).rows[0];
+      } catch (e) {
+        if (e.code === '23503') throw new HttpError(409, 'restore_reference_gone', 'That version points at a photo or category that no longer exists', 'Nothing was changed.');
+        throw e;
+      }
+      if (entity === 'menu_item' && was.price_paise !== cur.price_paise) {
+        await c.query(`INSERT INTO menu_price_history (item_id, old_paise, new_paise, changed_by) VALUES ($1,$2,$3,$4)`,
+          [cur.id, cur.price_paise, was.price_paise, req.actor.id]);
+      }
+      await auditTx(c, req, { action: 'catalog.restore', resource: table, resourceId: cur.id, detail: { fromRevision: cur.revision, toRevision, newRevision: row.revision } });
+      return { id: row.id, revision: row.revision, restoredFrom: toRevision };
+    });
+  });
+
   /* ---------- categories ------------------------------------------------------
      A cafeteria's own sections ("Chai", "Snacks"). They belong to one outlet,
      are named by its owner, and are never shared across outlets. */
