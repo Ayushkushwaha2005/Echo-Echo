@@ -153,7 +153,7 @@ jobs:
       PGPASSWORD: rehearsal-only-not-a-secret
       OLD: postgres://postgres:rehearsal-only-not-a-secret@localhost:5432/rehearsal
       NEW: postgres://postgres:rehearsal-only-not-a-secret@localhost:5432/restored
-      PREVIOUS_RELEASE: '8880959'
+      PREVIOUS_RELEASE: '7b1ead5'
     steps:
       - uses: actions/checkout@v4
         with:

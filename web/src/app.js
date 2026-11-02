@@ -3739,7 +3739,9 @@ async function openGateway(intent, draft) {
   for (let i = 0; i < 10; i++) {
     const st = await quad.paymentStatus(draft.id).catch(() => null);
     if (st?.confirmed) { S.cart = []; go('tracking', { id: draft.id }); return toast('Paid · order placed'); }
+    if (st?.underReview) { go('tracking', { id: draft.id }); return toast(st.message, 'bad'); }
     if (st?.payment === 'failed') { go('checkout'); return toast('Payment failed — the order was not placed.', 'bad'); }
+    if (st?.orderState === 'cancelled') { go('checkout'); return toast('Payment cancelled — the order was not placed.', 'bad'); }
     await new Promise((r) => setTimeout(r, 1200));
   }
   go('tracking', { id: draft.id });
