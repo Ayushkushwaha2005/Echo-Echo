@@ -263,7 +263,7 @@ jobs:
       # leaves this runner: no email, storage or payment provider is configured, and the
       # background worker is off. Only status codes and timings are printed.
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - name: The application starts on the restored database
