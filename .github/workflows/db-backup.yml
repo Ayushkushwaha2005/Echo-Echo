@@ -270,6 +270,12 @@ jobs:
         run: |
           set -euo pipefail
           (cd server && npm ci --omit=dev --no-audit --no-fund > /dev/null)
+          # Forward to this commit's schema, on the throwaway copy only, which also proves
+          # any pending migration applies to real data. The owner step only touches this copy.
+          DRILL_DB="postgres://postgres:drill-only-not-a-secret@localhost:5432/postgres"
+          (cd server && NODE_ENV=restore-drill DATABASE_URL="$DRILL_DB" DB_SSL=false PLATFORM_OWNER_PHONE=+919000000000 node src/db/migrate.js > /dev/null) \
+            || { echo "::error title=Restore drill::a migration failed on the restored copy"; exit 1; }
+          PGPASSWORD=drill-only-not-a-secret psql "$DRILL_DB" -Atc "SELECT 'schema_migration', count(*) FROM schema_migration UNION ALL SELECT 'app_user', count(*) FROM app_user UNION ALL SELECT 'food_order', count(*) FROM food_order" | paste -sd' ' | sed 's/^/- Restored copy after migrating: /' >> "$GITHUB_STEP_SUMMARY"
           s=$(date +%s)
           (cd server && NODE_ENV=restore-drill PORT=8090 DATABASE_URL="postgres://postgres:drill-only-not-a-secret@localhost:5432/postgres" DB_SSL=false SWEEPER=off \
             COOKIE_SECRET=drill-only-not-a-secret-at-least-32-characters ADMIN_TOTP_KEY=drill-only-not-a-secret-0123456789ab \

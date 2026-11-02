@@ -283,6 +283,8 @@ test('a lost authenticator: recovery codes, password and a new authenticator, th
   await emp.clearCookies();
   await p.goto('/admin/');
   await p.getByRole('button', { name: /lost.*authenticator|authenticator.*lost|recover/i }).first().click();
+  /* The screen loads on demand; until then these fields would be the sign-in form's. */
+  await expect(p.getByRole('heading', { name: 'Lost your authenticator?' })).toBeVisible();
   await p.locator('input[name=email]').fill(email);
   await p.locator('input[name=password]').fill(PASSWORD);
   await p.locator('input[name=recoveryCode]').fill(code);

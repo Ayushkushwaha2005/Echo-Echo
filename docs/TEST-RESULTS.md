@@ -14,7 +14,7 @@ The record is CI on the PR: GitHub's runners, Ubuntu, Node 22, disposable Postgr
 
 Local runs were spoiled twice. On 2 Nov 2026 a second checkout's test suite shared this machine's test port, so the two dropped each other's database: the test helper now checks whose cluster it has reached, and local runs use `TEST_PG_PORT=56432`. A later local full run was stopped by the machine's memory guard and not restarted, which is why CI is the record.
 
-One journey (lost authenticator) failed once in CI by timeout and passed on the next run with no related change. It now fails with the server's message if the server refuses. Treat it as possibly flaky until several runs say otherwise.
+One journey (lost authenticator) failed in two CI runs and passed in one. The cause was the test: the recovery screen loads on demand, so it sometimes filled in the sign-in form underneath and then sent a blank email and password. It now waits for the recovery screen.
 
 ## Requested coverage
 
