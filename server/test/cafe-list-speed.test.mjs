@@ -60,19 +60,44 @@ test('the public list is the same for every caller and sets no cookie, so an edg
 
 test('the archived-café list needs staff, and the edge rule never applies to it', async () => {
   assert.equal((await anon('/vendors/?includeArchived=true')).statusCode, 401);
-  const rule = VERCEL.headers.find((h) => h.headers.some((x) => /cdn-cache-control/i.test(x.key)));
+  const rule = VERCEL.headers.find((h) => h.source === '/api/vendors/' && h.headers.some((x) => /cdn-cache-control/i.test(x.key)));
   assert.ok(rule, 'vercel.json caches the café list at the edge');
   assert.equal(rule.source, '/api/vendors/', 'only the list: never a menu, an order or anything signed-in');
   assert.ok(rule.missing?.some((m) => m.type === 'query' && m.key === 'includeArchived'));
 });
 
+/* Reference data: which campuses exist and how sign-in works. It changes a few
+   times a year, nothing is ordered from it, and the server checks a campus again
+   at sign-in and at every order. Served stale while the edge refreshes, it lets
+   the first screen appear while a sleeping API wakes; never past a day. */
+const REFERENCE = ['/api/campuses/', '/api/auth/status/'];
+
+test('reference data is the same for everyone and sets no cookie, so a day-old copy is safe to share', async () => {
+  const u = await makeUser(pool, { phone: '+919811100001', name: 'Signed In', roles: ['student'] });
+  const me = client(app, await sessionFor(pool, u.id));
+  for (const src of REFERENCE) {
+    const path = src.replace(/^\/api/, '');
+    const out = await anon(path);
+    assert.equal(out.statusCode, 200, path);
+    assert.equal(out.headers['set-cookie'], undefined, `${path} sets no cookie`);
+    assert.deepEqual((await me.get(path)).body, JSON.parse(out.body), `${path} is the same signed in`);
+    const value = VERCEL.headers.find((h) => h.source === src).headers.find((x) => /cdn-cache-control/i.test(x.key)).value;
+    const n = (k) => Number(new RegExp(`${k}=(\\d+)`).exec(value)?.[1] ?? 0);
+    assert.ok(n('max-age') > 0 && n('max-age') <= 300, `${src}: fresh for at most 5 minutes`);
+    assert.ok(n('max-age') + n('stale-while-revalidate') <= 86_400, `${src}: never older than a day`);
+    assert.doesNotMatch(value, /stale-if-error/, src);
+  }
+});
+
 test('the edge never holds the list longer than the page itself would (60 s)', () => {
-  const caching = VERCEL.headers.flatMap((h) => h.headers.filter((x) => /cdn-cache-control/i.test(x.key)).map((x) => [h.source, x.value]));
+  const all = VERCEL.headers.flatMap((h) => h.headers.filter((x) => /cdn-cache-control/i.test(x.key)).map((x) => [h.source, x.value]));
   /* Only public, identical-for-everyone answers are held at the edge: the café
      list and the PUBLISHED website settings (never a draft, which lives under
-     /admin/site and needs a session). */
-  assert.deepEqual(caching.map(([src]) => src).sort(), ['/api/site/config/', '/api/site/version/', '/api/vendors/'],
-    `edge-cached routes: ${JSON.stringify(caching)}`);
+     /admin/site and needs a session), plus the reference data below. */
+  assert.deepEqual(all.map(([src]) => src).sort(),
+    ['/api/auth/status/', '/api/campuses/', '/api/site/config/', '/api/site/version/', '/api/vendors/'],
+    `edge-cached routes: ${JSON.stringify(all)}`);
+  const caching = all.filter(([src]) => !REFERENCE.includes(src));
   for (const [src, value] of caching) {
     const n = (k) => Number(new RegExp(`${k}=(\\d+)`).exec(value)?.[1] ?? 0);
     assert.ok(n('max-age') > 0, src);
