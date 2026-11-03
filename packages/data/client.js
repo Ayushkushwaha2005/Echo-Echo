@@ -128,6 +128,9 @@ async function call(method, path, body, opts = {}) {
        screen can say "not found (404)" rather than "cannot reach". */
     throw new ApiError(res.status, json || { error: hostError(res.status), code: STAFF ? `http_${res.status}` : undefined });
   }
+  /* How long ago the server wrote this answer, as the edge that kept it says (its
+     own clock, so a phone set to the wrong time cannot make old look new). */
+  if (opts.age && json && typeof json === 'object') json.ageSeconds = Number(res.headers?.get?.('age')) || 0;
   return json;
 }
 
@@ -256,7 +259,8 @@ export const quad = {
   compareBoundary: (id, withId = 'active') => get(`/admin/boundaries/${id}/compare?with=${encodeURIComponent(withId)}`),
 
   /* ---------- catalog ---------------------------------------------------- */
-  vendors: (opts) => get('/vendors' + qs(opts)),
+  /* `fresh` skips the edge's kept copy (vercel.json), for when that copy is too old to say who is open. */
+  vendors: (opts) => call('GET', '/vendors' + qs(opts), null, { age: true }),
   menu: (vendorId) => get(`/vendors/${vendorId}/menu`),
   searchMenu: (q, opts) => get('/menu/search' + qs({ q, ...opts })),
   createVendor: (data) => post('/vendors', data),

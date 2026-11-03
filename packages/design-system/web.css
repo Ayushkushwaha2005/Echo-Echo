@@ -637,9 +637,13 @@ textarea.input { resize: vertical; min-height: 72px; }
 .brand-mark { border-radius: 26%; }
 .brand-lockup { display: inline-flex; align-items: center; gap: 9px; }
 .brand-lockup .brand-mark { width: var(--brand-h); height: var(--brand-h); }
-.brand-name { font-family: var(--font-brand); font-weight: 700; letter-spacing: -.02em; color: var(--text); white-space: nowrap; }
-.site-brand .brand-name { font-size: 1.1rem; }
-.rail-brand .brand-name { font-size: 1rem; }
+/* The wordmark: the brand face at its heaviest, set tight, the second ECHO in
+   the accent as the echo of the first (brand/logo.js, wordmark). */
+.brand-name { font-family: var(--font-brand); font-weight: 800; letter-spacing: -.04em; line-height: 1; color: var(--text); white-space: nowrap; }
+.brand-name .brand-echo { color: var(--accent-text); }
+.site-brand .brand-name { font-size: 1.375rem; }
+@media (max-width: 480px) { .site-brand .brand-name { font-size: 1.25rem; } }
+.rail-brand .brand-name { font-size: 1.125rem; }
 /* Phones: the hero, then the sign-in card. */
 .welcome-fold { display: flex; flex-direction: column; }
 /* Navbar and footer: the COMPLETE logo, scaled to fit (never the head crop,
@@ -650,7 +654,7 @@ textarea.input { resize: vertical; min-height: 72px; }
 .brand-lockup .brand-logo-nav { width: var(--brand-h); height: var(--brand-h); }
 .site-foot .brand-logo-foot { display: inline-block; width: 22px; height: 22px; vertical-align: middle; margin-right: 4px; }
 .auth-brand { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.auth-brand .brand-name { font-size: 1.05rem; }
+.auth-brand .brand-name { font-size: 1.5rem; }
 /* The assistant's avatar is the mascot itself, not a lettered tile. Its
    artwork has the cream ground of the original, so on the cream page it
    needs an edge to read as a picture: a hairline, and corners rounded only
@@ -687,9 +691,19 @@ textarea.input { resize: vertical; min-height: 72px; }
 .site.settled .enter > * { animation: none; }
 
 /* ---------- type ---------- */
-.site .t-display { font-weight: var(--w-bold); letter-spacing: -.022em; }
-.site .t-h2 { font-weight: var(--w-semibold); }
-.site .t-label { color: var(--text-2); font-weight: var(--w-semibold); }
+/* Headings are set in the brand face again, Bricolage Grotesque, as the first
+   design (Sept 2026) had them; #19 (25 Oct) moved them to Manrope and the site
+   lost its voice. Kept from #19: the whole-pixel scale and the four weights.
+   Reading text, dish names, prices, labels and metadata stay in Manrope. */
+.site { --font-display: var(--font-brand); }
+.site .t-hero { font-weight: 800; letter-spacing: -.032em; }
+.site .t-display { font-weight: var(--w-bold); letter-spacing: -.024em; }
+.site .t-h1 { letter-spacing: -.02em; }
+.site .t-h2 { font-weight: var(--w-semibold); letter-spacing: -.012em; }
+/* Section labels step back: they name a group, the content is what is read. */
+.site .t-label { color: var(--text-muted); font-weight: var(--w-semibold); letter-spacing: .005em; }
+/* What a student decides on stands forward: the price. */
+.site .money { font-weight: var(--w-bold); color: var(--text); }
 
 /* ---------- buttons: flat, 44px+ targets ---------- */
 .site .btn { min-height: 44px; }
@@ -759,6 +773,11 @@ textarea.input { resize: vertical; min-height: 72px; }
 .site .status-open { color: var(--text); }
 .site .status-open .dot { background: var(--ok); }
 .site .status-closed { color: var(--danger); }
+/* A remembered café list: neither Open nor Closed until the server says. */
+.site .status-checking { color: var(--text-muted); font-weight: var(--w-medium); }
+.site .status-checking .dot { background: var(--text-faint, var(--text-muted)); animation: checking-pulse 1.4s ease-in-out infinite; }
+@keyframes checking-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .site .status-checking .dot { animation: none; } }
 .site .caffacts { display: flex; flex-direction: column; gap: 4px; font-size: var(--t-xs); line-height: var(--lh-meta); }
 .site .caffacts-hours { color: var(--text-2); font-weight: var(--w-medium); }
 .site .caffacts-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s-4); }
@@ -897,7 +916,7 @@ textarea.input { resize: vertical; min-height: 72px; }
 .role-screen { min-height: calc(100dvh - 140px); display: grid; place-items: center; padding: var(--s-7) var(--s-4) var(--s-9); }
 .role-wrap { width: 100%; max-width: 760px; display: grid; gap: var(--s-7); }
 .role-head { text-align: center; display: grid; gap: var(--s-2); }
-.role-heading { font-size: var(--t-display); font-weight: var(--w-bold); letter-spacing: -0.01em; line-height: var(--lh-snug); margin: 0; }
+.role-heading { font-family: var(--font-display); font-size: var(--t-display); font-weight: var(--w-bold); letter-spacing: -0.024em; line-height: var(--lh-snug); margin: 0; }
 .role-sub { color: var(--text-muted); font-size: var(--t-body); margin: 0; }
 .role-grid { display: grid; gap: var(--s-4); grid-template-columns: 1fr; }
 @media (min-width: 640px) { .role-grid { grid-template-columns: 1fr 1fr; } }
@@ -914,7 +933,7 @@ textarea.input { resize: vertical; min-height: 72px; }
 .role-card:focus-visible { outline: 3px solid var(--accent-ring); outline-offset: 3px; border-color: var(--accent); }
 .role-icon { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: var(--accent-faint); color: var(--accent-text); margin-bottom: var(--s-2); }
 .role-icon svg { width: 24px; height: 24px; }
-.role-title { font-size: var(--t-h2); font-weight: var(--w-bold); }
+.role-title { font-family: var(--font-display); font-size: var(--t-h2); font-weight: var(--w-bold); }
 .role-body { color: var(--text-muted); font-size: var(--t-sm); line-height: var(--lh-body); flex: 1; }
 .role-cta {
   display: inline-flex; align-items: center; gap: 8px; margin-top: var(--s-3);

@@ -37,7 +37,14 @@ export function mark({ size = 32, alt = '' } = {}) {
 export function lockup({ height = 28 } = {}) {
   return `<span class="brand-lockup" style="--brand-h:${height}px">`
     + logo({ size: height, alt: '', className: 'brand-logo brand-logo-nav', eager: true })
-    + `<span class="brand-name">${BRAND_NAME}</span></span>`;
+    + wordmark() + '</span>';
+}
+
+/* The name as a wordmark: set in the brand face, the second ECHO in the accent,
+   the echo of the first. One text node per word, so it still reads (and is
+   found) as "ECHO ECHO". The artwork above is untouched. */
+export function wordmark() {
+  return '<span class="brand-name">ECHO <span class="brand-echo">ECHO</span></span>';
 }
 
 /* Root-level icons, copied to the site root by build.mjs. */

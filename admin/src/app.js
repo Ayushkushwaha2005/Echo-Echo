@@ -3156,8 +3156,11 @@ const W_TABS = [
 ];
 const SECTION_LABEL = {
   featured: 'Featured cafés & dishes', banners: 'Promotional banners', cafes: 'Cafés on this campus',
-  ask: 'Ask ECHO ECHO', reorder: 'Order again', pickup: 'Self pickup', deliver: 'Deliver with ECHO ECHO',
+  ask: 'Ask ECHO ECHO', reorder: 'Order again', deliver: 'Deliver with ECHO ECHO',
 };
+/* Still in the saved settings, so older versions validate and roll back, but the
+   home page no longer draws them: listing one here would offer a switch that does nothing. */
+const RETIRED_SECTIONS = ['pickup'];
 const SHIPPED_THEME = { accent: '#C8425F', background: '#FAF7F3', surface: '#FFFFFF', text: '#1A1416', textSecondary: '#3D3134', border: '#E9E1DA' };
 const ROUTE_LABEL = { home: 'Home', cafes: 'Cafés', deliver: 'Deliver with ECHO ECHO', ai: 'Ask ECHO ECHO', orders: 'Orders',
   profile: 'Profile', signin: 'Sign in (Student / Employee)', 'ob-college': 'Student sign-in', cart: 'Cart' };
@@ -3357,7 +3360,7 @@ async function wzPaintForm() {
       <h2 class="wz-h">Homepage</h2>
       ${wText('home.title', 'Home page heading', { max: 90 })}
       <h2 class="wz-h">Sections <span class="t-xs faint">drag to reorder, or use the arrows; switch a section off to hide it</span></h2>
-      <ol class="wz-sections" id="wz-sections">${c.home.sections.map((s, i) => `
+      <ol class="wz-sections" id="wz-sections">${c.home.sections.map((s, i) => RETIRED_SECTIONS.includes(s.key) ? '' : `
         <li class="wz-section" draggable="${canEdit()}" data-index="${i}">
           <span class="wz-grip" aria-hidden="true">⋮⋮</span>
           <span class="grow t-sm t-strong">${esc(SECTION_LABEL[s.key] || s.key)}</span>
@@ -3422,7 +3425,6 @@ async function wzPaintForm() {
       <h2 class="wz-h">Show or hide</h2>
       ${wBool('features.askEcho', 'Ask ECHO ECHO on the home page', 'The assistant itself stays available from the menu.')}
       ${wBool('features.deliverPromo', '"Deliver with ECHO ECHO" invitations', 'On the landing page, the home page and in the footer.')}
-      ${wBool('features.pickupPromo', 'The self-pickup suggestion on the home page')}
       ${wBool('features.browseFirst', 'The second button on the landing page')}
       <p class="t-xs faint">These hide promotion only. Ordering, prices, opening hours and who may order are not website settings and cannot be changed here.</p>`,
     history: () => '<div id="wz-history"><p class="t-sm muted">Loading versions…</p></div>',
@@ -3807,7 +3809,10 @@ const WZ_ACTIONS = {
   wzClear: (t) => { setPath(W.config, t.dataset.path, null); wzChanged(true); },
   wzMove: (t) => {
     const list = getPath(W.config, t.dataset.list);
-    const i = Number(t.dataset.i), j = i + Number(t.dataset.d);
+    const i = Number(t.dataset.i), d = Number(t.dataset.d);
+    let j = i + d;
+    /* Step over a retired section nobody can see, so every press visibly moves. */
+    while (t.dataset.list === 'home.sections' && RETIRED_SECTIONS.includes(list[j]?.key)) j += d;
     if (j < 0 || j >= list.length) return;
     [list[i], list[j]] = [list[j], list[i]];
     wzChanged(true);
