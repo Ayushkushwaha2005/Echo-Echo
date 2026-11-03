@@ -119,12 +119,16 @@
         {
           "type": "query",
           "key": "includeArchived"
+        },
+        {
+          "type": "query",
+          "key": "fresh"
         }
       ],
       "headers": [
         {
           "key": "Vercel-CDN-Cache-Control",
-          "value": "max-age=15, stale-while-revalidate=45"
+          "value": "max-age=15, stale-while-revalidate=86385"
         }
       ]
     },

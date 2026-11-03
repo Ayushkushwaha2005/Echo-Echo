@@ -118,9 +118,12 @@ const NEEDS_ACCOUNT = ['orders', 'tracking', 'profile', 'checkout', 'verify', 'p
    the site shows the first campus that is in service. */
 const myProfile = () => S.me?.profile || null;
 const profileIncomplete = () => signedIn() && myProfile() && !myProfile().complete;
+/* While boot waits for /auth/me: the campus this browser browsed last (see boot). */
+let lastCampus = null;
 function browseCampus() {
   const mine = myProfile()?.campus;
   if (mine) return mine;
+  if (lastCampus && !S.me) { const c = (S.campuses || []).find((x) => x.id === lastCampus); if (c) return c; }
   return (S.campuses || []).find((c) => c.available) || null;
 }
 const COLLEGE = () => browseCampus()?.collegeName?.replace(' - ', ' — ') || 'UPES — University of Petroleum and Energy Studies';
@@ -193,7 +196,7 @@ function go(route, params = {}, { history: mode = 'push' } = {}) {
      whatever was true when the tab was first opened. A list fetched in the
      last minute (the same age the once-a-minute refresh below allows) is
      shown at once while it is checked again. */
-  if (['home', 'cafes', 'welcome'].includes(route)) revalidate('vendors', loadVendors, VENDORS_MAX_AGE);
+  if (['home', 'cafes', 'welcome'].includes(route)) revalidate('vendors', loadVendors, VENDORS_MAX_AGE, checking);
   /* The fees the server would charge, so the bill is honest before payment.
      Fetched once and reused; it changes only when an admin changes it. */
   if (['cart', 'checkout'].includes(route)) needPricing();
@@ -234,7 +237,7 @@ function toast(msg, tone = 'ok') {
 const cache = {};
 const inflight = {};
 const fetchedAt = {};
-const keep = (key, v) => { cache[key] = { ok: true, v }; fetchedAt[key] = Date.now(); };
+const keep = (key, v, at = Date.now()) => { cache[key] = { ok: true, v }; fetchedAt[key] = at; };
 function load(key, promise) {
   inflight[key] = promise
     .then((v) => keep(key, v), (e) => { cache[key] = { ok: false, e }; })
@@ -246,13 +249,18 @@ function need(key, loader) {
   return null;
 }
 const drop = (...keys) => keys.forEach((k) => delete cache[k]);
-/* Keep showing what is cached while the server is asked again, but only
-   while it is recent enough to still be true (a café opens and closes by
-   the clock). Older than maxAge, or an error, it is dropped and the screen
-   waits for the server as before. A failed refresh keeps the recent copy. */
-function revalidate(key, loader, maxAge) {
+/* Keep showing what is cached while the server is asked again. Recent enough
+   (a café opens and closes by the clock), it is shown as it is; older than
+   maxAge, `stale` turns it into what is still true (the café list keeps its
+   cafés and says "Checking" instead of Open or Closed), or without one it is
+   dropped and the screen waits. A failed refresh keeps what is shown. */
+function revalidate(key, loader, maxAge, stale = null) {
   if (!(key in cache)) return;
-  if (!cache[key].ok || Date.now() - fetchedAt[key] > maxAge) return drop(key);
+  if (!cache[key].ok) return drop(key);
+  if (Date.now() - fetchedAt[key] > maxAge) {
+    if (!stale) return drop(key);
+    if (!cache[key].v.checking) cache[key] = { ok: true, v: stale(cache[key].v) };
+  }
   if (inflight[key]) return;
   inflight[key] = loader()
     .then((v) => keep(key, v), () => {})
@@ -284,6 +292,11 @@ function cafVM(v) {
   const mark = (v.name || '?').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
   /* open_now and status are the server's answer, read from its own clock in
      campus time. The browser's clock is never asked whether a café is open. */
+  /* A remembered list (see CAFES_KEY) says nothing about now: neither Open nor Closed. */
+  if (v.checking) {
+    return { ...v, heroBg, markBg, mark, open: false, checking: true, statusLine: 'Checking if open now',
+             statusDetail: 'Checking if open now', rating: ratingLabel(v.rating) };
+  }
   const statusLine = v.status?.line || (v.open_now ? 'Open now' : 'Closed');
   /* Beside an Open/Closed badge, only the part that adds something:
      "Closes 6 PM", "Opens Mon 8 AM". */
@@ -376,7 +389,7 @@ const LocLine = () => `
     ${I.pin}<span>${S.destination ? esc(S.destination.name) : 'Choose your delivery spot'}</span>${I.chev}</button>`;
 
 const CafCard = (c) => `
-  <button class="cafcard ${c.open ? '' : 'closed'}${hasCafPhoto(c) ? ' has-photo' : ''}" data-act="menu" data-caf="${c.id}">
+  <button class="cafcard ${c.open || c.checking ? '' : 'closed'}${hasCafPhoto(c) ? ' has-photo' : ''}" data-act="menu" data-caf="${c.id}">
     ${hasCafPhoto(c) ? CafPhoto(c) : ''}
     <div class="cafcard-top">
       ${hasCafPhoto(c) ? '' : `<div class="cafmark" style="background:${c.markBg}" aria-hidden="true">${esc(c.mark)}</div>`}
@@ -384,7 +397,7 @@ const CafCard = (c) => `
         <div class="t-h2">${esc(c.name)}</div>
         <div class="caf-status ${c.open ? 'is-open' : ''}">${esc(c.statusDetail)}</div>
       </div>
-      ${StatusPill(c.open)}
+      ${c.checking ? '<span class="status status-checking"><i class="dot"></i>Checking</span>' : StatusPill(c.open)}
     </div>
     ${CafFacts(c, 'cafcard-meta')}
   </button>`;
@@ -480,7 +493,7 @@ const BottomNav = () => {
 /* ===================== STUDENT: welcome + sign-in ======================= */
 function ScrWelcome() {
   const vs = needVendors();
-  const open = vs?.ok ? vs.v.vendors.filter((v) => v.open_now).length : null;
+  const open = vs?.ok && !vs.v.checking ? vs.v.vendors.filter((v) => v.open_now).length : null;
   const h = site().hero;
   const f = site().features;
   const img = h.imageAsset ? assetUrl(h.imageAsset) : null;
@@ -775,11 +788,39 @@ const VENDORS_MAX_AGE = 60_000;
 const CAMPUS_KEY = 'echo.campus';
 /* Each list remembers which campus it is for, so a list for another campus
    (after signing in, or changing campus) is never shown. */
-const vendorsFor = (campusId) => quad.vendors({ campusId }).then((r) => {
+const vendorsFor = async (campusId) => {
+  let r = await quad.vendors({ campusId });
+  /* The edge may hand back a copy kept while the server slept (vercel.json). It
+     still says which cafés exist, but not who is open now: shown with "Checking",
+     and the server itself is asked, past the edge. */
+  if (r.ageSeconds * 1000 > VENDORS_MAX_AGE) {
+    const kept = checking({ ...r, campusId });
+    if (!cache.vendors?.ok || cache.vendors.v.checking) { keep('vendors', kept, Date.now() - r.ageSeconds * 1000); render(); }
+    r = await quad.vendors({ campusId, fresh: 1 });
+  }
   try { if (campusId) localStorage.setItem(CAMPUS_KEY, campusId); } catch { /* storage blocked */ }
+  rememberCafes({ ...r, campusId });
   return { ...r, campusId };
-});
+};
 const loadVendors = () => vendorsFor(browseCampus()?.id);
+/* The last list this browser was given, so a returning visitor sees the cafés at
+   once instead of waiting while a sleeping server wakes (measured 25-50 s). Which
+   cafés exist and their photos and weekly hours are shown straight away; whether
+   one is open NOW is the server's word only, so until it answers each card says
+   "Checking" rather than a remembered Open or Closed. Menus, prices and every
+   order are always the server's live answer. */
+const CAFES_KEY = 'echo.cafes';
+const CAFES_KEPT_FOR = 7 * 86_400_000;
+const rememberCafes = (r) => {
+  try { localStorage.setItem(CAFES_KEY, JSON.stringify({ at: Date.now(), campusId: r.campusId, vendors: r.vendors })); } catch { /* storage blocked */ }
+};
+const rememberedCafes = () => {
+  try {
+    const c = JSON.parse(localStorage.getItem(CAFES_KEY));
+    return c && Array.isArray(c.vendors) && c.campusId && Date.now() - c.at < CAFES_KEPT_FOR ? c : null;
+  } catch { return null; }
+};
+const checking = (r) => ({ ...r, checking: true, vendors: r.vendors.map((v) => ({ ...v, checking: true })) });
 /* Outlets are listed per campus, and which campus is only known once boot
    has read /campuses and /auth/me. Asking before that fetched the unscoped
    list, threw it away and asked again: one wasted round trip per visit.
@@ -798,7 +839,7 @@ const refreshCafes = async () => {
   if (document.hidden || S.sheet || !['home', 'cafes', 'welcome', 'menu'].includes(S.route) || S.campuses === null) return;
   try {
     const fresh = await loadVendors();
-    const sig = (r) => (r?.vendors || []).map((v) => `${v.id}:${v.open_now}:${v.status?.line}`).join('|');
+    const sig = (r) => (r?.vendors || []).map((v) => `${v.id}:${v.open_now}:${v.status?.line}:${!!v.checking}`).join('|');
     const same = cache.vendors?.ok && sig(cache.vendors.v) === sig(fresh);
     keep('vendors', fresh);
     /* An open menu follows its prices and sold-out items, not only the café's hours. */
@@ -820,6 +861,8 @@ setInterval(refreshCafes, 60_000);
 let cafeNudge = null;
 followChanges('/live/stream', () => { clearTimeout(cafeNudge); cafeNudge = setTimeout(refreshCafes, 500); });
 const CAMPUSES_KEY = 'echo.campuses';
+/* Only which screen to draw first on the next visit (see boot); never trusted for access. */
+const SIGNED_IN_KEY = 'echo.signed-in';
 /* The campus list changes a few times a year. The copy this browser saw last is
    shown at once and replaced by the server's answer; whether a campus is open is
    checked again by the server at sign-in and at every order. */
@@ -942,12 +985,10 @@ function ScrHome() {
             </button>`; }).join('')}
         </div>
       </div>` : ''),
-    pickup: () => (campusOpen() && f.pickupPromo ? `<div class="tile row g3" style="background:var(--surface-blush);border-color:transparent">
-        ${Ico(I.bag, 22)}
-        <div class="grow"><div class="t-h3">In a hurry? Self pickup</div>
-        <div class="t-xs muted">Skip the delivery fee, collect from the counter</div></div>
-        <button class="btn btn-secondary btn-sm" data-act="pickupMode">Pick up</button>
-      </div>` : ''),
+    /* No 'pickup' block: the owner retired the self-pickup card from Home on
+       3 Nov 2026. Self pickup is still chosen where an order is placed (the
+       delivery-spot sheet and checkout). The key stays in the published
+       settings so older versions still validate; it simply draws nothing. */
     deliver: () => (campusOpen() && f.deliverPromo && (!S.me?.partner || S.me.partner.status === 'left') ? `<button class="tile row g3" data-act="go" data-route="deliver" style="width:100%;text-align:left">
         ${Ico(I.bike, 22)}<div class="grow"><div class="t-h3">Deliver with ${BRAND}</div>
         <div class="t-xs muted">Verified students earn by delivering campus orders between classes</div></div>${I.chev}</button>` : ''),
@@ -1106,7 +1147,7 @@ function ScrCafes() {
     return `<div class="screen">${TopBar('Campus cafés')}<div class="pad stack g4 enter">${ComingSoon(campus)}</div></div>`;
   }
   return `<div class="screen">
-    ${TopBar('Campus cafés', { sub: vs?.ok ? `${open} of ${cafs.length} open now` : '' })}
+    ${TopBar('Campus cafés', { sub: !vs?.ok ? '' : vs.v.checking ? 'Checking which are open now' : `${open} of ${cafs.length} open now` })}
     <div class="pad stack g4 enter">
       <p class="t-sm muted">${esc(campus?.name || 'Campus')} · ${S.fulfilment === 'pickup' ? 'You pick up from the counter' : 'Delivered on campus'}${
         vs?.ok ? ` · ${cafs.length} café${cafs.length === 1 ? '' : 's'}` : ''}</p>
@@ -3033,7 +3074,6 @@ document.addEventListener('click', async (e) => {
     }
     case 'setfulfil': S.fulfilment = a.f; render(); break;
     case 'pickupFromSheet': S.fulfilment = 'pickup'; S.destination = null; setSheet(null); toast('Self pickup selected'); break;
-    case 'pickupMode': S.fulfilment = 'pickup'; go('cafes'); toast('Self pickup selected'); break;
 
     case 'sheet': setSheet(a.sheet, { order: a.order, role: a.role }); break;
     /* A campus that is not open is not selectable. The card is rendered as a
@@ -3117,6 +3157,7 @@ document.addEventListener('click', async (e) => {
     case 'logout':
       await quad.logout().catch(() => {});
       S.me = null; S.cart = []; drop('orders', 'me', 'notifs', 'partner');
+      try { localStorage.removeItem(SIGNED_IN_KEY); } catch { /* storage blocked */ }
       go('welcome');
       break;
     case 'pickStars': {
@@ -3347,6 +3388,7 @@ document.addEventListener('click', async (e) => {
     case 'signout':
       await quad.logout().catch(() => {});
       S.me = null; S.cart = []; drop('orders', 'me', 'notifs', 'partner');
+      try { localStorage.removeItem(SIGNED_IN_KEY); } catch { /* storage blocked */ }
       go('welcome');
       break;
 
@@ -3804,7 +3846,18 @@ async function openGateway(intent, draft) {
     const id = localStorage.getItem(CAMPUS_KEY);
     if (id) early = { id, list: vendorsFor(id) };
   } catch { /* storage blocked: no early request */ }
-  early?.list.catch(() => {});
+  /* Until /auth/me answers, that campus is the one shown, with the list this
+     browser was given last time (marked "Checking"). The fresh answer replaces
+     it as soon as it comes, without waiting for the account check; if it fails,
+     the remembered list stays and the minute refresh tries again. */
+  lastCampus = early?.id || null;
+  const kept = rememberedCafes();
+  if (kept && kept.campusId === lastCampus) keep('vendors', checking(kept), kept.at);
+  if (early) {
+    inflight.vendors = early.list
+      .then((r) => keep('vendors', r), (e) => { if (!cache.vendors?.ok) cache.vendors = { ok: false, e }; })
+      .finally(() => { delete inflight.vendors; render(); });
+  }
   /* The college list must not wait for the account or provider checks: on a
      server that is waking up those took far longer than the list, and nothing
      could be chosen until all three had answered. */
@@ -3813,7 +3866,13 @@ async function openGateway(intent, draft) {
      on a server waking from sleep that check alone took tens of seconds, and the
      visitor saw nothing they could press. If they move on meanwhile, they stay. */
   const firstAsk = routeFromHash();
-  const provisional = PREVIEW ? null : firstAsk ? (PUBLIC_ROUTES.includes(firstAsk.route) ? firstAsk : null) : { route: 'welcome', params: {} };
+  /* Someone who was signed in last time most likely still is: Home, not the
+     sign-in page, while the check runs. Only a hint for which public screen to
+     draw first; the account itself is whatever /auth/me says. */
+  let wasSignedIn = false;
+  try { wasSignedIn = localStorage.getItem(SIGNED_IN_KEY) === '1'; } catch { /* storage blocked */ }
+  const provisional = PREVIEW ? null : firstAsk ? (PUBLIC_ROUTES.includes(firstAsk.route) ? firstAsk : null)
+    : { route: wasSignedIn ? 'home' : 'welcome', params: {} };
   if (provisional) { S.route = provisional.route; S.params = provisional.params; }
   render();
   const campusesAsked = quad.campuses()
@@ -3827,7 +3886,7 @@ async function openGateway(intent, draft) {
     S.campuses = campuses?.campuses || S.campuses || [];
     S.me = me.authenticated ? me : null;
     S.providers = status?.providers || null;
-    if (early && early.id === browseCampus()?.id && !('vendors' in cache)) load('vendors', early.list);
+    try { if (signedIn()) localStorage.setItem(SIGNED_IN_KEY, '1'); else localStorage.removeItem(SIGNED_IN_KEY); } catch { /* storage blocked */ }
   } catch (e) {
     if (e instanceof Offline) {
       document.getElementById('app').innerHTML = `<div class="shell"><div class="stage"><div class="device">
@@ -3836,6 +3895,7 @@ async function openGateway(intent, draft) {
     }
   }
   S.campuses ??= [];
+  lastCampus = null;
   /* A link to a screen (a café's menu, Deliver with ECHO ECHO) opens that
      screen. Signed out, only the screens anyone may see are honoured. */
   const asked = routeFromHash();
