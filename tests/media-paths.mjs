@@ -72,7 +72,23 @@ if (!missing && !outside) {
   ok(`${urls.size} photo files exist in the build, served as e.g. ${sitePath}`);
 }
 
+/* The stable /media/ copy the browser uses must hold every one of the same files. */
+{
+  const stable = join(dist, 'media');
+  const absent = [...urls].filter((u) => u.startsWith('file:')).map((u) => relative(media, fileURLToPath(u)))
+    .filter((rel) => !existsSync(join(stable, rel)) || !readdirSync(dirname(join(stable, rel))).includes(basename(rel)));
+  absent.length ? bad(`missing from dist/media/: ${absent.slice(0, 5).join(', ')}`) : ok(`all ${urls.size} photos also at the stable /media/ path`);
+  const photosJs = readFileSync(join(media, 'photos.js'), 'utf8');
+  /\/media\//.test(photosJs) ? ok('photos.js points browsers at /media/') : bad('photos.js does not use /media/ in a browser');
+}
+
 const vercel = JSON.parse(readFileSync(join(root, 'vercel.json'), 'utf8'));
+{
+  const rule = (src) => vercel.headers.find((h) => h.source === src);
+  const media = rule('/media/(.*)')?.headers.find((h) => h.key === 'Cache-Control')?.value || '';
+  /max-age=\d+/.test(media) && !/immutable/.test(media) ? ok(`/media/ cached, not immutable: ${media}`) : bad(`/media/ cache rule: "${media}"`);
+  rule('/((?!_v/|media/).*)') ? ok('/media/ is outside the no-cache rule') : bad('the no-cache rule still covers /media/');
+}
 const capture = (vercel.rewrites || []).filter((r) => !r.source.startsWith('/api/'));
 capture.length ? bad(`vercel.json rewrites other than /api/: ${capture.map((r) => r.source).join(', ')}`)
   : ok('vercel.json rewrites only /api/, so /_v/ photos are served as files');

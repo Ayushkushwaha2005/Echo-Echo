@@ -104,6 +104,9 @@ renameSync(staging, assets);
    load one of its own modules reads it to tell a deploy that happened while
    it was open apart from a genuine failure (packages/ui/load-module.js). */
 writeFileSync(join(dist, 'version.json'), `${JSON.stringify({ version: VERSION })}\n`);
+/* Photos also live at a stable /media/ path (packages/media/photos.js): they are
+   named by what they show, so the same name means the same picture across deploys. */
+cpSync(join(assets, 'packages', 'media'), join(dist, 'media'), { recursive: true, filter: (src) => !src.endsWith('.js') });
 
 /* Every module a page can ever import, as the browser would discover it one
    level at a time: the static graph AND the targets of dynamic import()s.
