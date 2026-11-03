@@ -715,14 +715,14 @@ function ScrObEmailCode() {
     <form class="pad stack g5 enter" data-form="emailcode" style="padding-top:var(--s-3)">
       <div class="stack g2">
         <h1 class="t-display">Check your inbox</h1>
-        <p class="t-sm muted">We sent a code to <b style="color:var(--text)">${esc(a.email)}</b>.
-          It expires in 10 minutes.</p>
+        <p class="t-sm muted">Our email service has accepted a code for <b style="color:var(--text)">${esc(a.email)}</b>.
+          It usually arrives within a minute; university mail can take longer, so check Junk too. The code expires in 10 minutes.</p>
       </div>
       <div class="otp">${[0, 1, 2, 3, 4, 5].map((i) =>
         `<input inputmode="numeric" maxlength="1" aria-label="Digit ${i + 1}" data-otp="${i}">`).join('')}</div>
       ${a.error ? `<p class="t-xs" role="alert" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
       <button class="btn btn-primary btn-lg btn-block" type="submit">Verify</button>
-      <button class="btn btn-ghost btn-block t-sm" type="button" data-act="resendEmail">Send another code</button>
+      <button class="btn btn-ghost btn-block t-sm" type="button" data-act="resendEmail" id="resend-email" ${resendWait() ? 'disabled' : ''}>${resendLabel()}</button>
     </form>
   </div>`;
 }
@@ -819,7 +819,13 @@ setInterval(refreshCafes, 60_000);
    server asks for the same refresh straight away. */
 let cafeNudge = null;
 followChanges('/live/stream', () => { clearTimeout(cafeNudge); cafeNudge = setTimeout(refreshCafes, 500); });
-const loadCampuses = () => quad.campuses().then((r) => { S.campuses = r.campuses; render(); return r; });
+const CAMPUSES_KEY = 'echo.campuses';
+/* The campus list changes a few times a year. The copy this browser saw last is
+   shown at once and replaced by the server's answer; whether a campus is open is
+   checked again by the server at sign-in and at every order. */
+const rememberCampuses = (list) => { try { localStorage.setItem(CAMPUSES_KEY, JSON.stringify(list)); } catch { /* storage blocked */ } };
+const rememberedCampuses = () => { try { const l = JSON.parse(localStorage.getItem(CAMPUSES_KEY)); return Array.isArray(l) && l.length ? l : null; } catch { return null; } };
+const loadCampuses = () => quad.campuses().then((r) => { S.campuses = r.campuses; rememberCampuses(r.campuses); render(); return r; });
 
 function ScrSetup() {
   const p = myProfile();
@@ -2945,9 +2951,23 @@ const when = (ts) => {
 };
 
 /* ===================== events =========================================== */
-async function withBusy(btn, fn) {
+/* The server refuses a second code inside its cooldown; this counts it down so
+   nobody presses a button that can only fail. */
+const resendWait = () => Math.max(0, Math.ceil(((S.auth.resendAt || 0) - Date.now()) / 1000));
+const resendLabel = () => (resendWait() ? `Send another code in ${resendWait()} s` : 'Send another code');
+function startResendClock(seconds) {
+  S.auth.resendAt = Date.now() + (Number(seconds) || 60) * 1000;
+  clearInterval(S.auth.resendTimer);
+  S.auth.resendTimer = setInterval(() => {
+    const b = document.getElementById('resend-email');
+    if (b) { b.textContent = resendLabel(); b.disabled = !!resendWait(); }
+    if (!resendWait()) clearInterval(S.auth.resendTimer);
+  }, 1000);
+}
+
+async function withBusy(btn, fn, busyLabel = '…') {
   const label = btn?.innerHTML;
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  if (btn) { btn.disabled = true; btn.textContent = busyLabel; }
   try { return await fn(); }
   catch (e) { toast(explain(e), 'bad'); return null; }
   finally { if (btn && document.body.contains(btn)) { btn.disabled = false; btn.innerHTML = label; } }
@@ -3307,10 +3327,13 @@ document.addEventListener('click', async (e) => {
       break;
 
     case 'resendEmail':
+      if (resendWait()) break;
       await withBusy(t, async () => {
-        await quad.sendEmailCode(S.auth.email);
-        toast('A new code is on its way');
-      });
+        const out = await quad.sendEmailCode(S.auth.email);
+        startResendClock(out.resendAfterSeconds);
+        toast('A new code was accepted for delivery. Only the newest code works.');
+      }, 'Sending…');
+      render();
       break;
     case 'contactPhone': {
       const v = prompt('Contact mobile number (used only by the payment gateway):', S.me?.user?.contactPhone || '');
@@ -3516,9 +3539,10 @@ document.addEventListener('submit', async (e) => {
       try {
         const out = await quad.sendEmailCode(S.auth.email);
         S.auth.email = out.email; S.auth.error = '';
+        startResendClock(out.resendAfterSeconds);
         go('ob-email-code');
       } catch (err) { S.auth.error = explain(err); render(); }
-    });
+    }, 'Sending…');
   }
 
   if (kind === 'emailcode') {
@@ -3781,12 +3805,26 @@ async function openGateway(intent, draft) {
     if (id) early = { id, list: vendorsFor(id) };
   } catch { /* storage blocked: no early request */ }
   early?.list.catch(() => {});
+  /* The college list must not wait for the account or provider checks: on a
+     server that is waking up those took far longer than the list, and nothing
+     could be chosen until all three had answered. */
+  S.campuses = rememberedCampuses();
+  /* A screen anyone may see is drawn at once, instead of after the account check:
+     on a server waking from sleep that check alone took tens of seconds, and the
+     visitor saw nothing they could press. If they move on meanwhile, they stay. */
+  const firstAsk = routeFromHash();
+  const provisional = PREVIEW ? null : firstAsk ? (PUBLIC_ROUTES.includes(firstAsk.route) ? firstAsk : null) : { route: 'welcome', params: {} };
+  if (provisional) { S.route = provisional.route; S.params = provisional.params; }
+  render();
+  const campusesAsked = quad.campuses()
+    .then((r) => { S.campuses = r.campuses; rememberCampuses(r.campuses); render(); return r; })
+    .catch(() => null);
   try {
     /* The preview frame shows what a signed-out visitor sees, and never the
        administrator's own account, orders or location. */
     const [me, status, campuses] = await Promise.all([PREVIEW ? { authenticated: false } : quad.me(),
-      quad.authStatus().catch(() => null), quad.campuses().catch(() => null)]);
-    S.campuses = campuses?.campuses || [];
+      quad.authStatus().catch(() => null), campusesAsked]);
+    S.campuses = campuses?.campuses || S.campuses || [];
     S.me = me.authenticated ? me : null;
     S.providers = status?.providers || null;
     if (early && early.id === browseCampus()?.id && !('vendors' in cache)) load('vendors', early.list);
@@ -3808,10 +3846,12 @@ async function openGateway(intent, draft) {
   const gate = !signedIn() ? null
     : profileIncomplete() && S.me.roles?.includes('student') ? 'setup'
     : null;
+  const movedOn = provisional && S.route !== provisional.route;
   if (gate) {
     if (gate === 'setup') S.setupNext = wanted; else S.locationNext = wanted;
     go(gate, {}, { history: 'replace' });
-  } else if (wanted) go(wanted.route, wanted.params, { history: 'replace' });
+  } else if (movedOn && !signedIn()) render();
+  else if (wanted) go(wanted.route, wanted.params, { history: 'replace' });
   else go(signedIn() ? 'home' : 'welcome', {}, { history: 'replace' });
 
   /* Back from a checkout that left the page. */

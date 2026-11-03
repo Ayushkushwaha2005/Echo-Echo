@@ -17,10 +17,14 @@
 
    Lookups are pure functions of the slug or the dish name: the same dish
    gets the same photo on every load, and nothing here is written anywhere.
-   URLs resolve against this module, so they work unchanged in the source
-   tree and in the content-hashed build folder.
+   In a browser, photos come from /media/, which the build publishes outside the
+   content-hashed folder: a deploy retires the previous /_v/<build>/, so a page
+   opened before a deploy asked for photos that now answered 404, and each one
+   fell back to the café monogram or an empty tile. Elsewhere (Node, the tests)
+   URLs resolve against this module, so they work in the source tree too.
    ========================================================================== */
-const asset = (name) => new URL(`./${name}`, import.meta.url).href;
+const PAGE = typeof location !== 'undefined' && /^https?:$/.test(location.protocol);
+const asset = (name) => (PAGE ? `${location.origin}/media/${name}` : new URL(`./${name}`, import.meta.url).href);
 
 /* Keyed by vendor slug, which survives renames (032 kept 'tulips').
    `position` is the object-position that keeps the sign and counter in a
