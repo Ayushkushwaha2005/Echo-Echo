@@ -128,8 +128,10 @@ test('a student signs in with their university mailbox and reaches a cart that s
   await page.getByRole('button', { name: 'Save and continue' }).click();
   await expect.poll(async () => (await db.query(`SELECT name FROM app_user WHERE student_email = $1`, [email])).rows[0]?.name, { timeout: 15000 }).toBe('First Student');
 
-  /* Saving moves on by itself; opening the menu before that finishes would be overridden. */
-  await expect(page.getByRole('button', { name: 'Save and continue' })).toHaveCount(0, { timeout: 15000 });
+  /* Saving moves on by itself; opening the menu before that finishes would be overridden.
+     The button's label alone says nothing: it turns into "…" the moment it is pressed,
+     before the save and the account re-read finish. The setup form leaving the page does. */
+  await expect(page.locator('form[data-form=setup]')).toHaveCount(0, { timeout: 15000 });
   await page.goto(`/web/#/menu/${v.id}`);
   await page.locator('[data-act=add]').first().click();
   await page.goto('/web/#/cart');
