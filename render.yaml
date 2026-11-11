@@ -139,27 +139,24 @@ services:
       - key: S3_SECRET_ACCESS_KEY
         sync: false
 
-      # ---- payments (Cashfree production) ----------------------------------
-      # Live since 1 Oct 2026. PAYMENTS_DEFERRED is deliberately absent: it
-      # must never return here, and test/config-safety.test.mjs fails CI if it
-      # does. The PG base URL is left to its default (api.cashfree.com), so no
-      # sandbox endpoint can be configured by this file. The key pair is
-      # entered in the Render dashboard only.
+      # ---- payments (Razorpay production) ----------------------------------
+      # Razorpay is the only active collection provider. The three secrets are
+      # entered in the Render dashboard only (never here). The API base is
+      # left to its default (api.razorpay.com); the key id itself selects
+      # live mode, and the boot guard refuses a non-https base in production.
+      # Webhook URL to register in the Razorpay dashboard (live mode):
+      #   https://echo-echo-api.onrender.com/payments/webhook/razorpay
+      # PAYMENTS_DEFERRED is deliberately absent and test/config-safety.test.mjs
+      # fails CI if it returns.
       - key: PAYMENT_PROVIDER
-        value: cashfree
-      - key: CASHFREE_PG_APP_ID
+        value: razorpay
+      - key: RAZORPAY_KEY_ID
         sync: false
-      - key: CASHFREE_PG_SECRET_KEY
+      - key: RAZORPAY_KEY_SECRET
         sync: false
-      - key: CASHFREE_PG_NOTIFY_URL
-        value: https://echo-echo-api.onrender.com/payments/webhook
-      - key: CASHFREE_PG_RETURN_URL
-        value: https://www.echoecho.tech/
-      # Collect-and-disburse: Cashfree settles everything to the platform and
-      # the ledger pays cafés. Easy Split stays off until Cashfree approves it.
-      - key: CASHFREE_EASY_SPLIT
-        value: "off"
-      # No PAYOUT_PROVIDER: Cashfree Payouts is not activated in production,
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      # No PAYOUT_PROVIDER: no payout provider is activated in production,
       # so settlements are paid by an administrator and recorded by reference.
       # The sweeper expires stale offers and abandoned checkouts; with live
       # payments it must run.
