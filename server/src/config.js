@@ -204,14 +204,24 @@ export const PAYMENTS = {
        merchant AND each café's vendor account is active there. */
     easySplit: env('CASHFREE_EASY_SPLIT', 'off') === 'on',
   },
-  get configured() {
-    if (this.provider === 'razorpay') {
+  /* Whether a given provider's credentials are present, independent of
+     which one is active. Both may be configured at once: a deployment that
+     switched collection providers still verifies webhooks, pulls status and
+     issues refunds for payments the other provider took. */
+  providerConfigured(id) {
+    if (id === 'razorpay') {
       return !!(this.razorpay.keyId && this.razorpay.keySecret && this.razorpay.webhookSecret);
     }
-    if (this.provider === 'cashfree') {
+    if (id === 'cashfree') {
       return !!(this.cashfree.appId && this.cashfree.secretKey);
     }
     return false;
+  },
+  get configuredProviders() {
+    return ['cashfree', 'razorpay'].filter((id) => this.providerConfigured(id));
+  },
+  get configured() {
+    return this.providerConfigured(this.provider);
   },
   /* What the browser is allowed to know. A key id is public by design; a
      secret key never appears here, and nothing in this object is sent to a

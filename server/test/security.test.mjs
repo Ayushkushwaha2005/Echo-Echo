@@ -283,7 +283,7 @@ test('SSRF: no outbound request targets a URL derived from the caller', async ()
      where the provider calls actually live. */
   const fs = await import('node:fs');
   const targets = [];
-  for (const sub of ['routes', 'services']) {
+  for (const sub of ['routes', 'services', 'services/providers']) {
     const dir = new URL(`../src/${sub}/`, import.meta.url);
     for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith('.js')) continue;
@@ -341,7 +341,8 @@ test('interpolated path segments in provider URLs are encoded', async () => {
      path is a rejection: it is how a value containing "../" or a query
      string escapes the endpoint it was meant to address. */
   const fs = await import('node:fs');
-  const files = ['../src/services/payment-providers.js', '../src/services/payout-providers.js'];
+  const files = ['../src/services/providers/cashfree.js', '../src/services/providers/razorpay.js',
+                 '../src/services/payout-providers.js'];
   let checked = 0;
   for (const f of files) {
     const src = fs.readFileSync(new URL(f, import.meta.url), 'utf8');

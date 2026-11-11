@@ -528,10 +528,25 @@ export async function importSettlements(opts = {}) {
    ========================================================================== */
 export async function runScheduledReconciliation({ now = new Date(), log,
                                                    lookbackDays } = {}) {
+  /* The active collection provider first, exactly as before; then every
+     OTHER configured provider, because a deployment that switched gateways
+     still receives settlements for payments the previous one took. The
+     active provider's result is returned in the shape callers already read;
+     the others are listed under `others` and never change that shape. */
+  const active = PAYMENTS.provider;
+  if (!active || !PAYMENTS.configured) return { ran: false, reason: 'no payment provider' };
+  const primary = await runScheduledReconciliationFor(active, { now, log, lookbackDays });
+  const others = [];
+  for (const id of PAYMENTS.configuredProviders) {
+    if (id === active) continue;
+    others.push({ provider: id, ...(await runScheduledReconciliationFor(id, { now, log, lookbackDays })) });
+  }
+  return others.length ? { ...primary, others } : primary;
+}
+
+async function runScheduledReconciliationFor(provider, { now = new Date(), log, lookbackDays } = {}) {
   const days = Number.isFinite(lookbackDays) && lookbackDays > 0
     ? lookbackDays : PAYMENTS.reconLookbackDays;
-  const provider = PAYMENTS.provider;
-  if (!provider || !PAYMENTS.configured) return { ran: false, reason: 'no payment provider' };
   let adapter;
   try { adapter = adapterFor(provider); }
   catch { return { ran: false, reason: 'provider not configured' }; }

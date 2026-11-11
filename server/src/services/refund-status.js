@@ -17,7 +17,14 @@ import { adapterFor } from './payment-providers.js';
    the money actually reached the customer, or raises a mismatch if the
    provider says it did not. Nothing here re-allocates money. */
 export async function applyRefundOutcome(req, rf) {
-  const r = await one(`SELECT * FROM refund WHERE id::text = $1`, [rf.refundId]);
+  /* Resolved by OUR refund id when the provider echoed it back (every
+     refund this server issued carries it), else by the provider's own
+     refund id (a refund issued from the provider's dashboard). Never by
+     amount. */
+  let r = rf.refundId ? await one(`SELECT * FROM refund WHERE id::text = $1`, [rf.refundId]) : null;
+  if (!r && rf.providerRefundId) {
+    r = await one(`SELECT * FROM refund WHERE provider_refund_id = $1`, [rf.providerRefundId]);
+  }
   if (!r) return { ok: true, ignored: 'unknown refund' };
   if (rf.outcome === 'completed' && r.state === 'processing') {
     await tx(async (c) => {
@@ -47,7 +54,8 @@ export async function applyRefundOutcome(req, rf) {
 /** Ask the provider about every refund still processing. Safe to run often. */
 export async function syncProcessingRefunds({ limit = 50 } = {}) {
   const rows = (await q(
-    `SELECT r.id, p.provider, p.provider_order_id FROM refund r JOIN payment p ON p.id = r.payment_id
+    `SELECT r.id, r.provider_refund_id, p.provider, p.provider_order_id, p.provider_payment_id
+       FROM refund r JOIN payment p ON p.id = r.payment_id
       WHERE r.state = 'processing' ORDER BY r.created_at LIMIT $1`, [limit])).rows;
   const out = { checked: 0, completed: 0, failed: 0 };
   for (const r of rows) {
@@ -55,10 +63,16 @@ export async function syncProcessingRefunds({ limit = 50 } = {}) {
     try { adapter = adapterFor(r.provider); } catch { continue; }
     if (typeof adapter.fetchRefund !== 'function') continue;
     try {
-      const st = await adapter.fetchRefund(r.provider_order_id, r.id);
+      /* The row is passed as a third argument for adapters that need the
+         provider's own refund or payment id to look a refund up; an adapter
+         that keys on (order id, our refund id) simply ignores it. */
+      const st = await adapter.fetchRefund(r.provider_order_id, r.id, r);
       out.checked++;
-      const outcome = st.status === 'SUCCESS' ? 'completed'
-        : ['CANCELLED', 'FAILED'].includes(st.status) ? 'failed' : 'pending';
+      /* An adapter that normalises its own outcome wins; otherwise the
+         status word is read in the vocabulary the first adapter used. */
+      const outcome = st.outcome
+        || (st.status === 'SUCCESS' ? 'completed'
+          : ['CANCELLED', 'FAILED'].includes(st.status) ? 'failed' : 'pending');
       const res = await applyRefundOutcome(null, { refundId: r.id, status: st.status, outcome });
       if (res.refund === 'completed') out.completed++;
       if (res.refund === 'mismatch_raised') out.failed++;

@@ -210,7 +210,7 @@ export function build() {
       /^\/auth\/enrol$/, /^\/auth\/enrol\/available$/,
       /* Passkey sign-in proves possession of a registered private key. */
       /^\/auth\/passkey\/login\/(options|verify)$/,
-      /^\/payments\/webhook$/,
+      /^\/payments\/webhook(\/[a-z]+)?$/,
       /^\/payouts\/webhook$/,
       /^\/vendors(\/[^/]+\/(menu|contact|categories))?$/,   // browsing before sign-in
       /^\/menu\/search/, /^\/reviews/,
