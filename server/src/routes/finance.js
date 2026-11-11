@@ -188,6 +188,96 @@ export default async function financeRoutes(app) {
     };
   });
 
+  /* ---------- the owner's evening settlement centre ----------------------
+     One row per payee with what is owed now, the last transfer that was
+     actually recorded (and HOW it was confirmed), what is queued in open
+     payouts, and when the next scheduled batch is due. Every figure is read
+     from the ledger views and the payout table, never typed in. */
+  app.get('/admin/finance/settlement-centre', async (req) => {
+    authorize(req.actor, 'finance.read_all');
+    const cfg = await schedule();
+    const last = (col) => `(SELECT json_build_object('amount_paise', p.amount_paise, 'paid_at', p.paid_at,
+                              'method', p.method, 'reference', COALESCE(p.external_reference, p.provider_payout_id))
+                             FROM payout p WHERE p.${col} = s.${col === 'vendor_id' ? 'vendor_id' : 'partner_id'} AND p.state = 'paid'
+                            ORDER BY p.paid_at DESC LIMIT 1)`;
+    const pending = (col, key) => `(SELECT json_agg(json_build_object('id', p.id, 'amount_paise', p.amount_paise, 'state', p.state,
+                                     'created_at', p.created_at, 'batch_id', p.batch_id) ORDER BY p.created_at)
+                                     FROM payout p WHERE p.${col} = s.${key} AND p.state IN ('pending','processing'))`;
+    const cafes = (await q(
+      `SELECT 'cafe' AS kind, s.vendor_id AS payee_id, s.name, s.gross_food_sales_paise AS gross_paise,
+              s.commission_paise AS deductions_paise, s.refunds_paise, s.adjustments_paise,
+              s.net_payable_paise, s.settled_paise, s.outstanding_paise, v.active,
+              ${last('vendor_id')} AS last_settlement, ${pending('vendor_id', 'vendor_id')} AS pending_payouts
+         FROM v_cafeteria_statement s JOIN vendor v ON v.id = s.vendor_id
+        ORDER BY s.outstanding_paise DESC, s.name`)).rows;
+    const partners = (await q(
+      `SELECT 'partner' AS kind, s.partner_id AS payee_id, s.name, s.total_earned_paise AS gross_paise,
+              0::bigint AS deductions_paise, 0::bigint AS refunds_paise, 0::bigint AS adjustments_paise,
+              s.total_earned_paise AS net_payable_paise, s.paid_out_paise AS settled_paise,
+              s.pending_payout_paise AS outstanding_paise, s.completed_deliveries,
+              ${last('partner_id')} AS last_settlement, ${pending('partner_id', 'partner_id')} AS pending_payouts
+         FROM v_partner_statement s
+        ORDER BY s.pending_payout_paise DESC, s.name`)).rows;
+
+    /* Overdue: a payout built by the schedule that is still unpaid after the
+       NEXT run of its kind should have happened. Cafés settle daily, so a
+       pending café payout older than a day is overdue; partners weekly. */
+    const now = Date.now();
+    const overdueAfterMs = { cafe: 86_400_000, partner: 7 * 86_400_000 };
+    const decorate = (r) => {
+      const open = (r.pending_payouts || []).map((p) => ({ ...p, amount_paise: Number(p.amount_paise) }));
+      const queued = open.reduce((a, p) => a + p.amount_paise, 0);
+      const oldest = open.length ? Math.min(...open.map((p) => new Date(p.created_at).getTime())) : null;
+      return {
+        ...numeric(r),
+        pending_payouts: open,
+        queued_paise: queued,
+        /* Owed beyond what a built batch already covers. */
+        unbatched_paise: Math.max(0, Number(r.outstanding_paise) - queued),
+        overdue: oldest != null && now - oldest > overdueAfterMs[r.kind],
+        last_settlement: r.last_settlement
+          ? { ...r.last_settlement, amount_paise: Number(r.last_settlement.amount_paise),
+              /* What the record actually proves. A provider id means the
+                 payout provider confirmed the transfer; a manual reference
+                 means an administrator recorded a transfer they made. */
+              confirmed_by: r.last_settlement.method === 'manual_bank_transfer' ? 'administrator'
+                          : r.last_settlement.method ? 'provider' : 'unknown' }
+          : null,
+      };
+    };
+    const rows = [...cafes.map(decorate), ...partners.map(decorate)];
+    const batches = (await q(
+      `SELECT b.id, b.kind, b.period_key, b.state, b.created_at,
+              count(p.id)::int AS payouts, COALESCE(sum(p.amount_paise),0)::bigint AS total_paise,
+              count(p.id) FILTER (WHERE p.state = 'paid')::int AS paid,
+              count(p.id) FILTER (WHERE p.state IN ('pending','processing'))::int AS open
+         FROM payout_batch b LEFT JOIN payout p ON p.batch_id = b.id
+        WHERE b.state IN ('open','approved') OR b.created_at > now() - interval '14 days'
+        GROUP BY b.id ORDER BY b.created_at DESC LIMIT 30`)).rows.map(numeric);
+    const history = (await q(
+      `SELECT p.id, p.amount_paise, p.state, p.method, COALESCE(p.external_reference, p.provider_payout_id) AS reference,
+              p.paid_at, p.created_at, COALESCE(v.name, u.name) AS payee,
+              CASE WHEN p.vendor_id IS NOT NULL THEN 'cafe' ELSE 'partner' END AS kind,
+              rb.name AS recorded_by_name
+         FROM payout p LEFT JOIN vendor v ON v.id = p.vendor_id LEFT JOIN app_user u ON u.id = p.partner_id
+         LEFT JOIN app_user rb ON rb.id = p.recorded_by
+        WHERE p.state = 'paid' ORDER BY p.paid_at DESC LIMIT 50`)).rows.map(numeric);
+    const sum = (k, f) => rows.filter(f).reduce((a, r) => a + Number(r[k]), 0);
+    return {
+      asOf: new Date(now).toISOString(),
+      schedule: cfg,
+      totals: {
+        cafeOutstandingPaise: sum('outstanding_paise', (r) => r.kind === 'cafe'),
+        partnerOutstandingPaise: sum('outstanding_paise', (r) => r.kind === 'partner'),
+        queuedPaise: sum('queued_paise', () => true),
+        overdueCount: rows.filter((r) => r.overdue).length,
+        settledAllTimePaise: sum('settled_paise', () => true),
+      },
+      payees: rows, batches, history,
+      payoutProvider: { provider: PAYOUTS.provider, configured: PAYOUTS.configured },
+    };
+  });
+
   /* Per-cafeteria settlement statement. */
   app.get('/admin/finance/cafeterias', async (req) => {
     authorize(req.actor, 'finance.read_all');

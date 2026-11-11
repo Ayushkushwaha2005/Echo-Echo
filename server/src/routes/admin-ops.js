@@ -237,22 +237,56 @@ export default async function adminOpsRoutes(app) {
     const params = []; const where = [];
     const status = oneOf(req.query?.status, PAYMENT_STATES, 'status');
     if (status) { params.push(status); where.push(`p.status = $${params.length}`); }
+    /* Provider-neutral: every adapter this build knows is a valid filter. */
+    const provider = oneOf(req.query?.provider, ['cashfree', 'razorpay'], 'provider');
+    if (provider) { params.push(provider); where.push(`p.provider = $${params.length}`); }
+    const vendorId = String(req.query?.vendorId || '').trim();
+    if (vendorId) {
+      if (!/^[0-9a-f-]{36}$/i.test(vendorId)) throw BadRequest('vendorId must be a uuid');
+      params.push(vendorId); where.push(`o.vendor_id = $${params.length}`);
+    }
+    const from = dateParam(req.query?.from, 'from');
+    const toRaw = dateParam(req.query?.to, 'to');
+    if (from) { params.push(from); where.push(`p.created_at >= $${params.length}`); }
+    if (toRaw) {
+      const to = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.to)) ? new Date(toRaw.getTime() + 86400000) : toRaw;
+      params.push(to); where.push(`p.created_at < $${params.length}`);
+    }
     const term = String(req.query?.q || '').trim().slice(0, 80);
     if (term) {
       params.push(`%${term}%`);
-      where.push(`(o.code ILIKE $${params.length} OR p.provider_order_id ILIKE $${params.length} OR p.provider_payment_id ILIKE $${params.length})`);
+      where.push(`(o.code ILIKE $${params.length} OR p.provider_order_id ILIKE $${params.length} OR p.provider_payment_id ILIKE $${params.length} OR c.name ILIKE $${params.length} OR c.phone ILIKE $${params.length})`);
     }
     if (req.query?.unreconciled === 'true') where.push(`p.status = 'paid' AND p.reconciled_at IS NULL`);
     const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const total = (await one(`SELECT count(*)::int AS n FROM payment p JOIN food_order o ON o.id = p.order_id ${w}`, params)).n;
+    const FROM = `FROM payment p JOIN food_order o ON o.id = p.order_id
+                  LEFT JOIN vendor v ON v.id = o.vendor_id
+                  LEFT JOIN app_user c ON c.id = o.customer_id
+                  LEFT JOIN order_financials f ON f.order_id = o.id`;
+    const total = (await one(`SELECT count(*)::int AS n ${FROM} ${w}`, params)).n;
     const { rows } = await q(
       `SELECT p.id, p.provider, p.provider_order_id, p.provider_payment_id, p.amount_paise, p.status,
               p.created_at, p.settled_at, p.reconciled_at, p.settlement_id, p.flagged_reason,
-              o.id AS order_id, o.code AS order_code, o.state AS order_state,
-              (SELECT COALESCE(sum(r.amount_paise),0)::int FROM refund r WHERE r.payment_id = p.id AND r.state <> 'failed') AS refunded_paise
-         FROM payment p JOIN food_order o ON o.id = p.order_id ${w}
+              o.id AS order_id, o.code AS order_code, o.state AS order_state, o.fulfilment,
+              v.id AS vendor_id, v.name AS vendor_name,
+              c.name AS customer_name,
+              CASE WHEN COALESCE(c.phone, c.contact_phone) IS NULL THEN NULL
+                   ELSE '…' || right(COALESCE(c.phone, c.contact_phone), 4) END AS customer_phone_masked,
+              COALESCE(f.gateway_fee_paise, 0)::int AS gateway_fee_paise,
+              (p.amount_paise - COALESCE(f.gateway_fee_paise, 0))::int AS net_collected_paise,
+              (SELECT COALESCE(sum(r.amount_paise),0)::int FROM refund r WHERE r.payment_id = p.id AND r.state <> 'failed') AS refunded_paise,
+              (SELECT string_agg(r.state, ',' ORDER BY r.created_at) FROM refund r WHERE r.payment_id = p.id) AS refund_states
+         ${FROM} ${w}
         ORDER BY p.created_at DESC LIMIT ${pageSize} OFFSET ${offset}`, params);
-    return { payments: rows, total, page, pageSize };
+    /* Window totals for the filter in force: what was collected and what
+       the gateways kept. Customer contact data is shown masked (last four
+       digits), and the fee is the provider's own figure, 0 until reported. */
+    const totals = await one(
+      `SELECT COALESCE(sum(p.amount_paise) FILTER (WHERE p.status IN ('paid','refunded')),0)::bigint AS collected_paise,
+              COALESCE(sum(f.gateway_fee_paise) FILTER (WHERE p.status IN ('paid','refunded')),0)::bigint AS fees_paise
+         ${FROM} ${w}`, params);
+    return { payments: rows, total, page, pageSize,
+             totals: { collectedPaise: Number(totals.collected_paise), gatewayFeesPaise: Number(totals.fees_paise) } };
   });
 
   app.get('/admin/webhooks', async (req) => {
@@ -404,6 +438,40 @@ export default async function adminOpsRoutes(app) {
                            LEFT JOIN payout_destination d ON d.id = p.destination_id
                           WHERE p.created_at >= $1 AND p.created_at < $2 ORDER BY p.created_at LIMIT 50000`, [from, to])).rows
           .map((r) => ({ ...r, amount_inr: rupeesText(r.amount_paise) }));
+      },
+    },
+    settlement: {
+      cap: 'finance.read_all',
+      /* The owner's evening sheet: one line per payee, what is owed now,
+         what was paid in the window and against which reference. Balances
+         are as-of-now (a liability is owed regardless of the window); the
+         paid columns are the window's. */
+      columns: ['payee_kind', 'payee', 'gross_sales_or_earned_inr', 'deductions_inr', 'refunds_inr',
+                'adjustments_inr', 'settled_all_time_inr', 'outstanding_now_inr', 'paid_in_window_inr',
+                'paid_in_window_references', 'pending_payout_inr'],
+      async rows(_q, from, to) {
+        const cafes = (await q(`
+          SELECT 'cafe' AS payee_kind, s.name AS payee, s.gross_food_sales_paise AS gross, s.commission_paise AS deductions,
+                 s.refunds_paise AS refunds, s.adjustments_paise AS adjustments, s.settled_paise AS settled, s.outstanding_paise AS outstanding,
+                 COALESCE((SELECT sum(p.amount_paise) FROM payout p WHERE p.vendor_id = s.vendor_id AND p.state='paid' AND p.paid_at >= $1 AND p.paid_at < $2),0) AS paid_window,
+                 (SELECT string_agg(COALESCE(p.external_reference, p.provider_payout_id, '?'), ' ') FROM payout p WHERE p.vendor_id = s.vendor_id AND p.state='paid' AND p.paid_at >= $1 AND p.paid_at < $2) AS refs,
+                 COALESCE((SELECT sum(p.amount_paise) FROM payout p WHERE p.vendor_id = s.vendor_id AND p.state IN ('pending','processing')),0) AS pending
+            FROM v_cafeteria_statement s ORDER BY s.name`, [from, to])).rows;
+        const partners = (await q(`
+          SELECT 'partner' AS payee_kind, COALESCE(s.name, '-') AS payee, s.total_earned_paise AS gross, 0 AS deductions, 0 AS refunds, 0 AS adjustments,
+                 s.paid_out_paise AS settled, s.pending_payout_paise AS outstanding,
+                 COALESCE((SELECT sum(p.amount_paise) FROM payout p WHERE p.partner_id = s.partner_id AND p.state='paid' AND p.paid_at >= $1 AND p.paid_at < $2),0) AS paid_window,
+                 (SELECT string_agg(COALESCE(p.external_reference, p.provider_payout_id, '?'), ' ') FROM payout p WHERE p.partner_id = s.partner_id AND p.state='paid' AND p.paid_at >= $1 AND p.paid_at < $2) AS refs,
+                 COALESCE((SELECT sum(p.amount_paise) FROM payout p WHERE p.partner_id = s.partner_id AND p.state IN ('pending','processing')),0) AS pending
+            FROM v_partner_statement s ORDER BY s.name`, [from, to])).rows;
+        return [...cafes, ...partners].map((r) => ({
+          payee_kind: r.payee_kind, payee: r.payee,
+          gross_sales_or_earned_inr: rupeesText(r.gross), deductions_inr: rupeesText(r.deductions),
+          refunds_inr: rupeesText(r.refunds), adjustments_inr: rupeesText(r.adjustments),
+          settled_all_time_inr: rupeesText(r.settled), outstanding_now_inr: rupeesText(r.outstanding),
+          paid_in_window_inr: rupeesText(r.paid_window), paid_in_window_references: r.refs || '',
+          pending_payout_inr: rupeesText(r.pending),
+        }));
       },
     },
     ledger: {

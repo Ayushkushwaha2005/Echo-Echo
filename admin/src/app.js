@@ -401,10 +401,11 @@ async function scrFinance() {
   /* Eight independent reads, in parallel: the page waits for the slowest
      one instead of the sum of all eight. */
   await panel(view(), async () => {
-    const [today, all, cafeterias, partners, payouts, recon, pricing, schedule] = await Promise.all([
+    const [today, all, cafeterias, partners, payouts, recon, pricing, schedule, centre] = await Promise.all([
       quad.financeSummary({ from: startOfToday() }), quad.financeSummary(), quad.financeCafeterias(),
-      quad.financePartners(), quad.payouts(), quad.reconciliation(), quad.pricing(), quad.settlementSchedule()]);
-    return { today, all, cafeterias: cafeterias.cafeterias, partners: partners.partners, payouts, recon, pricing, schedule };
+      quad.financePartners(), quad.payouts(), quad.reconciliation(), quad.pricing(), quad.settlementSchedule(),
+      quad.settlementCentre()]);
+    return { today, all, cafeterias: cafeterias.cafeterias, partners: partners.partners, payouts, recon, pricing, schedule, centre };
   }, (d) => {
     const t = d.today, a = d.all;
     const platform = d.pricing.live.find((p) => !p.vendor_id);
@@ -419,6 +420,8 @@ async function scrFinance() {
         ${kpi('Refunds', rupees(t.refundsPaise), `${t.refunds} today`)}
         ${kpi('ECHO ECHO revenue', rupees(t.quadNetRevenuePaise), 'today, net of refunds and fees')}
       </div>
+
+      ${settlementCentre(d.centre)}
 
       ${unconfigured ? `
         <section class="card card-pad" style="margin-top:18px">
@@ -442,7 +445,15 @@ async function scrFinance() {
           ${kpi('ECHO ECHO revenue', rupees(a.quadNetRevenuePaise),
                 `${rupees(a.quadGrossRevenuePaise)} gross`)}
           ${kpi('Held at gateway', rupees(a.clearingBalancePaise), 'collected, not disbursed')}
+          ${kpi('Collected', rupees(a.gmvPaise), `${a.orders} paid orders, all time`)}
+          ${kpi('Gateway fees', rupees(a.gatewayFeesPaise), 'as reported by the providers, incl. tax')}
+          ${kpi('Tax collected', rupees(a.taxCollectedPaise), 'owed onward, not revenue')}
         </div>
+        <p class="t-xs faint" style="margin-top:10px">
+          Collected is what customers paid; it is not ECHO ECHO's income. Revenue is the platform fee and
+          commission only, after refunds borne by the platform and the gateways' charges. Café and partner
+          balances are liabilities until a transfer is recorded against a bank reference.
+        </p>
         ${a.payoutsInFlight.count ? `<p class="t-xs faint" style="margin-top:10px">
           ${a.payoutsInFlight.count} payout(s) in flight, ${rupees(a.payoutsInFlight.amountPaise)}.
         </p>` : ''}
@@ -600,6 +611,69 @@ async function scrFinance() {
         </p>
       </section>`;
   }, { label: 'Loading the books' });
+}
+
+/* The owner's evening sheet. Every number comes from the ledger views and
+   the payout table on the server; nothing here is typed in or summed by the
+   browser beyond presentation. */
+function settlementCentre(c) {
+  const t = c.totals;
+  const nextDue = (kind) => {
+    const cfg = kind === 'cafe' ? c.schedule.cafeteria : c.schedule.partner;
+    if (!cfg?.enabled) return 'not scheduled';
+    return kind === 'cafe' ? `daily ${pad(cfg.hour)}:${pad(cfg.minute)}`
+                           : `${WEEKDAY[cfg.weekday]} ${pad(cfg.hour)}:${pad(cfg.minute)}`;
+  };
+  const prev = (l) => !l ? '<span class="t-xs faint">never</span>'
+    : `${rupees(l.amount_paise)} <span class="t-xs faint">${when(l.paid_at)} · ${esc(l.reference || '—')} ·
+        ${l.confirmed_by === 'provider' ? 'provider-confirmed' : 'recorded by admin'}</span>`;
+  const rows = c.payees.filter((r) => r.outstanding_paise > 0 || r.queued_paise > 0 || r.last_settlement);
+  const today = new Date(); const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `
+    <section class="card card-pad" style="margin-top:18px">
+      <div class="between" style="flex-wrap:wrap;gap:8px">
+        <h2 class="t-label">Daily settlement centre</h2>
+        <span class="t-xs faint">as of ${when(c.asOf)} · cafés ${nextDue('cafe')} · partners ${nextDue('partner')} · ${esc(c.schedule.timezone)}</span>
+      </div>
+      <div class="grid-kpi" style="margin-top:10px">
+        ${kpi('Due to cafés', rupees(t.cafeOutstandingPaise), 'outstanding now')}
+        ${kpi('Due to partners', rupees(t.partnerOutstandingPaise), 'outstanding now')}
+        ${kpi('In open batches', rupees(t.queuedPaise), 'built, awaiting transfer')}
+        ${kpi('Overdue', String(t.overdueCount), t.overdueCount ? 'payouts past their settlement day' : 'nothing overdue')}
+      </div>
+      ${rows.length ? table(
+        ['Recipient', 'Type', 'Amount due', 'Previous settlement', 'Queued', 'Outstanding', 'Next due', 'Status', ''],
+        rows.map((r) => [
+          `<b>${esc(r.name || '—')}</b>`,
+          r.kind === 'cafe' ? 'Café' : 'Partner',
+          `<span class="num">${rupees(r.outstanding_paise)}</span>`,
+          prev(r.last_settlement),
+          `<span class="num">${r.queued_paise ? rupees(r.queued_paise) : '—'}</span>`,
+          `<b class="num">${rupees(r.unbatched_paise)}</b>`,
+          nextDue(r.kind),
+          r.overdue ? '<span class="badge badge-danger">overdue</span>'
+            : r.queued_paise ? '<span class="badge badge-warn">awaiting transfer</span>'
+            : r.outstanding_paise > 0 ? '<span class="badge badge-closed">accruing</span>'
+            : '<span class="badge badge-open">settled</span>',
+          r.pending_payouts.map((p) => `<button class="btn btn-primary btn-sm" data-act="recordPayout"
+              data-id="${p.id}" data-amt="${p.amount_paise}">Record ${rupees(p.amount_paise)}</button>`).join(' '),
+        ])) : '<p class="t-sm muted">Nothing is owed to anyone yet.</p>'}
+      <p class="t-xs faint" style="margin-top:10px">
+        "Recorded by admin" means an administrator entered a bank reference for a transfer they made themselves;
+        "provider-confirmed" means the payout provider reported the transfer. Marking a payout paid never moves money.
+      </p>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-secondary btn-sm" data-act="downloadSettlement" data-from="${iso(today)}" data-to="${iso(today)}">
+          Download today's settlement sheet (CSV)</button>
+        <button class="btn btn-ghost btn-sm" data-act="downloadSettlement"
+          data-from="${iso(new Date(today.getFullYear(), today.getMonth(), 1))}" data-to="${iso(today)}">This month</button>
+      </div>
+      ${c.history.length ? `<details style="margin-top:12px"><summary class="t-label">Settlement history (last 50 transfers)</summary>
+        ${table(['Paid', 'Recipient', 'Type', 'Amount', 'How', 'Reference', 'Recorded by'],
+          c.history.map((h) => [when(h.paid_at), esc(h.payee || '—'), h.kind === 'cafe' ? 'Café' : 'Partner',
+            rupees(h.amount_paise), esc(h.method === 'manual_bank_transfer' ? 'bank transfer (admin)' : h.method || '—'),
+            `<code class="t-xs">${esc(h.reference || '—')}</code>`, esc(h.recorded_by_name || '—')]))}</details>` : ''}
+    </section>`;
 }
 
 const WEEKDAY = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays',
@@ -1792,13 +1866,18 @@ const TIMELINE_KIND = { state: 'Status', payment: 'Payment', refund: 'Refund', w
    PAYMENTS — what Cashfree was asked, what it said, and what was refused
    ======================================================================== */
 async function scrPayments() {
-  setTitle('Payments', 'Cashfree references, refunds and webhook history. A payment is confirmed server-to-server, never by the browser.');
+  setTitle('Payments', 'Gateway references, fees, refunds and webhook history. A payment is confirmed server-to-server, never by the browser.');
   head().innerHTML = '';
   const f = S.payFilter;
+  const vendors = session.can('cafeterias.view') ? (await quad.vendors().catch(() => ({ vendors: [] }))).vendors : [];
   view().innerHTML = `
     <form class="filterbar" data-form="payments" aria-label="Filter payments">
-      <input class="input" name="q" placeholder="Order code or Cashfree id" value="${esc(f.q || '')}" aria-label="Search payments">
+      <input class="input" name="q" placeholder="Order code, gateway id, customer" value="${esc(f.q || '')}" aria-label="Search payments">
       <select class="input" name="status" aria-label="Payment status">${optionList(['paid', 'pending', 'created', 'failed', 'refunded', 'cancelled'], f.status, 'Any status')}</select>
+      <select class="input" name="provider" aria-label="Provider">${optionList(['cashfree', 'razorpay'], f.provider, 'Any provider', { cashfree: 'Cashfree', razorpay: 'Razorpay' })}</select>
+      <select class="input" name="vendorId" aria-label="Café">${optionList(vendors.map((v) => v.id), f.vendorId, 'Any café', Object.fromEntries(vendors.map((v) => [v.id, v.name])))}</select>
+      <input class="input" type="date" name="from" value="${esc(f.from || '')}" aria-label="From date">
+      <input class="input" type="date" name="to" value="${esc(f.to || '')}" aria-label="To date">
       <label class="t-xs faint"><input type="checkbox" name="unreconciled" value="true" ${f.unreconciled ? 'checked' : ''}> Not yet reconciled</label>
       <button type="submit" class="btn btn-secondary btn-sm">Apply</button>
       <button type="button" class="btn btn-ghost btn-sm" data-act="paymentsReset">Clear</button>
@@ -1815,15 +1894,27 @@ async function paintPayments() {
         return Object.keys(S.payFilter).length ? EmptyState('No payment matches these filters.', '')
           : EmptyState('No payments yet.', 'The first checkout creates one.');
       }
-      return table(['Order', 'When', 'Status', 'Amount', 'Refunded', 'Cashfree order', 'Cashfree payment', 'Reconciled'],
+      const totals = d.totals ? `<p class="t-sm" style="margin:0 0 10px">
+          Collected ${rupees(d.totals.collectedPaise)} · gateway fees ${rupees(d.totals.gatewayFeesPaise)} ·
+          net ${rupees(d.totals.collectedPaise - d.totals.gatewayFeesPaise)} <span class="t-xs faint">(filter in force; fees are the providers' own figures, 0 until reported)</span></p>` : '';
+      return totals + table(['Order', 'Café', 'Customer', 'Initiated', 'Completed', 'Provider', 'Status', 'Gross', 'Fee', 'Net', 'Refunded', 'Gateway order', 'Gateway payment', 'Settlement'],
         d.payments.map((p) => [
-          `<b style="white-space:nowrap">${esc(p.order_code)}</b>`, when(p.created_at),
-          payBadge(p.status) + (p.flagged_reason ? ` <span class="badge badge-danger" title="${esc(p.flagged_reason)}">flagged</span>` : ''),
+          `<b style="white-space:nowrap">${esc(p.order_code)}</b>`,
+          esc(p.vendor_name || '—'),
+          `${esc(p.customer_name || '—')} <span class="t-xs faint">${esc(p.customer_phone_masked || '')}</span>`,
+          when(p.created_at),
+          p.settled_at ? when(p.settled_at) : '—',
+          esc(p.provider === 'razorpay' ? 'Razorpay' : p.provider === 'cashfree' ? 'Cashfree' : p.provider),
+          payBadge(p.status) + (p.flagged_reason ? ` <span class="badge badge-danger" title="${esc(p.flagged_reason)}">flagged</span>` : '')
+            + (p.refund_states ? ` <span class="t-xs faint">refund: ${esc(p.refund_states)}</span>` : ''),
           `<span class="num">${rupees(p.amount_paise)}</span>`,
+          `<span class="num">${p.gateway_fee_paise ? rupees(p.gateway_fee_paise) : '—'}</span>`,
+          `<span class="num">${p.status === 'paid' || p.status === 'refunded' ? rupees(p.net_collected_paise) : '—'}</span>`,
           `<span class="num">${p.refunded_paise ? rupees(p.refunded_paise) : '—'}</span>`,
           `<code class="t-xs">${esc(p.provider_order_id || '—')}</code>`,
           `<code class="t-xs">${esc(p.provider_payment_id || '—')}</code>`,
-          p.reconciled_at ? when(p.reconciled_at) : (p.status === 'paid' ? '<span class="badge badge-warn">awaiting settlement</span>' : '—'),
+          p.reconciled_at ? `<code class="t-xs">${esc(p.settlement_id || '')}</code> <span class="t-xs faint">${when(p.reconciled_at)}</span>`
+            : (p.status === 'paid' ? '<span class="badge badge-warn">awaiting settlement</span>' : '—'),
         ])) + pager(d, 'paymentsPage');
     }, { label: 'Loading payments' });
 }
@@ -1880,7 +1971,8 @@ async function scrReliability() {
    ======================================================================== */
 const REPORT_KINDS = [
   ['orders', 'Orders', 'orders.view', 'Every order with fulfilment, state, payment state, fees and total.'],
-  ['payments', 'Payments', 'finance.view', 'Cashfree order and payment ids, amounts, refunds and settlement ids.'],
+  ['payments', 'Payments', 'finance.view', 'Gateway order and payment ids, provider, amounts, refunds and settlement ids.'],
+  ['settlement', 'Settlement sheet', 'finance.view', 'Per café and partner: owed now, settled, paid in the window with bank references.'],
   ['payouts', 'Payouts', 'finance.view', 'Café and partner transfers with masked destinations and UTRs.'],
   ['ledger', 'Ledger', 'finance.view', 'Every double-entry line: debit and credit per account and party.'],
 ];
@@ -2047,6 +2139,15 @@ const ACTIONS = {
   ordersReset: () => { S.orderFilter = {}; S.orderPage = 1; return scrOrders(); },
   paymentsPage: (t) => { S.payPage = Number(t.dataset.page) || 1; return paintPayments(); },
   paymentsReset: () => { S.payFilter = {}; S.payPage = 1; return scrPayments(); },
+  downloadSettlement: async (t) => {
+    await act(t, async () => {
+      const { blob, name } = await quad.downloadReport('settlement', t.dataset.from, t.dataset.to);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = name;
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, { ok: 'Settlement sheet downloaded' });
+  },
   reliabilityRefresh: () => scrReliability(),
   orderTimeline: async (t) => {
     const d = await quad.orderTimeline(t.dataset.id).catch((e) => { toast(e.message, 'bad'); return null; });

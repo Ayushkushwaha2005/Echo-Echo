@@ -86,3 +86,16 @@ Run: `cd server && TEST_PG_PORT=56432 node runtests.mjs payments`
 4. Switch `PAYMENT_PROVIDER` only after step 3 and after a ₹1 live order is
    approved explicitly. Cashfree credentials stay in place so its refunds and
    reconciliation keep working.
+
+## Admin financial control (added 11 Nov 2026)
+
+- **Payments** (Campus Control > Gateway payments): provider-neutral; columns for cafe, masked customer
+  contact, initiated and completed times, provider, gross, provider fee, net, refunds, gateway ids and
+  settlement reference; filters by status, provider, cafe, date range and free text; window totals.
+- **Daily settlement centre** (Finance, top): per cafe and partner the amount due, the previous settlement
+  (amount, date, reference, and whether it was provider-confirmed or recorded by an administrator),
+  queued payouts, outstanding beyond open batches, next scheduled run, overdue flag, Record-transfer
+  buttons, settlement history, and a CSV sheet for today or the month (`/admin/reports/settlement`).
+- **Overview KPIs** now separate collected cash, gateway fees, tax collected and platform revenue.
+- Endpoints: `GET /admin/finance/settlement-centre`, `GET /admin/payments?provider&vendorId&from&to`,
+  `GET /admin/reports/settlement`. All finance.read_all; exports are audited.
