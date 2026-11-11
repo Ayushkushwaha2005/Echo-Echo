@@ -462,6 +462,7 @@ export const quad = {
   financeSummary: (opts) => get('/admin/finance/summary' + qs(opts)),
   financeCafeterias: () => get('/admin/finance/cafeterias'),
   financePartners: () => get('/admin/finance/partners'),
+  settlementCentre: () => get('/admin/finance/settlement-centre'),
   financeOrder: (id) => get(`/admin/finance/orders/${id}`),
   financeLedger: (kind) => get('/admin/finance/ledger' + qs({ kind })),
   pricing: () => get('/admin/pricing'),

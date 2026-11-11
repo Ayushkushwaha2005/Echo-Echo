@@ -54,7 +54,8 @@ import { audit } from '../audit.js';
 import { notifyAsync } from '../services/notify.js';
 import { snapshotFor } from '../services/pricing.js';
 import { postOrderCapture } from '../services/ledger.js';
-import { requireAdapter } from '../services/payment-providers.js';
+import { requireAdapter, adapterFor, configuredAdapter, capabilitiesOf, publicConfigOf, PROVIDER_IDS }
+  from '../services/providers/index.js';
 import { applyRefundOutcome } from '../services/refund-status.js';
 import { alertOwnerAsync } from '../services/alerts.js';
 import { assertOnlinePayment } from '../services/prepaid.js';
@@ -381,7 +382,8 @@ export default async function paymentRoutes(app) {
     const customer = await one(
       `SELECT id, name, coalesce(phone, contact_phone) AS phone FROM app_user WHERE id=$1`,
       [order.customer_id]);
-    if (!pay && adapter.id === 'cashfree' && !customer.phone) {
+    const caps = capabilitiesOf(adapter);
+    if (!pay && caps.requiresCustomerPhone && !customer.phone) {
       throw Conflict('Add a contact mobile number before paying',
         'The payment gateway requires a phone number on the order. Add one under You → Contact number.');
     }
@@ -414,7 +416,7 @@ export default async function paymentRoutes(app) {
            Cashfree itself reported active, and only with the flag on. The
            café's share is the snapshot's own number — never recomputed. */
         let splits = [];
-        if (adapter.id === 'cashfree' && PAYMENTS.cashfree.easySplit && snap.cafeteria_payable_paise > 0) {
+        if (caps.supportsSplits && PAYMENTS.cashfree.easySplit && snap.cafeteria_payable_paise > 0) {
           const sv = await one(`SELECT provider_vendor_id FROM vendor_split_account
                                  WHERE vendor_id=$1 AND status='active'`, [order.vendor_id]);
           if (sv) splits = [{ providerVendorId: sv.provider_vendor_id, amountPaise: snap.cafeteria_payable_paise }];
@@ -478,15 +480,19 @@ export default async function paymentRoutes(app) {
               ? { serviceChargePaise: snap.commission_paise } : {}),
       },
       currency: PAYMENTS.currency,
-      ...PAYMENTS.publicConfig,
+      ...publicConfigOf(adapter),
     };
   });
 
   /* ---------- the webhook: the primary path to a confirmed order --------- */
-  app.post('/payments/webhook', { config: { rateLimit: false } }, async (req, reply) => {
-    if (!PAYMENTS.configured) return reply.code(503).send({ error: 'payments not configured' });
-    const adapter = requireAdapter();
-
+  /* One handler, resolved per provider. `/payments/webhook` is the
+     deployment's active collection provider (what every dashboard was
+     pointed at before per-provider paths existed); `/payments/webhook/
+     :provider` is that provider's own endpoint, verified ONLY against that
+     provider's secret, whether or not it is the one collecting today. A
+     deployment that switched providers keeps receiving the other's refund
+     and late-payment events instead of answering them 400. */
+  async function handleWebhook(adapter, req, reply) {
     /* Signature over the RAW bytes, and — where the provider timestamps its
        signature — a freshness window. Cashfree signs the timestamp into the
        HMAC, so a captured delivery cannot be re-dated into the window
@@ -548,6 +554,22 @@ export default async function paymentRoutes(app) {
               [adapter.id, String(eventId)]).catch(() => {});
       throw e;
     }
+  }
+
+  app.post('/payments/webhook', { config: { rateLimit: false } }, async (req, reply) => {
+    if (!PAYMENTS.configured) return reply.code(503).send({ error: 'payments not configured' });
+    return handleWebhook(requireAdapter(), req, reply);
+  });
+
+  app.post('/payments/webhook/:provider', { config: { rateLimit: false } }, async (req, reply) => {
+    const id = String(req.params?.provider || '');
+    /* An unknown provider name is a 404, not a hint. A known one without
+       credentials on this server cannot verify anything, so 503 — and no
+       delivery is recorded, because nothing about it was checked. */
+    if (!PROVIDER_IDS.includes(id)) return reply.code(404).send({ error: 'unknown provider' });
+    const adapter = configuredAdapter(id);
+    if (!adapter) return reply.code(503).send({ error: `${id} payments not configured` });
+    return handleWebhook(adapter, req, reply);
   });
 
   /* ---------- the browser's return from checkout -------------------------
@@ -572,10 +594,13 @@ export default async function paymentRoutes(app) {
        not re-fetched on every poll, and an unconfigured provider degrades to
        reporting what the database knows rather than erroring. */
     if (pay && pay.status === 'pending' && pay.provider_order_id &&
-        order.state === 'awaiting_payment' && PAYMENTS.configured) {
+        order.state === 'awaiting_payment') {
       try {
-        const adapter = requireAdapter();
-        if (adapter.id === pay.provider) {
+        /* The provider that TOOK this attempt, not the one collecting today:
+           an attempt opened before a provider switch is still pulled from
+           the gateway that holds it. Unconfigured -> null -> no pull. */
+        const adapter = configuredAdapter(pay.provider);
+        if (adapter) {
           const ev = await adapter.fetchOrder(pay.provider_order_id);
           await applyOutcome(req, pay, ev, 'status_pull');
           pay = await one(`SELECT * FROM payment WHERE id=$1`, [pay.id]);

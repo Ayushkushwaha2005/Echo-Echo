@@ -84,6 +84,8 @@ const FILES = [
   ['auth', 'test/email-brevo.test.mjs'],
   ['payments', 'test/payments.test.mjs'],
   ['payments', 'test/payments-cashfree.test.mjs'],
+  ['payments', 'test/payments-razorpay.test.mjs'],
+  ['payments', 'test/providers-isolation.test.mjs'],
   ['handover', 'test/handover.test.mjs'],
   ['trust', 'test/trust.test.mjs'],
   ['trust', 'test/partner-policy-consent.test.mjs'],

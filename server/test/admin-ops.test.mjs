@@ -211,3 +211,74 @@ test('webhooks: deliveries and refusals are listed, payloads are not', async () 
   assert.equal(w.body.refused[0].reason, 'bad signature');
   assert.ok(!JSON.stringify(w.body).includes('secret_looking'));
 });
+
+test('payments: provider, café and date filters, fee and net figures, masked customer contact, window totals', async () => {
+  const v1 = await makeVendor(pool, { name: 'Tulips', slug: 'tulips-pay' });
+  const v2 = await makeVendor(pool, { name: 'Frisco', slug: 'frisco-pay' });
+  const a = await order({ vendor: v1, code: 'EE-5001', total: 10000, at: '2026-10-10T10:00:00Z' });
+  const b = await order({ vendor: v2, code: 'EE-5002', total: 20000, at: '2026-10-12T10:00:00Z' });
+  await pool.query(`UPDATE payment SET provider = 'razorpay', provider_order_id = 'order_x', provider_payment_id = 'pay_x' WHERE id = $1`, [b.p.id]);
+  await pool.query(`UPDATE payment SET created_at = '2026-10-10T10:00:00Z' WHERE id = $1`, [a.p.id]);
+  await pool.query(`UPDATE payment SET created_at = '2026-10-12T10:00:00Z' WHERE id = $1`, [b.p.id]);
+  await pool.query(`INSERT INTO order_financials (order_id, food_subtotal_paise, customer_total_paise, gateway_fee_paise, cafeteria_payable_paise, platform_gross_paise)
+                    VALUES ($1, 9000, 10000, 236, 9000, 1000)`, [a.o.id]).catch(() => {});
+  const { c } = await owner();
+
+  const all = await c.get('/admin/payments');
+  assert.equal(all.status, 200);
+  assert.equal(all.body.payments.length, 2);
+  const first = all.body.payments.find((p) => p.order_code === 'EE-5001');
+  assert.equal(first.vendor_name, 'Tulips');
+  assert.match(first.customer_phone_masked, /^…\d{4}$/, 'contact shown masked, last four only');
+  assert.ok(!JSON.stringify(all.body).includes('+9198'), 'no full phone number in the listing');
+  assert.equal(all.body.totals.collectedPaise, 30000);
+
+  const rzp = await c.get('/admin/payments?provider=razorpay');
+  assert.deepEqual(rzp.body.payments.map((p) => p.order_code), ['EE-5002']);
+  assert.equal(rzp.body.payments[0].provider, 'razorpay');
+  const cafe = await c.get(`/admin/payments?vendorId=${v1.id}`);
+  assert.deepEqual(cafe.body.payments.map((p) => p.order_code), ['EE-5001']);
+  const dated = await c.get('/admin/payments?from=2026-10-11&to=2026-10-13');
+  assert.deepEqual(dated.body.payments.map((p) => p.order_code), ['EE-5002']);
+  assert.equal((await c.get('/admin/payments?provider=paypal')).status, 400);
+  assert.equal((await c.get('/admin/payments?vendorId=nope')).status, 400);
+  if (first.gateway_fee_paise) {
+    assert.equal(first.net_collected_paise, 10000 - 236, 'net is gross less the provider fee');
+  }
+});
+
+test('settlement centre: per payee due, previous settlement with how it was confirmed, queued, overdue, history; and the CSV sheet', async () => {
+  const v = await makeVendor(pool, { name: 'Chai Garam', slug: 'chai-centre' });
+  const partner = await makeUser(pool, { phone: phone(), name: 'Ravi P', roles: ['delivery_partner'] });
+  await pool.query(`INSERT INTO partner_profile (user_id) VALUES ($1) ON CONFLICT DO NOTHING`, [partner.id]).catch(() => {});
+  const { c, u } = await owner();
+  /* One paid café payout recorded by an administrator, one stale pending one. */
+  await pool.query(`INSERT INTO payout (vendor_id, amount_paise, state, method, external_reference, paid_at, recorded_by, created_at)
+                    VALUES ($1, 5000, 'paid', 'manual_bank_transfer', 'UTR123456', '2026-10-10T14:00:00Z', $2, '2026-10-10T13:00:00Z')`, [v.id, u.id]);
+  await pool.query(`INSERT INTO payout (vendor_id, amount_paise, state, created_at) VALUES ($1, 7000, 'pending', now() - interval '3 days')`, [v.id]);
+
+  const r = await c.get('/admin/finance/settlement-centre');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const cafe = r.body.payees.find((p) => p.kind === 'cafe' && p.name === 'Chai Garam');
+  assert.ok(cafe, 'the café is listed');
+  assert.equal(cafe.last_settlement.amount_paise, 5000);
+  assert.equal(cafe.last_settlement.reference, 'UTR123456');
+  assert.equal(cafe.last_settlement.confirmed_by, 'administrator', 'a manual record is not a provider confirmation');
+  assert.equal(cafe.queued_paise, 7000);
+  assert.equal(cafe.overdue, true, 'a café payout pending for three days is overdue');
+  assert.equal(cafe.pending_payouts.length, 1);
+  assert.equal(r.body.totals.overdueCount, 1);
+  assert.equal(r.body.totals.settledAllTimePaise, 5000);
+  assert.ok(r.body.history.some((h) => h.reference === 'UTR123456' && h.method === 'manual_bank_transfer'));
+  assert.ok(r.body.schedule.cafeteria, 'the schedule is reported for the next-due column');
+
+  const ops = await admin(['orders.view']);
+  assert.equal((await ops.c.get('/admin/finance/settlement-centre')).status, 403);
+
+  const csv = await c.get('/admin/reports/settlement?from=2026-10-01&to=2026-10-31');
+  assert.equal(csv.status, 200);
+  assert.match(String(csv.body), /"payee_kind","payee","gross_sales_or_earned_inr"/);
+  assert.match(String(csv.body), /"cafe","Chai Garam"/);
+  assert.match(String(csv.body), /UTR123456/, 'the window shows what was paid and against which reference');
+  assert.match(String(csv.body), /"50\.00"/);
+});
