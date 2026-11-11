@@ -221,19 +221,17 @@ test('render.yaml keeps production payments live and commits no secret', () => {
   }
   assert.ok(!vars.has('PAYMENTS_DEFERRED'), 'PAYMENTS_DEFERRED must not be in render.yaml');
   assert.deepEqual(vars.get('SWEEPER'), { kind: 'value', value: 'on' });
-  assert.deepEqual(vars.get('PAYMENT_PROVIDER'), { kind: 'value', value: 'cashfree' });
-  assert.deepEqual(vars.get('CASHFREE_EASY_SPLIT'), { kind: 'value', value: 'off' });
+  assert.deepEqual(vars.get('PAYMENT_PROVIDER'), { kind: 'value', value: 'razorpay' });
   /* The edge limit is only real when the header it trusts is named. */
   assert.deepEqual(vars.get('TRUST_PROXY'), { kind: 'value', value: 'true' });
   assert.deepEqual(vars.get('EDGE_CLIENT_IP_HEADER'), { kind: 'value', value: 'cf-connecting-ip' });
-  assert.equal(vars.get('CASHFREE_PG_NOTIFY_URL')?.value,
-    'https://echo-echo-api.onrender.com/payments/webhook');
-  assert.match(vars.get('CASHFREE_PG_RETURN_URL')?.value || '', /^https:\/\//);
-  for (const k of ['CASHFREE_PG_APP_ID', 'CASHFREE_PG_SECRET_KEY', 'DATABASE_URL']) {
+  for (const k of ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET', 'DATABASE_URL']) {
     assert.deepEqual(vars.get(k), { kind: 'sync', value: 'false' }, `${k} must be sync: false`);
   }
-  /* No sandbox endpoint, and no payout provider until Cashfree activates it. */
-  for (const k of ['CASHFREE_PG_BASE_URL', 'PAYOUT_PROVIDER']) assert.ok(!vars.has(k), k);
+  /* No test-mode base URL, no payout provider, and no Cashfree left in the
+     blueprint: Cashfree is retired from active operation. */
+  for (const k of ['RAZORPAY_BASE_URL', 'PAYOUT_PROVIDER']) assert.ok(!vars.has(k), k);
+  for (const k of vars.keys()) assert.ok(!/^CASHFREE_/.test(k), `${k} must not be in render.yaml`);
   for (const [k, v] of vars) {
     if (/SECRET|_KEY$|TOKEN|PASSWORD/.test(k)) {
       assert.notEqual(v.kind, 'value', `${k} must not have a committed value`);
