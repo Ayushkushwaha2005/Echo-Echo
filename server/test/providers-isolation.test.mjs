@@ -1,19 +1,22 @@
 /* ==========================================================================
-   PROVIDER ISOLATION — two gateways configured at once.
+   PROVIDER ISOLATION — the active gateway next to a retired one.
 
-   The deployment collects through Razorpay. Cashfree is still configured,
-   because it took payments before the switch and still owes webhooks,
-   status pulls, refunds and settlements on them. This file proves that:
+   The deployment collects through Razorpay. Every Cashfree variable is
+   still set, pointing at a live local stub, exactly as a service that was
+   never cleaned up would look. Cashfree was retired on 12 November 2026
+   (docs/CASHFREE-RETIREMENT.md), so this file proves that:
 
-   · each provider's endpoint verifies ONLY with that provider's secret
-   · a Cashfree-signed event is accepted on /payments/webhook/cashfree and
-     confirms a Cashfree payment, while Razorpay is the active provider
-   · the status pull for a Cashfree attempt goes to Cashfree, not Razorpay
-   · a refund of a Cashfree-taken payment goes back through Cashfree
-   · scheduled reconciliation covers both providers
    · new intents go only to the active provider
+   · the active provider's endpoint verifies ONLY with its own secret, and
+     the retired provider's endpoint accepts nothing at all
+   · a historical Cashfree attempt is neither pulled from Cashfree nor
+     confirmed by anything the retired endpoint receives
+   · a refund on a historical Cashfree payment is refused by name and
+     never reaches a gateway
+   · scheduled reconciliation runs for the active provider only
+   · the Cashfree stub receives zero requests throughout
 
-   Both providers are local stubs; nothing here reaches a real gateway.
+   The Razorpay side is a local stub; nothing here reaches a real gateway.
    ========================================================================== */
 import test, { before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -152,9 +155,9 @@ async function razorpayOrder(phone) {
   return { u, c, draft, intent };
 }
 
-/* A Cashfree attempt from BEFORE the switch: the order sits at
+/* A Cashfree attempt from BEFORE the retirement: the order sits at
    awaiting_payment with a pending Cashfree payment row, exactly as the
-   intent route would have left it when Cashfree was the active provider. */
+   intent route left it when Cashfree was the active provider. */
 async function cashfreeOrder(phone) {
   const n = await makeCampus(pool);
   const v = await makeVendor(pool, { name: 'Tulips', slug: 'tulips-' + phone.slice(-4) });
@@ -180,13 +183,14 @@ test('new intents go only to the active provider', async () => {
   assert.equal(calls.cashfree.length, 0, 'Cashfree is not asked for anything');
 });
 
-test('a Cashfree-signed success on /payments/webhook/cashfree confirms a Cashfree payment while Razorpay is active', async () => {
+test('a Cashfree-signed success on /payments/webhook/cashfree is refused while Razorpay is active: the gateway is retired', async () => {
   const { draft, pay } = await cashfreeOrder('+919700000202');
   const r = await app.inject(cfSigned(cfSuccess(pay.id)));
-  assert.equal(r.statusCode, 200, r.body);
-  assert.equal(await stateOf(draft.id), 'confirmed');
+  assert.equal(r.statusCode, 503, r.body);
+  assert.equal(await stateOf(draft.id), 'awaiting_payment');
   const wh = await pool.query(`SELECT provider FROM payment_webhook`);
-  assert.deepEqual(wh.rows, [{ provider: 'cashfree' }]);
+  assert.deepEqual(wh.rows, [], 'nothing from a retired gateway is recorded');
+  assert.equal(calls.cashfree.length, 0);
 });
 
 test("the legacy /payments/webhook verifies with the ACTIVE provider, so a Cashfree signature is refused there", async () => {
@@ -202,45 +206,56 @@ test("each endpoint refuses the OTHER provider's signature, and secrets do not c
     id: 'pay_x', order_id: intent.gatewayOrderId, amount: 14000, currency: 'INR', status: 'captured' } } } };
   /* Razorpay event signed with Cashfree's secret on Razorpay's endpoint. */
   assert.equal((await app.inject(rzpSigned(rzpEvent, '/payments/webhook/razorpay', CF.secretKey))).statusCode, 400);
-  /* Razorpay event, Razorpay signature, Cashfree's endpoint. */
-  assert.equal((await app.inject(rzpSigned(rzpEvent, '/payments/webhook/cashfree'))).statusCode, 400);
+  /* Razorpay event, Razorpay signature, the retired endpoint: closed, not verified. */
+  assert.equal((await app.inject(rzpSigned(rzpEvent, '/payments/webhook/cashfree'))).statusCode, 503);
   const { pay } = await cashfreeOrder('+919700000205');
-  /* Cashfree event signed with Razorpay's webhook secret on Cashfree's endpoint. */
-  assert.equal((await app.inject(cfSigned(cfSuccess(pay.id), '/payments/webhook/cashfree', RZP.webhookSecret))).statusCode, 400);
+  /* Cashfree event signed with Razorpay's webhook secret on the retired endpoint. */
+  assert.equal((await app.inject(cfSigned(cfSuccess(pay.id), '/payments/webhook/cashfree', RZP.webhookSecret))).statusCode, 503);
   const wh = await pool.query(`SELECT count(*)::int AS n FROM payment_webhook`);
   assert.equal(wh.rows[0].n, 0, 'nothing refused is recorded');
 });
 
-test('the status pull for a Cashfree attempt asks Cashfree, not the active provider', async () => {
-  const { c, draft, pay } = await cashfreeOrder('+919700000206');
+test('the status pull for a Cashfree attempt asks nobody: not the retired gateway, not the active one', async () => {
+  const { c, draft } = await cashfreeOrder('+919700000206');
+  /* Even if Cashfree would answer PAID, nothing asks it. */
   cfOrder = { status: 'PAID', amount: '140.00',
               payments: [{ cf_payment_id: 880002, payment_status: 'SUCCESS', payment_amount: '140.00', payment_currency: 'INR' }] };
   const st = await c.get(`/payments/status?orderId=${draft.id}`);
-  assert.equal(st.body.confirmed, true);
-  assert.equal(await stateOf(draft.id), 'confirmed');
-  assert.ok(calls.cashfree.some((x) => x.url === `/pg/orders/${pay.id}`), 'Cashfree was asked');
-  assert.equal(calls.razorpay.length, 0, 'Razorpay was not');
+  assert.equal(st.statusCode ?? st.status, 200);
+  assert.equal(st.body.confirmed, false);
+  assert.equal(await stateOf(draft.id), 'awaiting_payment');
+  assert.equal(calls.cashfree.length, 0, 'Cashfree was not asked');
+  assert.equal(calls.razorpay.length, 0, 'Razorpay was not asked either');
 });
 
-test('a refund of a Cashfree-taken payment goes back through Cashfree', async () => {
+test('a refund of a historical Cashfree payment is refused by name and reaches no gateway', async () => {
   const { draft, pay } = await cashfreeOrder('+919700000207');
-  await app.inject(cfSigned(cfSuccess(pay.id)));
+  /* Captured while Cashfree was live. */
+  await pool.query(`UPDATE payment SET status='paid', provider_payment_id='880003', settled_at=now() WHERE id=$1`, [pay.id]);
+  await pool.query(`UPDATE food_order SET state='confirmed' WHERE id=$1`, [draft.id]);
   const admin = await makeUser(pool, { phone: '+919700000299', name: 'Adm', roles: ['platform_admin'] });
   const r = await (await as(admin)).post('/refunds', { orderId: draft.id, reason: 'closed' });
-  assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.ok(calls.cashfree.some((x) => x.url === `/pg/orders/${pay.id}/refunds`));
-  assert.equal(calls.razorpay.filter((x) => /refund/.test(x.url)).length, 0);
+  assert.equal(r.status, 503, JSON.stringify(r.body));
+  assert.match(JSON.stringify(r.body), /retired/i);
+  assert.equal(calls.cashfree.length, 0, 'the retired gateway was not called');
+  assert.equal(calls.razorpay.filter((x) => /refund/.test(x.url)).length, 0, 'and the active one owes nothing on it');
+  const refund = (await pool.query(`SELECT state FROM refund WHERE payment_id=$1`, [pay.id])).rows;
+  assert.deepEqual(refund.map((x) => x.state), ['failed'], 'the attempt is on record as failed');
+  assert.equal((await pool.query(`SELECT status FROM payment WHERE id=$1`, [pay.id])).rows[0].status, 'paid');
 });
 
-test('scheduled reconciliation covers the active provider and every other configured one', async () => {
+test('scheduled reconciliation covers the active provider only; the retired one is not asked', async () => {
   const { runScheduledReconciliation } = await import('../src/services/reconciliation.js');
   const out = await runScheduledReconciliation({ now: new Date(), lookbackDays: 1 });
   assert.equal(out.ran, true);
   assert.ok(calls.razorpay.some((x) => x.url.startsWith('/v1/settlements/recon/combined')));
-  assert.ok(Array.isArray(out.others) && out.others.length === 1);
-  assert.equal(out.others[0].provider, 'cashfree');
-  assert.equal(out.others[0].ran, true);
-  assert.ok(calls.cashfree.some((x) => x.url === '/pg/settlement/recon'));
+  assert.equal(out.others, undefined, 'no other configured provider exists');
+  assert.equal(calls.cashfree.length, 0);
   const imports = await pool.query(`SELECT provider FROM provider_settlement_import ORDER BY provider`);
-  assert.deepEqual(imports.rows.map((r) => r.provider), ['cashfree', 'razorpay']);
+  assert.deepEqual(imports.rows.map((r) => r.provider), ['razorpay']);
+});
+
+test('the Cashfree stub saw nothing in this whole file, with every CASHFREE_* variable set', () => {
+  assert.equal(process.env.CASHFREE_PG_APP_ID, CF.appId);
+  assert.equal(calls.cashfree.length, 0);
 });

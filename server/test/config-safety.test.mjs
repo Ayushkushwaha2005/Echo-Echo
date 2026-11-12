@@ -186,13 +186,15 @@ test('production refuses to start in an unsafe configuration', async () => {
   await attempt({ PAYMENT_PROVIDER: '' }, /payment provider/);
   /* Deploying before payment KYC must be an explicit decision. */
   await attempt({ PAYMENT_PROVIDER: '', PAYMENTS_DEFERRED: 'true' }, 'ok');
-  /* Sandbox and production never mix. */
+  /* Cashfree is retired: selecting it is a refusal, with full credentials
+     present and a production-looking app id. Its variables left behind on a
+     service are ignored, not fatal. */
   const cf = { PAYMENT_PROVIDER: 'cashfree', CASHFREE_PG_APP_ID: 'PRODAPP1', CASHFREE_PG_SECRET_KEY: 's' };
-  await attempt(cf, 'ok');
-  await attempt({ ...cf, CASHFREE_PG_BASE_URL: 'https://sandbox.cashfree.com' }, /sandbox/);
-  await attempt({ ...cf, CASHFREE_PG_APP_ID: 'TEST1234' }, /sandbox \(TEST\) app id/);
-  await attempt({ ...cf, CASHFREE_PAYOUT_BASE_URL: 'https://sandbox.cashfree.com' }, /PAYOUT_BASE_URL points at the Cashfree sandbox/);
-  await attempt({ ...cf, CASHFREE_PG_NOTIFY_URL: 'http://api.example/payments/webhook' }, /NOTIFY_URL must be https/);
+  await attempt(cf, /PAYMENT_PROVIDER=cashfree: Cashfree was retired/);
+  await attempt({ ...cf, PAYMENTS_DEFERRED: 'true' }, /retired/);
+  await attempt({ PAYOUT_PROVIDER: 'cashfree', CASHFREE_PAYOUT_CLIENT_ID: 'c', CASHFREE_PAYOUT_CLIENT_SECRET: 's' },
+                /PAYOUT_PROVIDER=cashfree: Cashfree Payouts was retired/);
+  await attempt({ CASHFREE_PG_APP_ID: 'PRODAPP1', CASHFREE_PG_SECRET_KEY: 's', CASHFREE_EASY_SPLIT: 'on' }, 'ok');
   /* Passkeys cannot be switched off, and the RP ID must match the admin origin. */
   await attempt({ ADMIN_PASSKEY_REQUIRED: 'false' }, /ADMIN_PASSKEY_REQUIRED/);
   await attempt({ WEBAUTHN_RP_ID: '' }, /WEBAUTHN_RP_ID/);
@@ -212,8 +214,10 @@ test('production refuses to start in an unsafe configuration', async () => {
 /* render.yaml is what a Blueprint sync would apply to production. Payments
    are live, so the file must never carry the pre-launch switches again: a
    sync that set PAYMENTS_DEFERRED or turned the sweeper off would quietly
-   undo the launch. Secrets stay sync: false and never get a value here. */
-test('render.yaml keeps production payments live and commits no secret', () => {
+   undo the launch. The active provider is dashboard-managed (sync: false),
+   so a sync can never switch the gateway, and no retired Cashfree key may
+   return. Secrets stay sync: false and never get a value here. */
+test('render.yaml keeps production payments live, names no retired provider and commits no secret', () => {
   const yaml = readFileSync(join(repoRoot, 'render.yaml'), 'utf8');
   const vars = new Map();
   for (const m of yaml.matchAll(/^\s*- key: (\S+)[ \t]*\r?\n[ \t]*(value|sync|generateValue): *(.*?)\s*$/gm)) {
@@ -221,19 +225,16 @@ test('render.yaml keeps production payments live and commits no secret', () => {
   }
   assert.ok(!vars.has('PAYMENTS_DEFERRED'), 'PAYMENTS_DEFERRED must not be in render.yaml');
   assert.deepEqual(vars.get('SWEEPER'), { kind: 'value', value: 'on' });
-  assert.deepEqual(vars.get('PAYMENT_PROVIDER'), { kind: 'value', value: 'cashfree' });
-  assert.deepEqual(vars.get('CASHFREE_EASY_SPLIT'), { kind: 'value', value: 'off' });
+  assert.deepEqual(vars.get('PAYMENT_PROVIDER'), { kind: 'sync', value: 'false' },
+    'the active provider is set in the dashboard, never by a Blueprint sync');
+  for (const k of vars.keys()) assert.ok(!/^CASHFREE_/.test(k), `${k}: Cashfree is retired`);
+  for (const [k, v] of vars) assert.notEqual(v.value, 'cashfree', `${k} selects a retired provider`);
   /* The edge limit is only real when the header it trusts is named. */
   assert.deepEqual(vars.get('TRUST_PROXY'), { kind: 'value', value: 'true' });
   assert.deepEqual(vars.get('EDGE_CLIENT_IP_HEADER'), { kind: 'value', value: 'cf-connecting-ip' });
-  assert.equal(vars.get('CASHFREE_PG_NOTIFY_URL')?.value,
-    'https://echo-echo-api.onrender.com/payments/webhook');
-  assert.match(vars.get('CASHFREE_PG_RETURN_URL')?.value || '', /^https:\/\//);
-  for (const k of ['CASHFREE_PG_APP_ID', 'CASHFREE_PG_SECRET_KEY', 'DATABASE_URL']) {
-    assert.deepEqual(vars.get(k), { kind: 'sync', value: 'false' }, `${k} must be sync: false`);
-  }
-  /* No sandbox endpoint, and no payout provider until Cashfree activates it. */
-  for (const k of ['CASHFREE_PG_BASE_URL', 'PAYOUT_PROVIDER']) assert.ok(!vars.has(k), k);
+  assert.deepEqual(vars.get('DATABASE_URL'), { kind: 'sync', value: 'false' }, 'DATABASE_URL must be sync: false');
+  /* No payout provider: settlements are recorded by an administrator. */
+  assert.ok(!vars.has('PAYOUT_PROVIDER'), 'PAYOUT_PROVIDER');
   for (const [k, v] of vars) {
     if (/SECRET|_KEY$|TOKEN|PASSWORD/.test(k)) {
       assert.notEqual(v.kind, 'value', `${k} must not have a committed value`);

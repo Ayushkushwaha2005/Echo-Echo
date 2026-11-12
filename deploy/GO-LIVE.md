@@ -208,7 +208,7 @@ nano server.env
 | `RESEND_API_KEY` | the **new** key from step 4 |
 | `STORAGE_PROVIDER` | `s3` |
 | `S3_*` | endpoint, region, bucket, key, secret from step 5 |
-| `PAYMENTS_DEFERRED` | `true` until Cashfree KYC clears |
+| `PAYMENTS_DEFERRED` | `true` until the payment gateway is live |
 
 ---
 
@@ -319,7 +319,7 @@ not support.
 ## 13 — Payments (later, needs KYC)
 
 `PAYMENTS_DEFERRED=true` keeps checkout honestly unavailable (503) and `/ready`
-reports it. When Cashfree KYC clears, configure the provider through the
+reports it. When the gateway is live, configure the provider through the
 existing adapter — the architecture does not change. UPI and cards only; **no
 COD**. Nothing may claim payments are production-ready until a real transaction
 has been through the live provider and reconciled.

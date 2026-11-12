@@ -343,11 +343,11 @@ export default async function adminOpsRoutes(app) {
 
       const failedPayments = await n(`SELECT count(*)::int AS n FROM payment WHERE status = 'failed' AND created_at > now() - interval '24 hours'`);
       check('failed_payments', 'Failed payments in the last 24 h', failedPayments === 0, `${failedPayments}`,
-        'Usually a customer abandoning checkout. Many in a row suggests a gateway problem: check Cashfree status.', 'warn');
+        'Usually a customer abandoning checkout. Many in a row suggests a gateway problem: check the gateway status page.', 'warn');
 
       const flagged = await n(`SELECT count(*)::int AS n FROM payment WHERE flagged_reason IS NOT NULL AND status <> 'paid'`);
       check('flagged_payments', 'Payments flagged for review', flagged === 0, `${flagged}`,
-        'Open Payments and review each flagged payment against Cashfree.');
+        'Open Payments and review each flagged payment against the gateway\'s dashboard.');
 
       const refused = await n(`SELECT count(*)::int AS n FROM audit_log WHERE action IN ('payment.webhook','payout.webhook')
                                  AND outcome = 'denied' AND at > now() - interval '24 hours'`);
@@ -367,7 +367,7 @@ export default async function adminOpsRoutes(app) {
       const stuckRefunds = await n(`SELECT count(*)::int AS n FROM refund WHERE state IN ('requested','processing')
                                       AND created_at < now() - interval '72 hours'`);
       check('stuck_refunds', 'Refunds unresolved after 72 h', stuckRefunds === 0, `${stuckRefunds}`,
-        'Check the refund in the Cashfree dashboard; the reconciliation job raises refund_stuck.');
+        'Check the refund in the gateway\'s dashboard; the reconciliation job raises refund_stuck.');
 
       const blocking = await n(`SELECT count(*)::int AS n FROM reconciliation_exception WHERE state = 'open' AND severity = 'blocking'`);
       check('reconciliation', 'Open blocking reconciliation differences', blocking === 0, `${blocking}`,

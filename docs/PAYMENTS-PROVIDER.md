@@ -1,3 +1,5 @@
+> **Superseded on 12 November 2026.** Cashfree, the provider this document recommends, has been permanently retired from ECHO ECHO: see . The research below is kept as the record of the decision as it stood; the figures and the recommendation are historical.
+
 # Payment and payout provider — research, recommendation, decision
 
 Researched against current provider documentation and the RBI Master Direction

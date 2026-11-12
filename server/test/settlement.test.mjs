@@ -828,145 +828,45 @@ test('a cafeteria owner cannot see or drive the settlement schedule', async () =
    PROVIDER ADAPTERS
 
    The payout path is provider-agnostic by construction: nothing in
-   settlement, payouts or the finance routes names a provider. These tests
-   drive the SECOND adapter — Cashfree — through the same code path, against
-   a stub speaking Cashfree's wire format, to prove that claim rather than
-   assert it in a comment.
-
-   What this cannot prove: that Cashfree accepts these requests. That needs
-   real sandbox credentials and is listed as an external provisioning
-   blocker.
+   settlement, payouts or the finance routes names a provider. The second
+   adapter that once proved it, Cashfree Payouts, was retired on 12 November
+   2026 (docs/CASHFREE-RETIREMENT.md). What remains to prove here is that the
+   retirement holds inside the settlement path: a schedule run that would
+   have paid through Cashfree sends nothing, pays nothing and leaves the
+   café owed, with a reason a person can read.
    ========================================================================== */
-async function withCashfreePayouts(handler, fn) {
-  const { PAYOUTS } = await import('../src/config.js');
-  const server = createServer((req, res) => {
-    let body = '';
-    req.on('data', (c) => { body += c; });
-    req.on('end', () => handler(req, res, body ? JSON.parse(body) : {}));
-  });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-
-  const saved = { provider: PAYOUTS.provider, base: PAYOUTS.cashfreeBase,
-                  cf: { ...PAYOUTS.cashfree } };
-  PAYOUTS.provider = 'cashfree';
-  PAYOUTS.cashfreeBase = `http://127.0.0.1:${server.address().port}`;
-  PAYOUTS.cashfree = { clientId: 'CF_TEST_ID', clientSecret: 'stub_not_real',
-                       mode: 'imps', apiVersion: '2024-01-01' };
-  assert.equal(PAYOUTS.configured, true, 'the stubbed Cashfree account reads as configured');
-  assert.equal(PAYOUTS.method, 'cashfree_payouts');
-  try {
-    return await fn(PAYOUTS);
-  } finally {
-    PAYOUTS.provider = saved.provider;
-    PAYOUTS.cashfreeBase = saved.base;
-    PAYOUTS.cashfree = saved.cf;
-    await new Promise((r) => server.close(r));
-  }
-}
-
-test('the same settlement path pays through Cashfree without naming it anywhere',
+test('a schedule run cannot pay through the retired Cashfree Payouts: nothing sent, money still owed',
   async () => {
+    const { PAYOUTS } = await import('../src/config.js');
     const owner = await makePlatformOwner();
     const { vendor } = await paidOrder();
-    const calls = [];
-
-    await withCashfreePayouts((req, res, b) => {
-      calls.push({ url: req.url, body: b, headers: req.headers });
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ cf_transfer_id: 987654, transfer_id: b.transfer_id,
-                               status: 'SUCCESS', transfer_utr: 'CFUTR123' }));
-    }, async () => {
+    const saved = PAYOUTS.provider;
+    PAYOUTS.provider = 'cashfree';
+    try {
+      assert.equal(PAYOUTS.configured, false, 'selecting Cashfree configures nothing');
+      assert.equal(PAYOUTS.method, null);
       const admin = await as(owner);
-      assert.equal((await admin.put('/admin/settlement/schedule',
-        { autoRelease: true })).status, 200);
-      assert.equal((await admin.put('/admin/payouts/destination',
-        { vendorId: vendor.id, fundAccountId: 'benef_stub_1' })).status, 200);
-
-      const out = await settlement.runSettlementSchedules({ now: IST_8PM_MON });
-      assert.equal(out.cafeteria.built, true);
-      assert.deepEqual(out.cafeteria.autoReleased, { paid: 1, failed: 0, skipped: 0 });
-    });
-
-    assert.equal(calls.length, 1, 'exactly one transfer was requested');
-    assert.match(calls[0].url, /\/payout\/transfers$/);
-    /* Cashfree takes rupees as a decimal string. 9800 paise is 98.00 — and
-       the conversion is integer arithmetic, never a float multiplication. */
-    assert.equal(calls[0].body.transfer_amount, '98.00');
-    assert.equal(calls[0].body.beneficiary_details.beneficiary_id, 'benef_stub_1');
-    assert.equal(calls[0].headers['x-client-id'], 'CF_TEST_ID');
-    assert.equal(calls[0].headers['x-api-version'], '2024-01-01');
-    /* transfer_id IS the idempotency key: a retry returns the original. */
-    assert.ok(calls[0].body.transfer_id, 'carries our payout id as the transfer id');
-    assert.equal(calls[0].headers['x-request-id'], calls[0].body.transfer_id);
-
-    const payout = row(await pool.query(`SELECT * FROM payout`));
-    assert.equal(payout.state, 'paid');
-    assert.equal(payout.method, 'cashfree_payouts', 'the method records which rail moved it');
-    assert.equal(payout.external_reference, 'CFUTR123');
-    const bal = row(await pool.query(
-      `SELECT balance_paise FROM v_account_balance
-        WHERE kind='cafeteria_payable' AND vendor_id=$1`, [vendor.id]));
-    assert.equal(Number(bal.balance_paise), 0, 'the payable is discharged');
-  });
-
-test('a Cashfree transfer that is only ACCEPTED does not discharge the payable',
-  async () => {
-    const owner = await makePlatformOwner();
-    const { vendor } = await paidOrder();
-
-    await withCashfreePayouts((req, res, b) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      /* Accepted for processing. The money has NOT left. */
-      res.end(JSON.stringify({ cf_transfer_id: 11, transfer_id: b.transfer_id,
-                               status: 'RECEIVED' }));
-    }, async () => {
-      const admin = await as(owner);
-      assert.equal((await admin.put('/admin/settlement/schedule',
-        { autoRelease: true })).status, 200);
-      assert.equal((await admin.put('/admin/payouts/destination',
-        { vendorId: vendor.id, fundAccountId: 'benef_stub_2' })).status, 200);
+      /* Whatever an administrator manages to set up (automatic release, a
+         payee id), the scheduler run that follows must move nothing. The two
+         set-up calls are allowed to refuse (503) or accept (200); neither
+         answer may produce a payment below. */
+      for (const r of [await admin.put('/admin/settlement/schedule', { autoRelease: true }),
+                       await admin.put('/admin/payouts/destination',
+                         { vendorId: vendor.id, fundAccountId: 'benef_stub_retired' })]) {
+        assert.ok([200, 503].includes(r.status), JSON.stringify(r.body));
+      }
       await settlement.runSettlementSchedules({ now: IST_8PM_MON });
-    });
-
-    const payout = row(await pool.query(`SELECT * FROM payout`));
-    assert.notEqual(payout.state, 'paid', 'accepted is not paid');
-    assert.equal(payout.paid_at, null);
+    } finally {
+      PAYOUTS.provider = saved;
+    }
+    const payouts = (await pool.query(`SELECT * FROM payout`)).rows;
+    assert.ok(payouts.every((p) => p.state !== 'paid'), 'nothing is paid');
+    assert.ok(payouts.every((p) => p.paid_at == null && p.provider_payout_id == null));
     const bal = row(await pool.query(
       `SELECT balance_paise FROM v_account_balance
         WHERE kind='cafeteria_payable' AND vendor_id=$1`, [vendor.id]));
-    assert.equal(Number(bal.balance_paise), 9800,
-      'the cafeteria is still owed until the transfer actually completes');
+    assert.equal(Number(bal.balance_paise), 9800, 'the cafeteria is still owed the full amount');
   });
-
-test('a provider rejection fails the payout and leaves the money owed', async () => {
-  const owner = await makePlatformOwner();
-  const { vendor } = await paidOrder();
-
-  await withCashfreePayouts((req, res) => {
-    res.writeHead(422, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ message: 'beneficiary_id is not valid', type: 'invalid_request' }));
-  }, async () => {
-    const admin = await as(owner);
-    assert.equal((await admin.put('/admin/settlement/schedule',
-      { autoRelease: true })).status, 200);
-    assert.equal((await admin.put('/admin/payouts/destination',
-      { vendorId: vendor.id, fundAccountId: 'benef_bad' })).status, 200);
-    await settlement.runSettlementSchedules({ now: IST_8PM_MON });
-  });
-
-  const payout = row(await pool.query(`SELECT * FROM payout`));
-  assert.equal(payout.state, 'failed');
-  assert.match(payout.failure_reason, /cashfree 422/);
-  const bal = row(await pool.query(
-    `SELECT balance_paise FROM v_account_balance
-      WHERE kind='cafeteria_payable' AND vendor_id=$1`, [vendor.id]));
-  assert.equal(Number(bal.balance_paise), 9800, 'a failed transfer moves no money');
-
-  /* And the failure is not terminal: the payable is intact, so a later batch
-     picks it up again. That is the retry path. */
-  const ledger = await pool.query(`SELECT 1 FROM ledger_txn WHERE kind = 'payout'`);
-  assert.equal(ledger.rowCount, 0, 'nothing was posted for a transfer that never happened');
-});
 
 /* ======================================================================
    the dashboard's settlement-batch status vocabulary

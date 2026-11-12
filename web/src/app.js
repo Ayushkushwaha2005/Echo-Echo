@@ -3742,7 +3742,6 @@ document.addEventListener('keydown', (e) => {
    the one the server's intent names. Nothing on the way to checkout waits
    for a payment provider, and nobody who never pays loads one. */
 const GATEWAY_SDK = {
-  cashfree: 'https://sdk.cashfree.com/js/v3/cashfree.js',
   razorpay: 'https://checkout.razorpay.com/v1/checkout.js',
 };
 const sdkLoads = {};
@@ -3756,16 +3755,6 @@ function loadGateway(name) {
     document.head.append(s);
   });
   return sdkLoads[name];
-}
-
-async function openCashfree(intent) {
-  await loadGateway('cashfree');
-  if (!window.Cashfree) throw new Error('Payment gateway script is not loaded on this page.');
-  const cf = window.Cashfree({ mode: intent.mode === 'sandbox' ? 'sandbox' : 'production' });
-  await cf.checkout({
-    paymentSessionId: intent.paymentSessionId,
-    redirectTarget: '_modal',
-  }).catch(() => {});                    // a dismissed sheet is not an error
 }
 
 async function openRazorpay(intent) {
@@ -3820,8 +3809,7 @@ async function openGateway(intent, draft) {
      front door. This is how the customer finds their payment again. */
   remember(draft.id);
   try {
-    if (intent.provider === 'cashfree') await openCashfree(intent);
-    else if (intent.provider === 'razorpay') await openRazorpay(intent);
+    if (intent.provider === 'razorpay') await openRazorpay(intent);
     else throw new Error(`Unknown payment provider "${intent.provider}"`);
   } catch (e) {
     forget();
