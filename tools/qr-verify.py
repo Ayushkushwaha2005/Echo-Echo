@@ -9,7 +9,7 @@
 #       site_url    an https link; its host must be on ALLOWED_HOSTS
 #       upi_payment a upi://pay link (payee VPA and name are shown); this is
 #                   NOT used for checkout: online payment stays server-verified
-#                   through Cashfree, and a static UPI QR cannot be tied to an
+#                   through the payment gateway, and a static UPI QR cannot be tied to an
 #                   order, a webhook or a refund
 #       other       anything else (plain text, http://, another scheme)
 #   - whether it still decodes when shrunk to poster-at-distance sizes
@@ -29,7 +29,7 @@ def classify(data):
         u = urlparse(data); qs = parse_qs(u.query)
         return {'kind': 'upi_payment', 'payee_vpa': qs.get('pa', [None])[0], 'payee_name': qs.get('pn', [None])[0],
                 'amount': qs.get('am', [None])[0],
-                'note': 'A static UPI QR. Do not use it for ECHO ECHO checkout: orders are paid through Cashfree and confirmed server-to-server.'}
+                'note': 'A static UPI QR. Do not use it for ECHO ECHO checkout: orders are paid through the payment gateway and confirmed server-to-server.'}
     u = urlparse(data)
     if u.scheme == 'https' and u.hostname:
         return {'kind': 'site_url', 'host': u.hostname, 'path': u.path or '/',

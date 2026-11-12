@@ -95,7 +95,7 @@ test('running it again, or on a database without Tulips, changes nothing', async
   assert.equal((await one(`SELECT count(*)::int AS n FROM vendor`)).n, 1, 'nothing is created');
 });
 
-test('the Cashfree order note names the café, safely', () => {
+test('the gateway order note names the café, safely', () => {
   assert.equal(orderNote('EE-1', 'Tulips'), 'ECHO ECHO order EE-1 from Tulips');
   assert.equal(orderNote('EE-2', 'Café Frisco'), 'ECHO ECHO order EE-2 from Cafe Frisco');
   assert.equal(orderNote('EE-3', '<script>"x"</script>'), 'ECHO ECHO order EE-3 from scriptxscript');

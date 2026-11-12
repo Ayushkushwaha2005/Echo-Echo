@@ -153,19 +153,22 @@ export const RATE_LIMITS = {
    Cash on delivery does not exist in this product. If no gateway is
    configured, checkout returns 503 and no order is ever created.
 
-   Two collection providers are supported and the choice is a deployment
-   decision, not a rewrite: services/payment-providers.js holds one adapter
-   each and nothing outside that file names a gateway. Cashfree is the
-   recommended one for the pilot (see docs/PAYMENTS-PROVIDER.md); Razorpay
-   remains fully supported so a stalled KYC at either provider is a config
-   change rather than an outage.
+   Which collection provider is a deployment decision, not a rewrite:
+   services/providers/ holds one adapter each and nothing outside that
+   directory names a gateway.
+
+   Cashfree was RETIRED on 12 November 2026 (docs/CASHFREE-RETIREMENT.md).
+   No CASHFREE_* variable is read any more, `providerConfigured('cashfree')`
+   is always false, and production refuses to boot with
+   PAYMENT_PROVIDER=cashfree, so no configuration can bring it back. Payment
+   rows it wrote keep their provider id and remain readable.
 
    `webhookMaxSkewSeconds` is the replay window for a signed webhook whose
-   provider timestamps its signature (Cashfree does; Razorpay does not).
-   Outside it the delivery is refused even when the signature is perfect,
-   because a captured-and-replayed body is otherwise valid forever.        */
+   provider timestamps its signature. Outside it the delivery is refused even
+   when the signature is perfect, because a captured-and-replayed body is
+   otherwise valid forever.                                               */
 export const PAYMENTS = {
-  provider: env('PAYMENT_PROVIDER', null),          // 'cashfree' | 'razorpay' | null
+  provider: env('PAYMENT_PROVIDER', null),          // 'razorpay' | null ('cashfree' is retired and refused)
   currency: 'INR',
   webhookMaxSkewSeconds: Number(env('PAYMENT_WEBHOOK_MAX_SKEW_SECONDS', 300)),
   /* How far back the daily settlement reconciliation re-reads. A rolling
@@ -178,47 +181,26 @@ export const PAYMENTS = {
      production, and a local stub when verifying request construction.
      Production refuses any non-https value (see the boot guard below). */
   apiBase: env('RAZORPAY_BASE_URL', 'https://api.razorpay.com'),
-  cashfreeBase: env('CASHFREE_PG_BASE_URL', 'https://api.cashfree.com'),
   razorpay: {
     keyId: env('RAZORPAY_KEY_ID'),
     keySecret: env('RAZORPAY_KEY_SECRET'),
     webhookSecret: env('RAZORPAY_WEBHOOK_SECRET'),
   },
-  /* Cashfree PG signs its webhooks with the SAME secret key that
-     authenticates the API, so there is no separate webhook secret to set —
-     and no way to configure collection without also being able to verify a
-     webhook, which is the mistake worth designing out. */
-  cashfree: {
-    appId: env('CASHFREE_PG_APP_ID'),
-    secretKey: env('CASHFREE_PG_SECRET_KEY'),
-    apiVersion: env('CASHFREE_PG_API_VERSION', '2026-01-01'),
-    returnUrl: env('CASHFREE_PG_RETURN_URL'),
-    /* Cashfree checkout method codes: cc credit card, dc debit card, upi,
-       nb net banking. */
-    paymentMethods: env('CASHFREE_PG_PAYMENT_METHODS', 'cc,dc,upi,nb'),
-    /* Where Cashfree sends this order's webhooks. Set per order so the
-       endpoint is exactly the one this deployment verifies, whatever the
-       dashboard says. Must be https. */
-    notifyUrl: env('CASHFREE_PG_NOTIFY_URL'),
-    /* Easy Split stays off until Cashfree approves the product for this
-       merchant AND each café's vendor account is active there. */
-    easySplit: env('CASHFREE_EASY_SPLIT', 'off') === 'on',
-  },
+  /* Retired. Kept as a frozen constant so the two places that still ask
+     whether Cashfree Easy Split is on get an unconditional "no", and so
+     nothing reads a CASHFREE_* variable. */
+  cashfree: Object.freeze({ retired: true, easySplit: false }),
   /* Whether a given provider's credentials are present, independent of
-     which one is active. Both may be configured at once: a deployment that
-     switched collection providers still verifies webhooks, pulls status and
-     issues refunds for payments the other provider took. */
+     which one is active. A retired provider is never configured, whatever
+     the environment holds. */
   providerConfigured(id) {
     if (id === 'razorpay') {
       return !!(this.razorpay.keyId && this.razorpay.keySecret && this.razorpay.webhookSecret);
     }
-    if (id === 'cashfree') {
-      return !!(this.cashfree.appId && this.cashfree.secretKey);
-    }
-    return false;
+    return false;                                   // 'cashfree' (retired) and unknown ids
   },
   get configuredProviders() {
-    return ['cashfree', 'razorpay'].filter((id) => this.providerConfigured(id));
+    return ['razorpay'].filter((id) => this.providerConfigured(id));
   },
   get configured() {
     return this.providerConfigured(this.provider);
@@ -228,9 +210,6 @@ export const PAYMENTS = {
      client except through this getter. */
   get publicConfig() {
     if (this.provider === 'razorpay') return { keyId: this.razorpay.keyId };
-    if (this.provider === 'cashfree') {
-      return { appId: this.cashfree.appId, mode: this.cashfreeBase.includes('sandbox') ? 'sandbox' : 'production' };
-    }
     return {};
   },
 };
@@ -256,27 +235,8 @@ export const PAYMENTS = {
    With no provider configured, the payout routes still work through the
    manual path; they never claim a transfer happened on their own.          */
 export const PAYOUTS = {
-  provider: env('PAYOUT_PROVIDER', null),          // 'razorpayx' | 'cashfree' | null
+  provider: env('PAYOUT_PROVIDER', null),          // 'razorpayx' | null ('cashfree' is retired and refused)
   apiBase: env('RAZORPAYX_BASE_URL', 'https://api.razorpay.com'),
-  cashfreeBase: env('CASHFREE_PAYOUT_BASE_URL', 'https://api.cashfree.com'),
-  cashfree: {
-    /* Cashfree Payouts authenticates with a client id/secret pair rather
-       than a basic-auth key, and identifies a payee by a beneficiary id
-       provisioned in their dashboard. As with RazorpayX, Quad stores only
-       the opaque id — never a bank account number. */
-    clientId: env('CASHFREE_PAYOUT_CLIENT_ID'),
-    clientSecret: env('CASHFREE_PAYOUT_CLIENT_SECRET'),
-    mode: env('CASHFREE_PAYOUT_MODE', 'imps'),     // imps | neft | upi
-    apiVersion: env('CASHFREE_PAYOUT_API_VERSION', '2024-01-01'),
-    /* Payouts two-factor authentication without a fixed server IP: the
-       public key Cashfree issues (Payouts dashboard > Developers > Two-Factor
-       Authentication > Public Key), as PEM text or a file path. Every
-       request then carries X-Cf-Signature. It is a PUBLIC key, but kept in
-       server config because it identifies this merchant's integration. */
-    publicKey: env('CASHFREE_PAYOUT_PUBLIC_KEY'),
-    publicKeyPath: env('CASHFREE_PAYOUT_PUBLIC_KEY_PATH'),
-    timeoutMs: Number(env('CASHFREE_PAYOUT_TIMEOUT_MS', 15000)),
-  },
   razorpayx: {
     /* The RazorpayX current account the money leaves from. Not the same
        thing as the Razorpay key that collects payments, even though the
@@ -290,15 +250,11 @@ export const PAYOUTS = {
     if (this.provider === 'razorpayx') {
       return !!(this.razorpayx.accountNumber && this.razorpayx.keyId && this.razorpayx.keySecret);
     }
-    if (this.provider === 'cashfree' || this.provider === 'cashfree_payouts') {
-      return !!(this.cashfree.clientId && this.cashfree.clientSecret);
-    }
-    return false;
+    return false;                                   // 'cashfree' (retired) and unknown ids
   },
   /* The value written to payout.method when this provider settles one. */
   get method() {
     if (this.provider === 'razorpayx') return 'razorpayx';
-    if (this.provider === 'cashfree' || this.provider === 'cashfree_payouts') return 'cashfree_payouts';
     return null;
   },
   /* Recording a transfer an administrator actually made is always possible,
@@ -586,9 +542,7 @@ export function assertBootable() {
     for (const [name, value] of [['TWILIO_BASE_URL', OTP.twilioBase],
                                  ['MSG91_BASE_URL', OTP.msg91Base],
                                  ['RAZORPAY_BASE_URL', PAYMENTS.apiBase],
-                                 ['CASHFREE_PG_BASE_URL', PAYMENTS.cashfreeBase],
                                  ['RAZORPAYX_BASE_URL', PAYOUTS.apiBase],
-                                 ['CASHFREE_PAYOUT_BASE_URL', PAYOUTS.cashfreeBase],
                                  ['RESEND_BASE_URL', NOTIFY.email.resendBase],
                                  ['BREVO_BASE_URL', NOTIFY.email.brevoBase],
                                  ...(STORAGE.s3.endpoint ? [['S3_ENDPOINT', STORAGE.s3.endpoint]] : [])]) {
@@ -596,18 +550,21 @@ export function assertBootable() {
         fatal.push(`${name} must be an https URL in production (got "${value}").`);
       }
     }
-    /* Sandbox and production never mix: a production server pointed at a
-       Cashfree sandbox (or holding TEST credentials) would take "payments"
-       that are not money. */
-    for (const [name, value] of [['CASHFREE_PG_BASE_URL', PAYMENTS.cashfreeBase],
-                                 ['CASHFREE_PAYOUT_BASE_URL', PAYOUTS.cashfreeBase]]) {
-      if (/sandbox|test\.cashfree/i.test(value)) fatal.push(`${name} points at the Cashfree sandbox in production.`);
+    /* Cashfree is retired (docs/CASHFREE-RETIREMENT.md). Selecting it is a
+       refusal, not a silent fallback: a deployment that asks for it gets no
+       server rather than a server that collects through a closed account.
+       Leftover CASHFREE_* variables are ignored and only reported. */
+    if (/^cashfree/i.test(PAYMENTS.provider || '')) {
+      fatal.push('PAYMENT_PROVIDER=cashfree: Cashfree was retired on 12 November 2026 and cannot be ' +
+                 'selected. Set the active provider to one this build still supports.');
     }
-    if (PAYMENTS.provider === 'cashfree' && /^TEST/i.test(PAYMENTS.cashfree.appId || '')) {
-      fatal.push('CASHFREE_PG_APP_ID is a sandbox (TEST) app id; production needs the production key.');
+    if (/^cashfree/i.test(PAYOUTS.provider || '')) {
+      fatal.push('PAYOUT_PROVIDER=cashfree: Cashfree Payouts was retired on 12 November 2026 and cannot be ' +
+                 'selected. Leave PAYOUT_PROVIDER unset (manual bank transfer) or set a supported provider.');
     }
-    if (PAYMENTS.cashfree.notifyUrl && !/^https:\/\//.test(PAYMENTS.cashfree.notifyUrl)) {
-      fatal.push('CASHFREE_PG_NOTIFY_URL must be https.');
+    const leftover = Object.keys(process.env).filter((k) => /^CASHFREE_/.test(k)).sort();
+    if (leftover.length) {
+      warnProd.push(`Ignored retired Cashfree variables still set: ${leftover.join(', ')}. Remove them from the service.`);
     }
     /* Production refuses anything that would make the product lie or leak.
        These are the items on the readiness gate that can be checked at boot. */

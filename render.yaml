@@ -139,28 +139,18 @@ services:
       - key: S3_SECRET_ACCESS_KEY
         sync: false
 
-      # ---- payments (Cashfree production) ----------------------------------
+      # ---- payments ---------------------------------------------------------
       # Live since 1 Oct 2026. PAYMENTS_DEFERRED is deliberately absent: it
       # must never return here, and test/config-safety.test.mjs fails CI if it
-      # does. The PG base URL is left to its default (api.cashfree.com), so no
-      # sandbox endpoint can be configured by this file. The key pair is
-      # entered in the Render dashboard only.
+      # does. The active collection provider and its credentials are set in
+      # the Render dashboard only (sync: false), so a Blueprint sync can never
+      # switch the gateway or hand it a value. Cashfree was retired on
+      # 12 Nov 2026 (docs/CASHFREE-RETIREMENT.md): no CASHFREE_* key may
+      # reappear here, and the server refuses PAYMENT_PROVIDER=cashfree.
       - key: PAYMENT_PROVIDER
-        value: cashfree
-      - key: CASHFREE_PG_APP_ID
         sync: false
-      - key: CASHFREE_PG_SECRET_KEY
-        sync: false
-      - key: CASHFREE_PG_NOTIFY_URL
-        value: https://echo-echo-api.onrender.com/payments/webhook
-      - key: CASHFREE_PG_RETURN_URL
-        value: https://www.echoecho.tech/
-      # Collect-and-disburse: Cashfree settles everything to the platform and
-      # the ledger pays cafés. Easy Split stays off until Cashfree approves it.
-      - key: CASHFREE_EASY_SPLIT
-        value: "off"
-      # No PAYOUT_PROVIDER: Cashfree Payouts is not activated in production,
-      # so settlements are paid by an administrator and recorded by reference.
+      # No PAYOUT_PROVIDER: settlements are paid by an administrator and
+      # recorded by bank reference.
       # The sweeper expires stale offers and abandoned checkouts; with live
       # payments it must run.
       - key: SWEEPER

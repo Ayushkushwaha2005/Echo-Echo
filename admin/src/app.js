@@ -1863,7 +1863,7 @@ const ORDER_ACTIONS = {
 const TIMELINE_KIND = { state: 'Status', payment: 'Payment', refund: 'Refund', webhook: 'Gateway webhook', audit: 'Audit' };
 
 /* ========================================================================
-   PAYMENTS — what Cashfree was asked, what it said, and what was refused
+   PAYMENTS — what the gateway was asked, what it said, and what was refused
    ======================================================================== */
 async function scrPayments() {
   setTitle('Payments', 'Gateway references, fees, refunds and webhook history. A payment is confirmed server-to-server, never by the browser.');
@@ -1874,7 +1874,7 @@ async function scrPayments() {
     <form class="filterbar" data-form="payments" aria-label="Filter payments">
       <input class="input" name="q" placeholder="Order code, gateway id, customer" value="${esc(f.q || '')}" aria-label="Search payments">
       <select class="input" name="status" aria-label="Payment status">${optionList(['paid', 'pending', 'created', 'failed', 'refunded', 'cancelled'], f.status, 'Any status')}</select>
-      <select class="input" name="provider" aria-label="Provider">${optionList(['cashfree', 'razorpay'], f.provider, 'Any provider', { cashfree: 'Cashfree', razorpay: 'Razorpay' })}</select>
+      <select class="input" name="provider" aria-label="Provider">${optionList(['cashfree', 'razorpay'], f.provider, 'Any provider', { cashfree: 'Cashfree (retired)', razorpay: 'Razorpay' })}</select>
       <select class="input" name="vendorId" aria-label="Café">${optionList(vendors.map((v) => v.id), f.vendorId, 'Any café', Object.fromEntries(vendors.map((v) => [v.id, v.name])))}</select>
       <input class="input" type="date" name="from" value="${esc(f.from || '')}" aria-label="From date">
       <input class="input" type="date" name="to" value="${esc(f.to || '')}" aria-label="To date">
@@ -1904,7 +1904,7 @@ async function paintPayments() {
           `${esc(p.customer_name || '—')} <span class="t-xs faint">${esc(p.customer_phone_masked || '')}</span>`,
           when(p.created_at),
           p.settled_at ? when(p.settled_at) : '—',
-          esc(p.provider === 'razorpay' ? 'Razorpay' : p.provider === 'cashfree' ? 'Cashfree' : p.provider),
+          esc(p.provider === 'razorpay' ? 'Razorpay' : p.provider === 'cashfree' ? 'Cashfree (retired)' : p.provider),
           payBadge(p.status) + (p.flagged_reason ? ` <span class="badge badge-danger" title="${esc(p.flagged_reason)}">flagged</span>` : '')
             + (p.refund_states ? ` <span class="t-xs faint">refund: ${esc(p.refund_states)}</span>` : ''),
           `<span class="num">${rupees(p.amount_paise)}</span>`,
@@ -1995,7 +1995,7 @@ async function scrReports() {
         </div>
         <div><button type="submit" class="btn btn-primary btn-sm">Download CSV</button></div>
         <p class="t-xs faint">At most 366 days per export. Amounts are in rupees with two decimals.
-          Bank accounts appear masked; full numbers are held only by Cashfree.</p>
+          Bank accounts appear masked; full numbers are never stored here.</p>
       </form>
     </section>
     <section class="card card-pad" style="margin-top:18px">
