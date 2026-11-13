@@ -15,6 +15,13 @@ import { db, userWith, signInAs, vendor, watchProblems } from './helpers.mjs';
 
 const uniq = () => `${Date.now() % 1000000}`;
 const INSIDE = { latitude: 30.4166, longitude: 77.9676 };
+/* Fixtures this file adds to the shared test database, removed afterwards so
+   later journeys see the database as they always have. */
+const created = { boundary: null, node: null };
+test.afterAll(async () => {
+  if (created.node) await db.query(`DELETE FROM campus_node WHERE id = $1`, [created.node]);
+  if (created.boundary) await db.query(`DELETE FROM campus_boundary WHERE id = $1`, [created.boundary]);
+});
 
 const FAKE_GOOGLE = `(() => {
   const gm = window.__gm = { maps: 0, markers: [] };
@@ -65,14 +72,16 @@ async function checkoutReady(browser, { google = true } = {}) {
                   contact_phone = '+919999900007', student_status = 'approved' WHERE id = $1`, [person.id]);
   /* A test campus outline and one named delivery point, if none exists yet. */
   const site = (await db.query(`SELECT id FROM campus_site ORDER BY created_at LIMIT 1`)).rows[0].id;
-  await db.query(`INSERT INTO campus_boundary (name, polygon, campus_site_id, status, active, source, verified_at)
+  const b = await db.query(`INSERT INTO campus_boundary (name, polygon, campus_site_id, status, active, source, verified_at)
                   VALUES ('Test Campus', $1, $2, 'active', true, 'browser test fixture', now())
-                  ON CONFLICT (campus_site_id) WHERE status = 'active' DO NOTHING`,
+                  ON CONFLICT (campus_site_id) WHERE status = 'active' DO NOTHING RETURNING id`,
   [JSON.stringify([[30.410, 77.960], [30.410, 77.975], [30.422, 77.975], [30.422, 77.960]]), site]);
+  if (b.rows[0]) created.boundary = created.boundary || b.rows[0].id;
   const has = (await db.query(`SELECT 1 FROM campus_node WHERE name = 'Map Lawn' AND campus_site_id = $1`, [site])).rowCount;
   if (!has) {
-    await db.query(`INSERT INTO campus_node (campus_site_id, kind, name, deliverable, delivery_enabled, lat, lng, verification, radius_m)
-                    VALUES ($1,'zone','Map Lawn',true,true,30.4160,77.9680,'confirmed',60)`, [site]);
+    const n = await db.query(`INSERT INTO campus_node (campus_site_id, kind, name, deliverable, delivery_enabled, lat, lng, verification, radius_m)
+                    VALUES ($1,'zone','Map Lawn',true,true,30.4160,77.9680,'confirmed',60) RETURNING id`, [site]);
+    created.node = n.rows[0].id;
   }
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, geolocation: INSIDE, permissions: ['geolocation'] });
   await signInAs(context, person.id, 'code');
