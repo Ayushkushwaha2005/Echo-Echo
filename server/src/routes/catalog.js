@@ -65,7 +65,7 @@ export default async function catalogRoutes(app) {
     const campusId = req.query?.campusId || null;
     const { rows } = await q(
       `SELECT v.id, v.revision, v.slug, v.name, v.kind, v.description, v.photo_asset,
-              v.campus_node_id, v.opens_at, v.closes_at, v.open_days, v.is_open, v.accepting,
+              v.campus_node_id, v.opens_at, v.closes_at, v.open_days, v.is_open, v.accepting, v.manual_availability,
               v.delivery_enabled, v.prep_minutes, v.active, v.campus_site_id,
               cs.name AS campus_name, cs.service_status AS campus_service_status,
               ${RATING} r.vendor_id = v.id AND NOT r.hidden) AS rating
@@ -140,6 +140,12 @@ export default async function catalogRoutes(app) {
                   campus_node_id: b.campusNodeId, opens_at: b.opensAt, closes_at: b.closesAt,
                   is_open: b.isOpen, accepting: b.accepting, prep_minutes: b.prepMinutes,
                   delivery_enabled: b.deliveryEnabled, staff_can_deliver: b.staffCanDeliver };
+    /* Manual availability override: when on, the café's hours are ignored and
+       is_open is the whole answer (services/hours.js). Must be a boolean. */
+    if (b.manualAvailability !== undefined) {
+      if (typeof b.manualAvailability !== 'boolean') throw BadRequest('manualAvailability must be true or false');
+      map.manual_availability = b.manualAvailability;
+    }
     /* Archiving is a separate, admin-only action — an owner cannot make
        their outlet vanish from the platform's records. */
     if (b.active !== undefined) authorize(req.actor, 'vendor.archive');
@@ -214,8 +220,12 @@ export default async function catalogRoutes(app) {
     /* A replaced or removed café photo is deleted from storage. */
     if (oldPhoto && oldPhoto !== row.photo_asset) await removeImage(oldPhoto).catch(() => {});
     await audit(req, { action: 'vendor.update', resource: 'vendor', resourceId: row.id, outcome: 'ok',
-                       detail: { changed: Object.keys(map).filter((k) => map[k] !== undefined) } });
-    return row;
+                       detail: { changed: Object.keys(map).filter((k) => map[k] !== undefined),
+                                 /* Availability changes are recorded with their values. */
+                                 ...(['manual_availability', 'is_open', 'accepting'].some((k) => map[k] !== undefined)
+                                   ? { availability: { manual: row.manual_availability, isOpen: row.is_open,
+                                                       accepting: row.accepting, effective: statusOf(row).state } } : {}) } });
+    return { ...row, ...withStatus(row) };
   });
 
   /* ---------- menu items -------------------------------------------------- */
@@ -526,7 +536,7 @@ export default async function catalogRoutes(app) {
     const { rows } = await q(
       `SELECT i.id, i.name, i.description, i.price_paise, i.veg, i.available,
               i.tags, i.prep_minutes, v.id AS vendor_id, v.name AS vendor_name,
-              v.is_open, v.accepting,
+              v.is_open, v.accepting, v.active AS vendor_active, v.open_days, v.opens_at, v.closes_at, v.manual_availability,
               ${RATING} r.item_id = i.id AND NOT r.hidden) AS rating
          FROM menu_item i JOIN vendor v ON v.id = i.vendor_id
         WHERE i.active AND v.active
@@ -536,7 +546,7 @@ export default async function catalogRoutes(app) {
           AND ($3::int IS NULL OR i.price_paise <= $3)
         ORDER BY i.available DESC, i.price_paise
         LIMIT 40`, [term, `%${term}%`, maxPaise]);
-    return { items: rows.map(shapeRating) };
+    return { items: rows.map((r) => ({ ...shapeRating(r), open_now: statusOf({ ...r, active: r.vendor_active }).open })) };
   });
 }
 

@@ -218,7 +218,9 @@ export function vendorVM(v) {
     ...v,
     mark: initials,
     markBg: MARK_BG[h % MARK_BG.length],
-    open: !!(v.is_open && v.accepting),
+    /* The server's effective answer (schedule or manual override) when it
+       sent one; the raw switches only for data that has no status. */
+    open: v.open_now !== undefined ? !!v.open_now : !!(v.is_open && v.accepting),
     ratingText: ratingLabel(v.rating),
     prep: v.prep_minutes,
   };
