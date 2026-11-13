@@ -40,7 +40,7 @@ export function mountAdminRecover(root, { onDone }) {
         <details class="enrol-key"><summary>Can't scan? Enter the key instead</summary>
           <code class="enrol-secret">${safe(groupKey(enrol.secret))}</code></details>
         <form class="stack" data-rec="complete" novalidate>
-          ${otpField({ label: 'The 6-digit code the app shows now', state: error ? 'error' : 'idle' })}
+          ${otpField({ label: 'The 6-digit code the app shows now', state: error ? 'error' : 'idle', autoSubmit: true })}
           ${errorLine()}
           <button class="auth-btn" type="submit">Replace authenticator</button>
         </form>`;

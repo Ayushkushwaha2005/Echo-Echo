@@ -259,7 +259,6 @@ test('a lost authenticator: recovery codes, password and a new authenticator, th
   await p.locator('.enrol-key summary').click();
   const oldSecret = (await p.locator('.enrol-secret').textContent()).replace(/\s/g, '');
   await p.locator('input[name=code]').fill(totp(oldSecret));
-  await p.getByRole('button', { name: 'Finish setup' }).click();
 
   const signIn = async (secret) => {
     await db.query(`UPDATE admin_credential SET totp_last_step = NULL WHERE user_id = (SELECT id FROM app_user WHERE staff_email = $1)`, [email]);
@@ -268,7 +267,6 @@ test('a lost authenticator: recovery codes, password and a new authenticator, th
     await p.locator('input[type=password]').first().fill(PASSWORD);
     await p.locator('button[type=submit]').first().click();
     await p.locator('input[inputmode=numeric]').first().fill(totp(secret));
-    await p.locator('button[type=submit]').first().click();
   };
   await p.getByRole('button', { name: 'Go to Campus Control sign-in' }).click();
   await signIn(oldSecret);
@@ -296,7 +294,6 @@ test('a lost authenticator: recovery codes, password and a new authenticator, th
   await p.locator('.enrol-key summary').click();
   const newSecret = (await p.locator('.enrol-secret').textContent()).replace(/\s/g, '');
   await p.locator('input[name=code]').fill(totp(newSecret));
-  await p.locator('button[type=submit]').click();
   await expect(p.getByRole('heading', { name: 'Authenticator replaced' })).toBeVisible();
   await lastMailTo(email, /recover|authenticator/i);
 

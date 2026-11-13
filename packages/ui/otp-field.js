@@ -23,6 +23,17 @@
      otpField({ name, label, state, title, help })   markup for a form
      otpSucceeded(scope)  shield + green, resolves after the animation
      otpState(scope, 'idle' | 'loading' | 'error')
+
+   autoSubmit: true (authenticator-only forms). The sixth digit submits the
+   form itself, through the form's own submit handler, so the server call and
+   its rules are exactly the ones a click used to make. The form's submit
+   button is hidden (kept in the page for that handler) and:
+     - one complete code is sent once: the same six digits are not sent again
+       until the code is edited, so a refused code never loops;
+     - nothing is sent while a check is running (Enter, a second paste or a
+       repeated input event are ignored);
+     - a refused code shows the error state; typing clears it and the next
+       complete code is sent.
    ========================================================================== */
 
 const safe = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -36,9 +47,9 @@ const SHIELD = `<svg viewBox="0 0 24 24" width="32" height="32" fill="none" stro
  * The field's markup. `name` is the form field the existing submit handler
  * already reads, so FormData, form.code and input[name=code] keep working.
  */
-export function otpField({ name = 'code', label = '6-digit code', state = 'idle', title = '', help = '', id = '' } = {}) {
+export function otpField({ name = 'code', label = '6-digit code', state = 'idle', title = '', help = '', id = '', autoSubmit = false } = {}) {
   const inputId = id || `otp10-${Math.random().toString(36).slice(2, 9)}`;
-  return `<div class="otp10" data-otp10 data-state="${safe(state)}">
+  return `<div class="otp10" data-otp10 data-state="${safe(state)}"${autoSubmit ? ' data-otp-auto' : ''}>
     <div class="otp10-glow otp10-glow-a" aria-hidden="true"></div>
     <div class="otp10-glow otp10-glow-b" aria-hidden="true"></div>
     <div class="otp10-orb" aria-hidden="true">
@@ -192,15 +203,62 @@ function sphere(el) {
 /* ---------- wiring --------------------------------------------------------
    Each surface renders by setting innerHTML, so a field is upgraded when it
    appears in the document rather than by every caller remembering to. */
+/* The sixth digit sends the code, once. */
+const AUTO_STUCK_MS = 30_000;
+function autoSubmit(el, input, digits) {
+  const form = input.form;
+  if (!form) return;
+  if (digits.length < LENGTH) { el._otpSent = null; return; }
+  if (digits === el._otpSent || el.dataset.state === 'loading' || el.dataset.state === 'success') return;
+  const btn = form.querySelector('button[type=submit]');
+  if (btn?.disabled) return;
+  el._otpSent = digits;
+  otpState(el, 'loading');
+  el._otpFiring = true;
+  try { form.requestSubmit(); } finally { el._otpFiring = false; }
+  /* A surface that neither re-renders nor reports back must not leave the
+     field locked: after a long silence the student can type again. */
+  clearTimeout(el._otpStuck);
+  el._otpStuck = setTimeout(() => { if (el.isConnected && el.dataset.state === 'loading') otpState(el, 'idle'); }, AUTO_STUCK_MS);
+}
+
 function enhance(el) {
   if (el._otp10) return;
   el._otp10 = true;
   const input = el.querySelector('.otp10-input');
+  const auto = el.hasAttribute('data-otp-auto') && !!input.form;
+  if (auto) {
+    const form = input.form;
+    /* The button is the form's submitter for its own handler; it is no longer
+       something to press. */
+    const btn = form.querySelector('button[type=submit]');
+    if (btn) { btn.hidden = true; btn.style.display = 'none'; btn.tabIndex = -1; btn.setAttribute('aria-hidden', 'true'); }
+    /* Enter, or any other submit while a check is running, is not a second
+       request. Capture phase: runs before the surface's own handler. */
+    form.addEventListener('submit', (e) => {
+      if (el._otpFiring) return;
+      const digits = input.value.replace(/\D/g, '');
+      if (el.dataset.state === 'loading' || (digits.length === LENGTH && digits === el._otpSent)) {
+        e.preventDefault(); e.stopImmediatePropagation(); e.stopPropagation();
+        return;
+      }
+      if (digits.length === LENGTH) { el._otpSent = digits; otpState(el, 'loading'); }
+    }, true);
+    /* Ready to type as soon as the step opens, unless the person is already
+       typing somewhere else. */
+    queueMicrotask(() => {
+      const a = document.activeElement;
+      if (!a || a === document.body || !a.matches?.('input, textarea, select, [contenteditable="true"]')) input.focus({ preventScroll: true });
+    });
+    /* A code already there (autofill before this ran) counts too. */
+    if (input.value) queueMicrotask(() => autoSubmit(el, input, input.value.replace(/\D/g, '').slice(0, LENGTH)));
+  }
   const sync = () => paint(el);
   input.addEventListener('input', () => {
     const digits = input.value.replace(/\D/g, '').slice(0, LENGTH);
     if (digits !== input.value) input.value = digits;
     if (el.dataset.state === 'error') otpState(el, 'idle'); else paint(el);
+    if (auto) autoSubmit(el, input, digits);
   });
   /* A pasted "482 913" or "Your code is 482913" keeps only its digits. */
   input.addEventListener('paste', (e) => {

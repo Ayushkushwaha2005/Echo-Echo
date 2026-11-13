@@ -142,7 +142,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
           <h1 class="auth-title">Authenticator code</h1>
           <p class="auth-sub">Enter the 6-digit code for ${safe(email)} from your authenticator app.</p>
 
-          ${otpField({ label: 'Authenticator code', state: error ? 'error' : 'idle' })}
+          ${otpField({ label: 'Authenticator code', state: error ? 'error' : 'idle', autoSubmit: true })}
 
           ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
           <button class="auth-btn" type="submit">Sign in</button>
@@ -166,7 +166,9 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
       } catch (err) {
         /* A challenge that has timed out or run out of attempts is spent, and
            the only way on is to prove the password again. */
-        if (err instanceof ApiError && /timed out|attempts/i.test(`${err.message} ${err.detail || ''}`)) {
+        /* Only these end the challenge. "That code is not right ... 4 attempts
+           remaining" does not: the person corrects the code on this screen. */
+        if (err instanceof ApiError && /timed out|expired|no attempts remaining|too many/i.test(`${err.message} ${err.detail || ''}`)) {
           challenge = null;
           return render('admin', { error: message(err) });
         }
