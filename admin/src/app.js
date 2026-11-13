@@ -20,6 +20,7 @@ import { lockup, mark } from '../../brand/logo.js';
 import { API_BASE, ApiError } from '../../packages/data/client.js';
 import { ORDER_TABS, TAB_STATE, orderActions, avatarFor, chartGeometry } from '../../packages/ui/order-view.js';
 import { qrSvg, groupKey } from '../../packages/ui/admin-enrol.js';
+import { otpField, otpState, otpSucceeded } from '../../packages/ui/otp-field.js';
 import { passwordStrength } from '../../packages/ui/password-strength.js';
 import { cropImage } from '../../packages/ui/image-crop.js';
 import { mountChat } from '../../packages/ui/team-chat.js';
@@ -4222,9 +4223,8 @@ const pwField = (name, label, auto) => `
   <label class="field"><span class="t-label">${esc(label)}</span>
     <span class="pw-wrap"><input class="input" type="password" name="${name}" autocomplete="${auto}" required>
       <button type="button" class="pw-toggle" data-act="pwToggle" aria-label="Show ${esc(label.toLowerCase())}" aria-pressed="false">Show</button></span></label>`;
-const codeField = (name = 'code', label = 'Code from your authenticator app') => `
-  <label class="field"><span class="t-label">${esc(label)}</span>
-    <input class="input code-input" name="${name}" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>`;
+/* Every authenticator code on the profile uses the platform's one OTP field. */
+const codeField = (name = 'code', label = 'Code from your authenticator app') => otpField({ name, label });
 
 async function scrProfile() {
   setTitle('My Profile', 'Your own account and sign-in. Only you can change these.');
@@ -4380,16 +4380,19 @@ async function pfSubmit(form) {
       if (data.password !== data.again) throw new Error('The two new passwords are not the same.');
       if (String(data.password).length < 12) throw new Error('The new password needs at least 12 characters.');
       await quad.setAdminPassword({ password: data.password, currentPassword: data.currentPassword, code: String(data.code || '').replace(/\D/g, '') });
-      form.reset(); paintMeter('');
+      await otpSucceeded(form);
+      form.reset(); form.code?.dispatchEvent(new Event('input')); otpState(form, 'idle'); paintMeter('');
       msg('pf-pw-msg', 'Password changed. Your other sessions were signed out.');
     } else if (kind === 'pfReplaceMe') {
       await quad.adminReauth(data.password, String(data.code || '').replace(/\D/g, ''));
+      await otpSucceeded(form);
       const out = await quad.beginAuthenticator();
       P.replace = { step: 'scan', secret: out.secret, qr: await qrSvg(out.uri) };
       paintReplace();
       return;
     } else if (kind === 'pfReplaceNew') {
       await quad.confirmAuthenticator(String(data.code || '').replace(/\D/g, ''));
+      await otpSucceeded(form);
       P.replace = null;
       toast('New authenticator confirmed. The old one no longer works, and your other sessions were signed out.');
       return scrProfile();
@@ -4397,6 +4400,7 @@ async function pfSubmit(form) {
   } catch (e) {
     const where = { pfName: 'pf-name-msg', pfNewPw: 'pf-pw-msg', pfReplaceMe: 'pf-rep-msg', pfReplaceNew: 'pf-rep-msg' }[kind];
     msg(where, explain(e), true);
+    if (form.code) otpState(form, 'error');
   } finally {
     if (document.body.contains(btn)) btn.disabled = false;
   }

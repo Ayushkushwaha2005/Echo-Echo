@@ -16,6 +16,7 @@ import { quad, ApiError } from '../data/client.js';
 import { lockup } from '../../brand/logo.js';
 import { qrSvg, groupKey } from './admin-enrol.js';
 import { passwordStrength } from './password-strength.js';
+import { otpField, otpSucceeded } from './otp-field.js';
 
 const safe = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const message = (e) => (e instanceof ApiError ? (e.detail ? `${e.message} — ${e.detail}` : e.message) : e?.message || 'Something went wrong. Try again.');
@@ -58,8 +59,7 @@ export async function mountAdminInvite(root, { token, onDone }) {
         return `<h1 class="auth-title">Enter the code</h1>
           <p class="auth-sub">We sent a 6-digit code to <b>${safe(opened.email)}</b>. It expires in 10 minutes.</p>
           <form class="stack" data-inv-form="code" novalidate>
-            <label class="auth-field"><span class="auth-label">Code from your email</span>
-              <input class="auth-input auth-code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>
+            ${otpField({ label: 'Code from your email', state: busy ? 'loading' : error ? 'error' : 'idle' })}
             ${errorLine()}
             <button class="auth-btn" type="submit" ${busy ? 'disabled' : ''}>Continue</button>
           </form>
@@ -100,8 +100,7 @@ export async function mountAdminInvite(root, { token, onDone }) {
             <p class="auth-fine">Choose <b>Enter code manually</b>. Account name: ${safe(enrol.issuer)}. Time-based, 6 digits.</p>
             <code class="enrol-secret">${safe(groupKey(enrol.secret))}</code></details>
           <form class="stack" data-inv-form="complete" novalidate>
-            <label class="auth-field"><span class="auth-label">The 6-digit code the app shows now</span>
-              <input class="auth-input auth-code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>
+            ${otpField({ label: 'The 6-digit code the app shows now', state: busy ? 'loading' : error ? 'error' : 'idle' })}
             ${errorLine()}
             <button class="auth-btn" type="submit" ${busy ? 'disabled' : ''}>Finish setup</button>
           </form>` : `<h1 class="auth-title">Add your authenticator</h1>
@@ -164,6 +163,7 @@ export async function mountAdminInvite(root, { token, onDone }) {
         const code = String(data.code || '').replace(/\D/g, '');
         if (code.length !== 6) throw new Error('Enter the 6 digits from your email.');
         const out = await quad.invitationVerifyCode(token, code);
+        await otpSucceeded(root);
         setup = out.setup; details = out; step = 'review';
       } else if (f.dataset.invForm === 'password') {
         if (data.password !== data.again) throw new Error('The two passwords are not the same.');
@@ -173,6 +173,7 @@ export async function mountAdminInvite(root, { token, onDone }) {
         const code = String(data.code || '').replace(/\D/g, '');
         if (code.length !== 6) throw new Error('Enter the 6 digits the app is showing.');
         await quad.invitationComplete(token, setup, code);
+        await otpSucceeded(root);
         enrol = null; step = 'done';
       }
     });

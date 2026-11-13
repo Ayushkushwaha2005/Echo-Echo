@@ -22,6 +22,7 @@ import { quad, ApiError, Offline, rupees, ratingLabel, staffRequests } from '../
    route the server lacks is named as such (packages/data/client.js). */
 staffRequests();
 import { esc } from './kit.js';
+import { otpField, otpState, otpSucceeded } from './otp-field.js';
 import { mark as logoMark, lockup } from '../../brand/logo.js';
 
 export { quad, ApiError, Offline, rupees, ratingLabel };
@@ -46,8 +47,7 @@ export function adminReauth({ reason = 'This change needs you to confirm it is y
         <div class="modal-body">
           <label class="field"><span class="t-label">Password</span>
             <input class="input" type="password" name="password" autocomplete="current-password" required></label>
-          <label class="field"><span class="t-label">Authenticator code</span>
-            <input class="input code-input" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>
+          ${otpField({ label: 'Authenticator code' })}
           <p class="reauth-error" role="alert" hidden></p>
         </div>
         <div class="modal-foot">
@@ -71,10 +71,12 @@ export function adminReauth({ reason = 'This change needs you to confirm it is y
       btn.disabled = true;
       try {
         const out = await quad.adminReauth(password, code);
+        await otpSucceeded(form);
         close(); resolve(out);
       } catch (x) {
         err.hidden = false; err.textContent = explain(x); btn.disabled = false;
-        form.code.value = ''; form.code.focus();
+        form.code.value = ''; form.code.dispatchEvent(new Event('input'));
+        otpState(form, 'error'); form.code.focus();
       }
     });
     document.body.append(wrap);
