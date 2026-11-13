@@ -1751,6 +1751,21 @@ function ShareStatus() {
    drawn instead, for the rest of the visit. */
 const partnerMap = { el: null, ctl: null, failed: false };
 let lastFix = null;
+/* Google refused the key, ran out of quota or failed after a map was drawn:
+   every Google map on this page goes back to OpenStreetMap, and the screen
+   is drawn again so the student can still choose their spot and the partner
+   still sees the delivery. */
+let watchingGoogle = false;
+function watchGoogle(mod) {
+  if (watchingGoogle) return;
+  watchingGoogle = true;
+  mod.onGoogleFailure(() => {
+    googlePickerFailed = true;
+    partnerMap.failed = true; partnerMap.el = null; partnerMap.ctl = null;
+    if (picker?.ctl?.provider === 'google') picker = null;
+    render();
+  });
+}
 async function paintPartnerGoogle(slot, t, note) {
   if (partnerMap.failed) return false;
   if (!partnerMap.el) {
@@ -1762,6 +1777,7 @@ async function paintPartnerGoogle(slot, t, note) {
   let mod;
   try {
     mod = await loadModule(() => import('../../packages/ui/map-google.js'), import.meta.url);
+    watchGoogle(mod);
     if (!partnerMap.ctl) partnerMap.ctl = await mod.createLiveMap(partnerMap.el, t.maps, { boundary: t.boundary });
   } catch {
     partnerMap.failed = true; partnerMap.el = null; partnerMap.ctl = null;
@@ -1876,8 +1892,9 @@ async function paintPicker() {
     let ctl = null;
     if (S.campusMap.maps?.provider === 'google' && !googlePickerFailed) {
       try {
-        const { createPickerMap } = await loadModule(() => import('../../packages/ui/map-google.js'), import.meta.url);
-        ctl = await createPickerMap(host, S.campusMap, { ...pickerState(), onTap: onPickerTap, onSelect: onPickerSelect });
+        const gmod = await loadModule(() => import('../../packages/ui/map-google.js'), import.meta.url);
+        watchGoogle(gmod);
+        ctl = await gmod.createPickerMap(host, S.campusMap, { ...pickerState(), onTap: onPickerTap, onSelect: onPickerSelect });
       } catch {
         /* Google unreachable, key refused, or no WebGL: the OpenStreetMap
            picker instead, for the rest of this visit. */
