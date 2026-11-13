@@ -1717,7 +1717,7 @@ function ShareStatus() {
   const status = share.status;
   if (status === 'idle' || status === 'starting') {
     return `<div class="campusnote">${Ico(I.pin, 18)}<div class="stack g2">
-      <p class="t-xs" style="color:var(--text-2)">Share your location so the student can see their food coming. It goes only to this student (after pickup) and to ECHO ECHO staff allowed to see the live map, only during this delivery, and no location history is kept.</p>
+      <p class="t-xs" style="color:var(--text-2)">Share your location so the student can see their food coming. It goes only to this student (after pickup) and to ECHO ECHO staff allowed to see the live map, and only during this delivery. ECHO ECHO keeps a short record of this delivery (where it was picked up and dropped, a coarse trail of the walk and your last position) for 30 days, for support; it is then deleted. Nothing is recorded after the delivery ends.</p>
       ${e ? `<p class="t-xs" role="alert" style="color:var(--text-2)">${esc(e.message)}</p>` : ''}
       <button class="btn btn-primary btn-sm" style="align-self:flex-start" data-act="startLocation" ${status === 'starting' ? 'disabled' : ''}>${status === 'starting' ? 'Starting…' : 'Start sharing'}</button></div></div>`;
   }

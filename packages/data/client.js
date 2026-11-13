@@ -344,6 +344,9 @@ export const quad = {
   tracking: (orderId) => get(`/orders/${orderId}/tracking`),
   /* Campus Control's fleet map (delivery.track). */
   deliveryFleet: () => get('/admin/deliveries/fleet'),
+  deliveryRecord: (orderId) => get(`/admin/deliveries/${orderId}/record`),
+  /* Which map Campus Control draws; any signed-in administrator. */
+  adminMaps: () => get('/admin/maps'),
   trackingTicket: (orderId) => post(`/orders/${orderId}/tracking/ticket`),
   myDataExport: () => get('/me/data-export'),
   myDeletionRequest: () => get('/me/deletion-request'),

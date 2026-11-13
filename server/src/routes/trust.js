@@ -178,10 +178,9 @@ export default async function trustRoutes(app) {
 
   const streamPhoto = async (reply, assetId) => {
     if (!assetId) throw NotFound('No photo');
-    const got = await getImage(assetId);
+    const got = await getImage(assetId, { stream: true });
     if (!got) throw NotFound('No photo');
     reply.header('Cache-Control', 'private, max-age=300');
-    if (got.url) return reply.redirect(got.url);
     return reply.type(got.asset.mime).send(got.bytes);
   };
 
@@ -348,7 +347,7 @@ export default async function trustRoutes(app) {
   app.get('/admin/deposit-refunds', async (req) => {
     authorize(req.actor, 'deposit.read');
     const { rows } = await q(
-      `SELECT r.*, u.name AS partner_name FROM deposit_refund_request r JOIN app_user u ON u.id = r.partner_id
+      `SELECT r.*, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS partner_name FROM deposit_refund_request r JOIN app_user u ON u.id = r.partner_id
         WHERE ($1 = 'all' OR r.state = $1) ORDER BY r.requested_at DESC LIMIT 100`,
       [req.query?.state || 'requested']);
     for (const r of rows) r.balance_paise = await depositBalance(r.partner_id);
@@ -574,7 +573,7 @@ export default async function trustRoutes(app) {
   app.get('/admin/incidents/:id/events', async (req) => {
     authorize(req.actor, 'incident.read');
     const { rows } = await q(
-      `SELECT e.id, e.event, e.detail, e.created_at, u.name AS actor_name
+      `SELECT e.id, e.event, e.detail, e.created_at, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS actor_name
          FROM delivery_incident_event e LEFT JOIN app_user u ON u.id = e.actor_id
         WHERE e.incident_id = $1 ORDER BY e.id`, [req.params.id]);
     return { events: rows };
@@ -584,8 +583,8 @@ export default async function trustRoutes(app) {
   app.get('/admin/deductions', async (req) => {
     authorize(req.actor, 'deposit.read');
     const { rows } = await q(
-      `SELECT d.*, u.name AS partner_name, o.code AS order_code, i.code AS incident_code,
-              pb.name AS proposed_by_name, rb.name AS reviewed_by_name
+      `SELECT d.*, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS partner_name, o.code AS order_code, i.code AS incident_code,
+              COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = pb.id), pb.name) AS proposed_by_name, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = rb.id), rb.name) AS reviewed_by_name
          FROM deposit_deduction d JOIN app_user u ON u.id = d.partner_id
          JOIN food_order o ON o.id = d.order_id JOIN delivery_incident i ON i.id = d.incident_id
          JOIN app_user pb ON pb.id = d.proposed_by LEFT JOIN app_user rb ON rb.id = d.reviewed_by

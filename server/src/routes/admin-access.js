@@ -78,7 +78,7 @@ function effective(row) {
 
 const ADMIN_LIST_SQL = `
   SELECT u.id, COALESCE(pr.display_name, u.name) AS name, coalesce(u.staff_email, u.student_email) AS email, u.status AS account_status,
-         pr.photo_asset IS NOT NULL AS has_photo,
+         pr.photo_asset IS NOT NULL AS has_photo, extract(epoch FROM pr.updated_at)::bigint AS photo_version,
          coalesce(a.status, CASE WHEN r.roles IS NOT NULL THEN 'active' END) AS status,
          a.permissions, a.invited_at, a.activated_at, a.suspended_at, a.revoked_at, a.status_reason,
          a.permissions_updated_at, COALESCE(ibp.display_name, ib.name) AS invited_by_name, r.roles,

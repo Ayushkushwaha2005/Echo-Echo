@@ -28,6 +28,7 @@ import { sessionHandle } from '../services/device.js';
 import { credentialStatus } from '../services/admin-auth.js';
 import { putImage, getImage, removeImage } from '../services/storage.js';
 import { audit } from '../audit.js';
+import { mapsConfig } from '../services/maps.js';
 
 const ROLE_LABEL = { platform_owner: 'Owner', platform_admin: 'Administrator', support: 'Support' };
 
@@ -144,16 +145,22 @@ export default async function adminProfileRoutes(app) {
     return { hasPhoto: false };
   });
 
+  /* Which map Campus Control draws (Google or OpenStreetMap). The browser
+     key is the public, site-locked one; the Routes key never leaves the server. */
+  app.get('/admin/maps', async (req) => {
+    me(req);
+    return mapsConfig();
+  });
+
   /* Administrators' photos are for other administrators, nobody else. */
   app.get('/admin/photos/:userId', async (req, reply) => {
     me(req);
     if (!/^[0-9a-f-]{36}$/i.test(req.params.userId)) throw NotFound('No photo');
     const p = await one(`SELECT photo_asset FROM admin_profile WHERE user_id = $1`, [req.params.userId]);
     if (!p?.photo_asset) throw NotFound('No photo');
-    const got = await getImage(p.photo_asset);
+    const got = await getImage(p.photo_asset, { stream: true });
     if (!got) throw NotFound('No photo');
     reply.header('Cache-Control', 'private, max-age=300');
-    if (got.url) return reply.redirect(got.url);
     return reply.type(got.asset.mime).send(got.bytes);
   });
 

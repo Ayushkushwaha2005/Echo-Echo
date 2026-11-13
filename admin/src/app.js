@@ -1112,7 +1112,7 @@ async function scrAdmins() {
           const btn = (act, label, extra = '') =>
             `<button class="btn btn-ghost btn-sm" data-act="${act}" data-id="${a.id}" data-name="${esc(a.name || a.email || '')}" ${extra}>${label}</button>`;
           return [
-            `<b>${esc(a.name || '—')}</b><div class="t-xs muted">${esc(a.email || '—')}</div>`,
+            `<div class="row" style="gap:10px;align-items:center;flex-wrap:nowrap">${AdminAvatar(a)}<div><b>${esc(a.name || '—')}</b><div class="t-xs muted">${esc(a.email || '—')}</div></div></div>`,
             a.isOwner ? '<span class="badge badge-ink">Owner</span>'
               : `<span class="badge ${ADMIN_BADGE[a.status] || ''}">${esc(a.status)}</span>${a.status_reason ? `<div class="t-xs faint">${esc(a.status_reason)}</div>` : ''}`,
             a.isOwner ? 'All' : `${a.effective.permissions.length}${a.effective.source === 'role_default' ? ' <span class="t-xs faint">(role default)</span>' : ''}`,
@@ -1406,10 +1406,39 @@ async function scrLocations() {
     </section>`;
   }, { label: 'Loading campus' });
   const mapEl = document.getElementById('campus-map');
-  if (loaded && mapEl) {
-    const { drawCampusMap } = await import('../../packages/ui/map.js');
-    await drawCampusMap(mapEl, { nodes: loaded.tree, boundaries: loaded.boundaries });
+  if (loaded && mapEl) await paintCampusMap(mapEl, { nodes: loaded.tree, boundaries: loaded.boundaries });
+}
+
+/* Locations map: Google Maps when the server says so (GET /admin/maps), kept
+   for the visit and re-attached on reload so a reload is not a new map load;
+   the OpenStreetMap map otherwise, or if Google fails at any point. */
+const campusGmap = { el: null, ctl: null, failed: false };
+async function paintCampusMap(slot, data) {
+  if (!campusGmap.failed) {
+    try {
+      const cfg = await quad.adminMaps();
+      if (cfg?.provider === 'google') {
+        const gmod = await import('../../packages/ui/map-google.js');
+        if (!campusGmap.ctl) {
+          gmod.onGoogleFailure(() => {
+            campusGmap.failed = true; campusGmap.el = null; campusGmap.ctl = null;
+            const s = document.getElementById('campus-map');
+            if (s) paintCampusMap(s, data);
+          });
+          campusGmap.el = document.createElement('div');
+          campusGmap.el.className = 'cc-campus-gmap';
+          slot.replaceChildren(campusGmap.el);
+          campusGmap.ctl = await gmod.createCampusMap(campusGmap.el, cfg, data);
+        } else {
+          slot.replaceChildren(campusGmap.el);
+          campusGmap.ctl.update(data);
+        }
+        return;
+      }
+    } catch { campusGmap.failed = true; campusGmap.el = null; campusGmap.ctl = null; slot.replaceChildren(); }
   }
+  const { drawCampusMap } = await import('../../packages/ui/map.js');
+  await drawCampusMap(slot, data);
 }
 
 /* A to-scale outline of a boundary, so a transposed point or a stray digit
@@ -3981,6 +4010,7 @@ async function scrDeliveries() {
       return t?.partnerVisibility !== 'restricted' && (!t?.partner || t.partner.ageSeconds > FRESH_S);
     }).length;
     const mapped = session.can('delivery.track') ? [...d.onway, ...d.assigned] : [];
+    const showMap = session.can('delivery.track');
     const rows = (list, carrying) => list.map((o) => [
       `<b>${esc(o.code)}</b><div class="t-xs muted">${when(o.created_at)}</div>`,
       esc(o.vendor_name), esc(o.customer_name || '—'),
@@ -3999,8 +4029,8 @@ async function scrDeliveries() {
         ${statCard('bag', 'Waiting for a partner', d.waiting.length, 'confirmed delivery orders')}
         ${statCard('pulse', 'Position not fresh', stale, `older than ${FRESH_S} s, or not shared`, stale ? 'warn' : '')}
       </div>
-      ${mapped.length ? `<section class="card card-pad cc-section">
-        <h2 class="cc-h">Live map</h2>
+      ${showMap ? `<section class="card card-pad cc-section">
+        <h2 class="cc-h">Fleet map</h2>
         <div id="cc-fleet-slot" data-order="${esc(trackSelected(mapped))}" role="region" aria-label="Map of deliveries being carried"></div>
         <div id="cc-fleet-alerts" aria-live="polite"></div>
         <p class="t-xs faint" id="cc-track-note" aria-live="polite"></p>
@@ -4083,13 +4113,23 @@ function paintFleetAlerts(data) {
   const box = document.getElementById('cc-fleet-alerts');
   const note = document.getElementById('cc-track-note');
   if (!box) return;
-  const list = data.deliveries || [];
-  box.innerHTML = list.length ? `<ul class="cc-fleet-list">${list.map((d) => `<li>
+  const all = data.deliveries || [];
+  const group = (title, list, row) => (list.length ? `<h3 class="t-label" style="margin-top:10px">${esc(title)} (${list.length})</h3><ul class="cc-fleet-list">${list.map(row).join('')}</ul>` : '');
+  const waitRow = (d) => `<li><button type="button" class="btn btn-ghost btn-sm" data-act="trackOnMap" data-id="${esc(d.orderId)}"><b>${esc(d.code)}</b></button>
+      <span class="t-xs">${esc(d.stage)} · ${esc(d.vendorName)} → ${esc(d.destination?.name || 'drop not mapped')}${d.cafeRoute?.distanceM ? ` · ${esc(Math.round(d.cafeRoute.distanceM))} m walk` : ''}</span></li>`;
+  const doneRow = (d) => `<li><button type="button" class="btn btn-ghost btn-sm" data-act="fleetRecord" data-id="${esc(d.orderId)}"><b>${esc(d.code)}</b></button>
+      <span class="t-xs">${esc(d.stage)} ${d.endedAt ? `at ${esc(new Date(d.endedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}` : ''} · ${esc(d.partnerName || 'Partner')}${d.record ? ` · record: ${esc(d.record.trailPoints)} trail points${d.record.finalPosition ? ', last position saved' : ''}` : ' · no location record (sharing was not on, or before records were kept)'}</span></li>`;
+  const list = all.filter((d) => d.kind === 'active');
+  box.innerHTML = (list.length ? `<h3 class="t-label" style="margin-top:10px">Being carried (${list.length})</h3><ul class="cc-fleet-list">${list.map((d) => `<li>
       <button type="button" class="btn btn-ghost btn-sm" data-act="trackOnMap" data-id="${esc(d.orderId)}"><b>${esc(d.code)}</b></button>
       <span class="t-xs">${esc(d.partnerName || 'Partner')} · ${esc(ORDER_LABEL[d.state] || d.state)} · ${esc(fleetAge(d.partner?.ageSeconds))}${d.route?.distanceM ? ` · ${esc(Math.round(d.route.distanceM))} m, about ${esc(Math.max(1, Math.round(d.route.durationS / 60)))} min walk left` : ''}</span>
       ${(d.alerts || []).map((a) => `<span class="badge ${a.level === 'bad' ? 'badge-danger' : 'badge-warn'}">${esc(a.text)}</span>`).join(' ')}
-    </li>`).join('')}</ul>` : '';
-  if (note) note.textContent = `Google Maps, walking routes. Positions refresh every ${FLEET_POLL_MS / 1000} s while this page is open; a route is fetched once per leg and reused. Updated ${new Date(data.at).toLocaleTimeString()}.`;
+    </li>`).join('')}</ul>` : '')
+    + group('Waiting for a partner', all.filter((d) => d.kind === 'waiting'), waitRow)
+    + group(`Finished in the last ${data.completedHours || 24} h`, all.filter((d) => d.kind === 'completed'), doneRow)
+    + (all.length ? '' : '<p class="t-xs faint">No deliveries in progress, waiting or finished recently.</p>');
+  if (note) note.textContent = `Purple: café to drop (Google walking route, Google's recommended route, not necessarily the shortest). Blue: the partner's current walking leg. Grey dashes: a finished delivery's recorded trail (kept ${data.retentionDays || 30} days).`;
+  if (note) note.textContent += ` Google Maps, walking routes. Positions refresh every ${FLEET_POLL_MS / 1000} s while this page is open; a route is fetched once per leg and reused. Updated ${new Date(data.at).toLocaleTimeString()}.`;
 }
 
 /* The delivery shown on the map: the one chosen, or the first being carried. */
@@ -4226,6 +4266,16 @@ Object.assign(ACTIONS, WZ_ACTIONS, {
     if (!m.hidden) m.querySelector('button')?.focus();
   },
   deliveriesRefresh: () => scrDeliveries(),
+  /* A finished delivery: its saved record on the same map (never a live marker). */
+  fleetRecord: (t) => act(t, async () => {
+    const r = await quad.deliveryRecord(t.dataset.id);
+    if (!fleet.ctl || !fleet.data) return;
+    const list = fleet.data.deliveries.map((d) => (d.orderId === r.orderId ? { ...d, record: r.record } : d));
+    fleet.data = { ...fleet.data, deliveries: list };
+    fleet.ctl.update(list);
+    fleet.ctl.focus(r.orderId);
+    document.getElementById('cc-fleet-slot')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }),
   trackOnMap: (t) => { trackChoice = t.dataset.id; if (fleet.ctl && document.getElementById('cc-fleet-slot')) { fleet.ctl.focus(trackChoice); document.getElementById('cc-fleet-slot').scrollIntoView({ behavior: 'smooth', block: 'center' }); return; } const el = document.getElementById('cc-track-map'); if (el) { el.dataset.order = trackChoice; paintTrackMap(); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } },
   decideApproval: (t) => modal(`${t.dataset.v === 'approve' ? 'Approve' : 'Reject'}: ${t.dataset.name}`,
     `<p class="t-sm muted">${t.dataset.v === 'approve' ? 'The server re-checks the current state, then carries this out now.' : 'Nothing will be done.'}</p>${textarea('note', 'Note (optional)')}`,
@@ -4279,6 +4329,13 @@ const EVENT_LABEL = {
 /* The signed-in administrator, as every part of the shell shows them. */
 const myName = () => session.me.adminProfile?.displayName || session.me.user.name || session.me.user.studentEmail || 'Administrator';
 const photoBust = { v: 0 };
+/* Any administrator's small round photo, from the same photo My Profile saves;
+   initials when there is none or it fails to load. photo_version changes when
+   they change it, so the new one shows without waiting for a cache. */
+function AdminAvatar(a, size = 30) {
+  const img = a.has_photo ? `<img src="${esc(quad.adminPhotoUrl(a.id))}?v=${esc(a.photo_version || 0)}" alt="" data-fallback="hide" loading="lazy">` : '';
+  return `<span class="cc-avatar" style="width:${size}px;height:${size}px;border-radius:50%;font-size:11px;flex:none" aria-hidden="true">${esc(initialsOf(a.name || a.email || 'A'))}${img}</span>`;
+}
 function AvatarOf({ size = 38, cls = 'cc-avatar' } = {}) {
   const n = myName();
   const img = session.me.adminProfile?.hasPhoto
@@ -4322,7 +4379,6 @@ async function scrProfile() {
           <div><dt>Account created</dt><dd>${esc(fmtDate(p.memberSince))}</dd></div>
           ${p.adminSince ? `<div><dt>Administrator since</dt><dd>${esc(fmtDate(p.adminSince))}</dd></div>` : ''}
           <div><dt>Access</dt><dd>${p.isOwner ? 'Everything, including owner-only settings' : `${p.permissionsCount} permission${p.permissionsCount === 1 ? '' : 's'}, set by the owner`}</dd></div>
-          <div><dt>Name on the student account</dt><dd>${esc(p.accountName || '—')}</dd></div>
         </dl>
       </section>
 

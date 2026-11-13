@@ -76,7 +76,7 @@ export async function listApprovals({ status } = {}) {
   await expireStale();
   const { rows } = await q(
     `SELECT a.id, a.action_type, a.summary, a.reason, a.status, a.requested_at, a.expires_at, a.decided_at, a.decision_note,
-            a.executed_at, a.result, a.requested_by, r.name AS requested_by_name, d.name AS decided_by_name
+            a.executed_at, a.result, a.requested_by, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = r.id), r.name) AS requested_by_name, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = d.id), d.name) AS decided_by_name
        FROM approval_request a JOIN app_user r ON r.id = a.requested_by LEFT JOIN app_user d ON d.id = a.decided_by
       WHERE ($1::text IS NULL OR a.status = $1) ORDER BY a.requested_at DESC LIMIT 100`, [status || null]);
   return rows;

@@ -33,7 +33,11 @@ import {
 } from '../services/partner-location.js';
 import { publishPosition } from '../services/live.js';
 import { mapsConfig } from '../services/maps.js';
-import { routeForOrder } from '../services/routing.js';
+import { recordPoint } from '../services/delivery-trace.js';
+import { RETENTION } from '../config.js';
+import { routeForOrder, pairRoute, pairPath, metresAlong } from '../services/routing.js';
+/* A person's name as Campus Control shows it: their chosen display name, else the account name. */
+const PERSON = (u) => `COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = ${u}.id), ${u}.name)`;
 import { alertsFor, noteMovement, stillSince, forgetMovement } from '../services/delivery-alerts.js';
 import { tx } from '../db/index.js';
 
@@ -128,6 +132,7 @@ export default async function trackingRoutes(app) {
       [req.actor.id, o.id, r.lat, r.lng, r.accuracy, r.takenAt]);
     if (!stored.rowCount) throw Conflict('That fix is older than the last one', 'It was ignored.');
     noteMovement(req.actor.id, o.id, r);
+    await recordPoint(o.id, req.actor.id, r, { log: req.log });
     publishPosition(o.id);
     return { recorded: true };
   });
@@ -144,7 +149,7 @@ export default async function trackingRoutes(app) {
      Status and a first name, for the counter. No position, ever. */
   app.get('/orders/:id/delivery-status', async (req) => {
     const o = await one(
-      `SELECT o.id, o.code, o.state, o.fulfilment, o.vendor_id, o.partner_id, u.name AS partner_name
+      `SELECT o.id, o.code, o.state, o.fulfilment, o.vendor_id, o.partner_id, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS partner_name
          FROM food_order o LEFT JOIN app_user u ON u.id = o.partner_id WHERE o.id = $1`, [req.params.id]);
     if (!o) throw NotFound('No such order');
     if (!can(req.actor, 'order.read_all') && !(req.actor?.vendorIds?.includes(o.vendor_id) && can(req.actor, 'order.read', { vendorId: o.vendor_id }))) {
@@ -260,49 +265,129 @@ export default async function trackingRoutes(app) {
   });
 
   /* ---------- Campus Control's fleet map ------------------------------------
-     Every delivery being carried, on one map: partner position and age, both
-     ends of the leg, the walking route and the alerts. delivery.track only,
-     exactly like a single order's exact position; each order's view is audited
-     at most once per AUDIT_EVERY_MS, so polling does not flood the log.
-     Partner names need partners.view as on the Live Deliveries table. */
+     One answer for the whole map, delivery.track only (like a single order's
+     exact position), every partner position view audited at most once per
+     AUDIT_EVERY_MS per order. Partner names need partners.view.
+
+       active    assigned / picked_up: live partner position (if shared and
+                 fresh enough), the partner's walking leg, the cafe->drop
+                 route, progress along it, alerts
+       waiting   confirmed / preparing / ready, no partner yet: pickup, drop,
+                 the cafe->drop route
+       completed ended in the last COMPLETED_HOURS: pickup, drop and the
+                 saved record (last position, trail), never a live marker
+
+     Routes come from routing.js caches: polling this costs no Routes request
+     unless a leg changes or a partner leaves the route. */
+  const COMPLETED_HOURS = 24;
+  const WAITING = ['confirmed', 'preparing', 'ready'];
+  const ENDED = ['delivered', 'cancelled', 'refunded'];
+  const STAGE = {
+    confirmed: 'Waiting for a partner', preparing: 'Waiting for a partner', ready: 'Ready, waiting for a partner',
+    assigned: 'Partner heading to the cafe', picked_up: 'Picked up, on the way to the student',
+    delivered: 'Delivered', cancelled: 'Cancelled', refunded: 'Refunded',
+  };
+  const ends = (r) => ({
+    pickup: point({ name: r.pickup_name || r.vendor_name, lat: r.pickup_lat, lng: r.pickup_lng }, 'pickup'),
+    destination: r.dest_lat != null ? point({ name: r.dest_name, lat: r.dest_lat, lng: r.dest_lng }, 'destination')
+      : r.spot_lat != null ? point({ name: 'Delivery spot', lat: r.spot_lat, lng: r.spot_lng }, 'destination') : null,
+  });
+  const FLEET_SQL = (where) => `
+    SELECT o.id, o.code, o.state, o.partner_id, o.destination_snapshot, o.spot_lat, o.spot_lng, o.created_at, o.delivered_at,
+           v.name AS vendor_name, ${PERSON('u')} AS partner_name,
+           pn.name AS pickup_name, pn.lat AS pickup_lat, pn.lng AS pickup_lng,
+           dn.name AS dest_name, dn.lat AS dest_lat, dn.lng AS dest_lng,
+           pl.lat, pl.lng, pl.accuracy_m, pl.at,
+           GREATEST(0, EXTRACT(EPOCH FROM now() - pl.at))::int AS age_seconds,
+           (SELECT max(e.at) FROM order_event e WHERE e.order_id = o.id AND e.to_state = o.state) AS state_since,
+           (SELECT min(e.at) FROM order_event e WHERE e.order_id = o.id AND e.to_state = 'assigned') AS assigned_at,
+           (SELECT min(e.at) FROM order_event e WHERE e.order_id = o.id AND e.to_state = 'picked_up') AS picked_up_at
+      FROM food_order o
+      JOIN vendor v ON v.id = o.vendor_id
+      LEFT JOIN app_user u ON u.id = o.partner_id
+      LEFT JOIN campus_node pn ON pn.id = v.campus_node_id
+      LEFT JOIN campus_node dn ON dn.id = o.destination_id
+      LEFT JOIN partner_location pl ON pl.partner_id = o.partner_id AND pl.order_id = o.id
+     WHERE o.fulfilment = 'delivery' AND ${where}
+     ORDER BY o.created_at
+     LIMIT 100`;
+
   app.get('/admin/deliveries/fleet', async (req) => {
     authorize(req.actor, 'delivery.track');
     const showNames = can(req.actor, 'partner.read');
-    const { rows } = await q(
-      `SELECT o.id, o.code, o.state, o.partner_id, o.destination_snapshot, o.spot_lat, o.spot_lng,
-              v.name AS vendor_name, u.name AS partner_name,
-              pn.name AS pickup_name, pn.lat AS pickup_lat, pn.lng AS pickup_lng,
-              dn.name AS dest_name, dn.lat AS dest_lat, dn.lng AS dest_lng,
-              pl.lat, pl.lng, pl.accuracy_m, pl.at,
-              GREATEST(0, EXTRACT(EPOCH FROM now() - pl.at))::int AS age_seconds,
-              (SELECT max(e.at) FROM order_event e WHERE e.order_id = o.id AND e.to_state = o.state) AS state_since
-         FROM food_order o
-         JOIN vendor v ON v.id = o.vendor_id
-         LEFT JOIN app_user u ON u.id = o.partner_id
-         LEFT JOIN campus_node pn ON pn.id = v.campus_node_id
-         LEFT JOIN campus_node dn ON dn.id = o.destination_id
-         LEFT JOIN partner_location pl ON pl.partner_id = o.partner_id AND pl.order_id = o.id
-        WHERE o.fulfilment = 'delivery' AND o.state::text = ANY($1::text[]) AND o.partner_id IS NOT NULL
-        ORDER BY o.created_at
-        LIMIT 100`, [CARRYING]);
+    const opts = { log: req.log };
+    const [live, waiting, done] = await Promise.all([
+      q(FLEET_SQL(`o.state::text = ANY($1::text[]) AND o.partner_id IS NOT NULL`), [CARRYING]),
+      q(FLEET_SQL(`o.state::text = ANY($1::text[]) AND o.partner_id IS NULL`), [WAITING]),
+      q(FLEET_SQL(`o.state::text = ANY($1::text[]) AND o.partner_id IS NOT NULL
+                   AND COALESCE(o.delivered_at, (SELECT max(e.at) FROM order_event e WHERE e.order_id = o.id)) > now() - ($2 || ' hours')::interval`), [ENDED, String(COMPLETED_HOURS)]),
+    ]);
+    const base = (r, kind) => ({
+      kind, orderId: r.id, code: r.code, state: r.state, stage: STAGE[r.state] || r.state, vendorName: r.vendor_name,
+      partnerId: r.partner_id, partnerName: showNames ? r.partner_name : null,
+      address: r.destination_snapshot || null, ...ends(r),
+      createdAt: r.created_at, assignedAt: r.assigned_at, pickedUpAt: r.picked_up_at, stateSince: r.state_since,
+    });
     const deliveries = [];
-    for (const r of rows) {
-      const pickup = point({ name: r.pickup_name || r.vendor_name, lat: r.pickup_lat, lng: r.pickup_lng }, 'pickup');
-      const destination = r.dest_lat != null ? point({ name: r.dest_name, lat: r.dest_lat, lng: r.dest_lng }, 'destination')
-        : r.spot_lat != null ? point({ name: 'Delivery spot', lat: r.spot_lat, lng: r.spot_lng }, 'destination') : null;
+    for (const r of live.rows) {
+      const d = base(r, 'active');
       const partner = r.lat == null ? null : { lat: Number(r.lat), lng: Number(r.lng),
         accuracyM: r.accuracy_m == null ? null : Number(r.accuracy_m), at: r.at, ageSeconds: Number(r.age_seconds) };
       if (partner) await auditPositionView(req, r.id);
-      const route = await routeForOrder({ orderId: r.id, state: r.state, partner, pickup, destination }, { log: req.log });
-      deliveries.push({
-        orderId: r.id, code: r.code, state: r.state, vendorName: r.vendor_name,
-        partnerId: r.partner_id, partnerName: showNames ? r.partner_name : null,
-        address: r.destination_snapshot || null, pickup, destination, partner, route,
-        stateSince: r.state_since,
-        alerts: alertsFor({ state: r.state, partner, pickup, destination, stateSince: r.state_since,
-                            stillSinceMs: stillSince(r.partner_id, r.id), route }),
-      });
+      d.partner = partner;
+      d.route = await routeForOrder({ orderId: r.id, state: r.state, partner, pickup: d.pickup, destination: d.destination }, opts);
+      d.cafeRoute = await pairRoute(d.pickup, d.destination, opts);
+      /* How far along the cafe->drop route the partner is, once carrying it. */
+      if (r.state === 'picked_up' && partner && d.cafeRoute) {
+        const m = metresAlong(partner, pairPath(d.pickup, d.destination));
+        if (m && m.total > 0) d.progress = { percent: Math.round((100 * m.along) / m.total), metresLeft: Math.round(m.total - m.along) };
+      }
+      d.alerts = alertsFor({ state: r.state, partner, pickup: d.pickup, destination: d.destination,
+        stateSince: r.state_since, stillSinceMs: stillSince(r.partner_id, r.id), route: d.route });
+      deliveries.push(d);
     }
-    return { deliveries, maps: mapsConfig(), at: new Date().toISOString() };
+    for (const r of waiting.rows) {
+      const d = base(r, 'waiting');
+      d.cafeRoute = await pairRoute(d.pickup, d.destination, opts);
+      d.alerts = [];
+      deliveries.push(d);
+    }
+    const traces = done.rows.length ? (await q(
+      `SELECT order_id, final_lat, final_lng, final_at, jsonb_array_length(points) AS points
+         FROM delivery_trace WHERE order_id = ANY($1::uuid[])`, [done.rows.map((r) => r.id)])).rows : [];
+    for (const r of done.rows) {
+      const d = base(r, 'completed');
+      const t = traces.find((x) => x.order_id === r.id);
+      d.endedAt = r.delivered_at || r.state_since;
+      d.record = t ? { finalPosition: t.final_lat == null ? null : { lat: Number(t.final_lat), lng: Number(t.final_lng), at: t.final_at },
+                       trailPoints: Number(t.points) } : null;
+      d.alerts = [];
+      deliveries.push(d);
+    }
+    return { deliveries, maps: mapsConfig(), completedHours: COMPLETED_HOURS,
+             retentionDays: RETENTION.deliveryTraceDays, at: new Date().toISOString() };
+  });
+
+  /* A delivery's saved record, for opening a finished one on the map. The
+     trail is ECHO ECHO's own recorded data; viewing it is audited. */
+  app.get('/admin/deliveries/:id/record', async (req) => {
+    authorize(req.actor, 'delivery.track');
+    const r = (await q(FLEET_SQL('o.id = $1'), [req.params.id])).rows[0];
+    if (!r) throw NotFound('No such delivery');
+    const t = await one(`SELECT * FROM delivery_trace WHERE order_id = $1`, [r.id]);
+    await audit(req, { action: 'delivery.record.view', resource: 'food_order', resourceId: r.id, outcome: 'ok' });
+    return {
+      orderId: r.id, code: r.code, state: r.state, stage: STAGE[r.state] || r.state, vendorName: r.vendor_name,
+      partnerName: can(req.actor, 'partner.read') ? r.partner_name : null,
+      ...ends(r),
+      assignedAt: r.assigned_at, pickedUpAt: r.picked_up_at, endedAt: r.delivered_at || (ENDED.includes(r.state) ? r.state_since : null),
+      record: t ? {
+        trail: (t.points || []).map(([lat, lng, s, acc]) => ({ lat, lng, at: new Date(s * 1000).toISOString(), accuracyM: acc })),
+        finalPosition: t.final_lat == null ? null : { lat: t.final_lat, lng: t.final_lng, accuracyM: t.final_accuracy_m, at: t.final_at },
+        startedAt: t.started_at, endedAt: t.ended_at, deleteAfter: t.purge_after,
+      } : null,
+      /* Live position only while it is being carried, never for a finished one. */
+      live: CARRYING.includes(r.state) && r.lat != null,
+    };
   });
 }

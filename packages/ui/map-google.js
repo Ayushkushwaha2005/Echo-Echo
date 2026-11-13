@@ -76,6 +76,8 @@ const ICONS = {
   pickup: '<path d="M7 3v8a2 2 0 0 0 2 2h0v8M11 3v6M9 3v6M17 21V3c-2 1-3 3-3 6v4h3"/>',
   destination: '<path d="M12 21s-6-5.7-6-11a6 6 0 0 1 12 0c0 5.3-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/>',
   partner: '<circle cx="13" cy="4" r="2"/><path d="M9 21l2-6 3 3v3M7 12l3-4 4 1 3 3M10 8l-1 5"/>',
+  done: '<path d="M5 12l5 5 9-10"/>',
+  final: '<circle cx="12" cy="12" r="4"/>',
 };
 
 function injectStyles() {
@@ -90,6 +92,7 @@ function injectStyles() {
   .eg-pin.partner{background:#2F7D5F;width:34px;height:34px}
   .eg-pin.partner.stale{background:#8C7A7E}.eg-pin.partner.alert{box-shadow:0 0 0 4px rgba(217,119,6,.55),0 2px 6px rgba(0,0,0,.35)}
   .eg-pin.partner.self{background:#2563EB}
+  .eg-pin.done{background:#57534E}.eg-pin.final{background:#A8A29E;width:22px;height:22px}
   .eg-tag{position:absolute;top:36px;left:50%;transform:translateX(-50%);white-space:nowrap;background:#fff;color:#1C1917;
     font:700 11px/1.2 system-ui,sans-serif;padding:2px 7px;border-radius:999px;box-shadow:0 1px 4px rgba(0,0,0,.3)}
   .eg-wrap{position:relative}
@@ -197,34 +200,56 @@ export async function createLiveMap(el, cfg, { center = null, boundary = null, o
     rec.seen = true;
   }
 
-  function drawRoute(d) {
-    let line = lines.get(d.orderId);
-    const path = d.route?.polyline ? geometry.encoding.decodePath(d.route.polyline) : null;
-    if (!path) { line?.setMap(null); lines.delete(d.orderId); return; }
-    const style = { strokeColor: d.alerts?.some((a) => a.code === 'off_route') ? '#D97706' : '#2563EB', strokeOpacity: 0.9, strokeWeight: 5 };
-    if (!line) { line = new Polyline({ map, path, clickable: false, ...style }); lines.set(d.orderId, line); }
-    else { line.setPath(path); line.setOptions(style); }
-    line.seen = true;
+  /* One line per purpose, keyed so a poll moves it in place:
+       :cafe   the cafe -> drop walking route (purple, thin)
+       :leg    the partner's own walking leg right now (blue; amber off route)
+       :trail  a finished delivery's recorded trail (grey dashed) */
+  function line(key, path, style) {
+    let l = lines.get(key);
+    if (!path?.length) { l?.setMap(null); lines.delete(key); return; }
+    if (!l) { l = new Polyline({ map, path, clickable: false, ...style }); lines.set(key, l); }
+    else { l.setPath(path); l.setOptions(style); }
+    l.seen = true;
+  }
+  const decode = (r) => (r?.polyline ? geometry.encoding.decodePath(r.polyline) : null);
+  function drawRoutes(d) {
+    line(`${d.orderId}:cafe`, decode(d.cafeRoute), { strokeColor: '#7C3AED', strokeOpacity: d.kind === 'completed' ? 0.35 : 0.6, strokeWeight: 3 });
+    line(`${d.orderId}:leg`, d.kind === 'active' || !d.kind ? decode(d.route) : null,
+      { strokeColor: d.alerts?.some((a) => a.code === 'off_route') ? '#D97706' : '#2563EB', strokeOpacity: 0.9, strokeWeight: 5 });
+    line(`${d.orderId}:trail`, d.record?.trail?.map((p) => ({ lat: p.lat, lng: p.lng })), {
+      strokeColor: '#57534E', strokeOpacity: 0, strokeWeight: 3,
+      icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 0.9, scale: 3 }, offset: '0', repeat: '12px' }] });
   }
 
+  const when = (t) => (t ? new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '');
   function update(deliveries = [], { selfOrderId = null } = {}) {
     last = deliveries;
     selfOrder = selfOrderId;
     for (const r of markers.values()) r.seen = false;
     for (const l of lines.values()) l.seen = false;
     for (const d of deliveries) {
-      const head = `<b>${esc(d.code || 'Delivery')}${d.partnerName ? ` · ${esc(d.partnerName)}` : ''}</b>`;
+      const head = `<b>${esc(d.code || 'Delivery')}${d.partnerName ? ` · ${esc(d.partnerName)}` : ''}</b>`
+        + `${d.stage ? `${esc(d.stage)}<br>` : ''}${d.vendorName ? `Café: ${esc(d.vendorName)}<br>` : ''}`;
       const walk = walkText(d.route);
+      const done = d.kind === 'completed';
       if (d.pickup) {
         place(`${d.orderId}:pickup`, 'pickup', d.pickup, { label: d.pickup.name, title: `Pick-up: ${d.pickup.name}`,
           html: `${head}Pick-up: ${esc(d.pickup.name)}`, orderId: d.orderId });
       }
       if (d.destination) {
-        place(`${d.orderId}:destination`, 'destination', d.destination, { title: `Drop: ${d.destination.name || ''}`,
-          html: `${head}Drop: ${esc(d.destination.name || 'Delivery spot')}${d.address ? `<br>${esc(typeof d.address === 'string' ? d.address : d.address.label || '')}` : ''}`, orderId: d.orderId });
+        place(`${d.orderId}:destination`, done ? 'done' : 'destination', d.destination, { title: `Drop: ${d.destination.name || ''}`,
+          html: `${head}Drop: ${esc(d.destination.name || 'Delivery spot')}${d.address ? `<br>${esc(typeof d.address === 'string' ? d.address : d.address.label || d.address.name || '')}` : ''}`
+            + `${walkText(d.cafeRoute) ? `<br>Café to drop: ${esc(walkText(d.cafeRoute))}` : ''}`
+            + `${done && d.endedAt ? `<br>Ended ${esc(when(d.endedAt))}` : ''}`, orderId: d.orderId });
+      }
+      /* A finished delivery: its last RECORDED position, never a live marker. */
+      const fin = done ? (d.record?.finalPosition || null) : null;
+      if (fin) {
+        place(`${d.orderId}:final`, 'final', fin, { title: 'Last recorded position', orderId: d.orderId,
+          html: `${head}Last recorded partner position${fin.at ? ` at ${esc(when(fin.at))}` : ''}<br>(recorded, not live)` });
       }
       const isSelf = selfOrderId && d.orderId === selfOrderId;
-      const pos = isSelf && selfPos ? selfPos : d.partner;
+      const pos = done || d.kind === 'waiting' ? null : isSelf && selfPos ? selfPos : d.partner;
       const age = isSelf && selfPos ? 0 : d.partner?.ageSeconds;
       if (pos && (age == null || age <= STALE_S)) {
         const alerts = d.alerts || [];
@@ -233,13 +258,14 @@ export async function createLiveMap(el, cfg, { center = null, boundary = null, o
           extra: `${age > FRESH_S ? 'stale' : ''} ${alerts.length ? 'alert' : ''}`,
           title: isSelf ? 'Your position' : 'Delivery partner',
           orderId: d.orderId,
-          html: `${head}${esc(d.state === 'assigned' ? 'Heading to the café' : 'On the way to the student')}`
-            + `${age != null ? `<br>Position ${age < 60 ? `${Math.max(1, age)} s` : `${Math.round(age / 60)} min`} old` : ''}`
-            + `${walk ? `<br>${esc(walk)}` : ''}`
+          html: `${head}${age != null ? `Position ${age < 60 ? `${Math.max(1, age)} s` : `${Math.round(age / 60)} min`} old${age > FRESH_S ? ' (stale)' : ''}` : ''}`
+            + `${d.partner?.at ? ` · updated ${esc(when(d.partner.at))}` : ''}`
+            + `${walk ? `<br>${esc(d.state === 'assigned' ? 'To the café' : 'To the drop')}: ${esc(walk)}` : ''}`
+            + `${d.progress ? `<br>${esc(d.progress.percent)}% of the way, ${esc(d.progress.metresLeft)} m left` : ''}`
             + alerts.map((a) => `<br><span class="warn">${esc(a.text)}</span>`).join(''),
         });
       }
-      drawRoute(d);
+      drawRoutes(d);
     }
     for (const [k, r] of markers) if (!r.seen) { r.marker.map = null; markers.delete(k); }
     for (const [k, l] of lines) if (!l.seen) { l.setMap(null); lines.delete(k); }
@@ -446,4 +472,74 @@ function injectPickerStyles() {
   .eg-spot.refused svg{fill:#8A817C}.eg-spot.checking svg{opacity:.6}
   .eg-live{width:16px;height:16px;border-radius:50%;background:#2563EB;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}`;
   document.head.append(st);
+}
+
+/* ==========================================================================
+   CAMPUS CONTROL -> LOCATIONS, on Google Maps
+
+   The same picture as drawCampusMap in map.js, from the same data (GET
+   /campus/tree nodes, the campus's boundary rows): every place the server
+   holds a position for, and every boundary outline. Nothing is placed that
+   the server did not position; nothing here edits a coordinate. Pending
+   places are hollow amber, confirmed ones solid green; the active outline is
+   solid green, proposed or other outlines pink and fainter.
+   One map per visit (the caller keeps it); a reload moves markers in place.
+   ========================================================================== */
+export async function createCampusMap(el, cfg, { nodes = [], boundaries = [] } = {}) {
+  const maps = await loadGoogleMaps(cfg);
+  const [{ Map, InfoWindow, Polygon }, { AdvancedMarkerElement }, { LatLngBounds }] = await Promise.all([
+    maps.importLibrary('maps'), maps.importLibrary('marker'), maps.importLibrary('core')]);
+  injectStyles();
+  el.classList.add('echo-gmap');
+  const map = new Map(el, {
+    mapId: cfg.mapId || 'DEMO_MAP_ID', center: { lat: 30.4163, lng: 77.9686 }, zoom: 16, mapTypeId: 'hybrid',
+    mapTypeControl: true, mapTypeControlOptions: { mapTypeIds: ['roadmap', 'satellite', 'hybrid'] },
+    streetViewControl: false, fullscreenControl: true, clickableIcons: false, gestureHandling: 'cooperative',
+  });
+  watchForErrorBox(el);
+  const info = new InfoWindow();
+  let shapes = [];
+  let fitted = false;
+  const dot = (confirmed) => {
+    const d = document.createElement('div');
+    d.style.cssText = `width:14px;height:14px;border-radius:50%;box-sizing:border-box;cursor:pointer;
+      border:3px solid ${confirmed ? '#fff' : '#B45309'};background:${confirmed ? '#2F7D5F' : '#fff'};box-shadow:0 1px 4px rgba(0,0,0,.45)`;
+    return d;
+  };
+  function update({ nodes: ns = [], boundaries: bs = [] } = {}) {
+    for (const s of shapes) { if (s.setMap) s.setMap(null); else s.map = null; }
+    shapes = [];
+    const b = new LatLngBounds();
+    let any = false;
+    for (const o of bs.filter((x) => x.status !== 'retired' && x.polygon?.length >= 3)) {
+      const active = o.status === 'active';
+      const path = o.polygon.map(([lat, lng]) => ({ lat: Number(lat), lng: Number(lng) }));
+      const pg = new Polygon({ map, paths: path, clickable: true,
+        strokeColor: active ? '#2F7D5F' : '#E0567A', strokeOpacity: active ? 0.95 : 0.7, strokeWeight: active ? 2.5 : 1.5,
+        fillColor: active ? '#2F7D5F' : '#E0567A', fillOpacity: active ? 0.08 : 0.03 });
+      pg.addListener('click', (e) => {
+        info.setContent(`<div class="eg-info"><b>${esc(o.name)}</b>${esc(active ? 'Active boundary' : `${o.status}, not in force`)}</div>`);
+        info.setPosition(e.latLng); info.open({ map });
+      });
+      shapes.push(pg);
+      for (const p of path) { b.extend(p); any = true; }
+    }
+    for (const n of ns) {
+      const lat = Number(n.lat), lng = Number(n.lng);
+      if (n.lat == null || n.lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const confirmed = n.verification === 'confirmed';
+      const m = new AdvancedMarkerElement({ map, position: { lat, lng }, content: dot(confirmed), title: n.name, zIndex: confirmed ? 20 : 10 });
+      m.addListener('click', () => {
+        info.setContent(`<div class="eg-info"><b>${esc(n.name)}</b>${confirmed ? 'Confirmed' : 'Pending, not deliverable'}`
+          + `${n.gps_accuracy_m ? ` · ±${esc(n.gps_accuracy_m)} m` : ''}`
+          + `${n.source_note ? `<br><span style="font-size:11px">${esc(n.source_note)}</span>` : ''}</div>`);
+        info.open({ map, anchor: m });
+      });
+      shapes.push(m);
+      b.extend({ lat, lng }); any = true;
+    }
+    if (any && !fitted) { fitted = true; map.fitBounds(b, 24); }
+  }
+  update({ nodes, boundaries });
+  return { map, update, provider: 'google' };
 }

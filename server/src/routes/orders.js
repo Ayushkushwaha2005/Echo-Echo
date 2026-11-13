@@ -338,7 +338,7 @@ export default async function orderRoutes(app) {
 
     const items = (await q(`SELECT * FROM order_item WHERE order_id = $1`, [o.id])).rows;
     const events = (await q(
-      `SELECT e.*, u.name AS actor_name FROM order_event e
+      `SELECT e.*, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS actor_name FROM order_event e
          LEFT JOIN app_user u ON u.id = e.actor_id
         WHERE e.order_id = $1 ORDER BY e.at`, [o.id])).rows;
     const payment = await one(
