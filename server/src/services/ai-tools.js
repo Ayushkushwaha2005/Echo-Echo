@@ -114,7 +114,7 @@ export const TOOLS = {
               (SELECT count(*)::int FROM review r WHERE r.vendor_id = v.id AND NOT r.hidden) AS rating_count,
               (SELECT round(avg(stars)::numeric,2) FROM review r WHERE r.vendor_id = v.id AND NOT r.hidden) AS rating_avg
          FROM vendor v WHERE v.active
-          AND v.campus_site_id IS NOT DISTINCT FROM $2
+          AND v.campus_site_id IS NOT DISTINCT FROM $1
         ORDER BY v.name`, [actor.campusId || '00000000-0000-0000-0000-000000000000']);
     /* Open means what the student site and the order check say: statusOf. */
     return { cafeterias: rows.filter((v) => !open_only || cafeOpen(v)).map((v) => ({
