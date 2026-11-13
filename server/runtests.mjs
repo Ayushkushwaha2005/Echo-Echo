@@ -60,6 +60,7 @@ const FILES = [
   ['e2e', 'test/campus-address.test.mjs'],
   ['e2e', 'test/delivery-anywhere.test.mjs'],
   ['e2e', 'test/cafe-hours.test.mjs'],
+  ['e2e', 'test/cafe-manual-availability.test.mjs'],
   ['e2e', 'test/cafe-list-speed.test.mjs'],
   ['e2e', 'test/tracking-privacy.test.mjs'],
   ['e2e', 'test/delivery-maps.test.mjs'],
