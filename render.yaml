@@ -98,6 +98,14 @@ services:
         sync: false
       - key: STUDENT_EMAIL_DOMAINS
         value: stu.upes.ac.in
+      # Continue with Microsoft (docs/MICROSOFT-SIGN-IN.md). Off until all
+      # three are set in the dashboard; the secret is never in this file.
+      - key: MICROSOFT_TENANT_ID
+        sync: false
+      - key: MICROSOFT_CLIENT_ID
+        sync: false
+      - key: MICROSOFT_CLIENT_SECRET
+        sync: false
       # Administrator powers always require a passkey. The boot guard refuses
       # production if this is off; it is stated here so it cannot drift.
       - key: ADMIN_PASSKEY_REQUIRED

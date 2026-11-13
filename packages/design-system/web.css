@@ -569,6 +569,25 @@ textarea.input { resize: vertical; min-height: 72px; }
     border-top:1px solid var(--line,rgba(28,25,23,.10));padding:8px 12px}
 }
 
+/* "or" between the email code and Continue with Microsoft. */
+.author{display:flex;align-items:center;gap:12px;color:var(--text-muted,#6B6360);font-size:13px}
+.author::before,.author::after{content:"";flex:1;height:1px;background:var(--line,rgba(28,25,23,.10))}
+
+/* Continue with Microsoft, in Microsoft's published sign-in button style:
+   the four-square logo, Segoe UI 15px semibold, white with a #8C8C8C
+   border (dark: #2F2F2F, white text). Not themed with the brand colours. */
+.msbtn{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;min-height:48px;
+  padding:0 16px;border:1px solid #8c8c8c;border-radius:4px;background:#fff;color:#5e5e5e;cursor:pointer;
+  font:600 15px/1.2 'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,Arial,sans-serif}
+.msbtn:hover{background:#f3f3f3}
+.msbtn:focus-visible{outline:2px solid #0067b8;outline-offset:2px}
+.msbtn svg{flex:none}
+:root[data-theme="dark"] .msbtn{background:#2f2f2f;color:#fff;border-color:#2f2f2f}
+:root[data-theme="dark"] .msbtn:hover{background:#3b3b3b}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .msbtn{background:#2f2f2f;color:#fff;border-color:#2f2f2f}
+}
+
 /* ---------- campus map ---------------------------------------------------
    OpenStreetMap tiles via Leaflet. The pins are drawn here rather than
    fetched as images, so the map needs one network dependency instead of
