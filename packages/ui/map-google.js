@@ -131,8 +131,9 @@ export const directionsUrl = (to, from = null) => 'https://www.google.com/maps/d
  */
 export async function createLiveMap(el, cfg, { center = null, boundary = null, onSelect = null } = {}) {
   const maps = await loadGoogleMaps(cfg);
-  const [{ Map, InfoWindow, Polyline, Polygon, LatLngBounds }, { AdvancedMarkerElement }, geometry] = await Promise.all([
-    maps.importLibrary('maps'), maps.importLibrary('marker'), maps.importLibrary('geometry')]);
+  /* LatLngBounds lives in the 'core' library, not 'maps'. */
+  const [{ Map, InfoWindow, Polyline, Polygon }, { AdvancedMarkerElement }, geometry, { LatLngBounds }] = await Promise.all([
+    maps.importLibrary('maps'), maps.importLibrary('marker'), maps.importLibrary('geometry'), maps.importLibrary('core')]);
   injectStyles();
   el.classList.add('echo-gmap');
   const map = new Map(el, {
@@ -294,9 +295,10 @@ export async function createLiveMap(el, cfg, { center = null, boundary = null, o
 export async function createPickerMap(el, data, { onTap, onSelect, ...state } = {}) {
   const { destinationMarkers } = await import('./map.js');
   const maps = await loadGoogleMaps(data.maps);
-  const [{ Map, InfoWindow, Polygon, Circle, LatLngBounds }, { AdvancedMarkerElement }, core] = await Promise.all([
+  /* LatLngBounds and ControlPosition live in the 'core' library, not 'maps'. */
+  const [{ Map, InfoWindow, Polygon, Circle }, { AdvancedMarkerElement }, core] = await Promise.all([
     maps.importLibrary('maps'), maps.importLibrary('marker'), maps.importLibrary('core')]);
-  const { ControlPosition } = core;
+  const { ControlPosition, LatLngBounds } = core;
   injectStyles();
   injectPickerStyles();
   el.classList.add('echo-gmap');

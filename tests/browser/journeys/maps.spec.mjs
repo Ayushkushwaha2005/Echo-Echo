@@ -56,8 +56,10 @@ const FAKE_GOOGLE = `(() => {
     get map() { return this._map; }
     _attach() { this._c.style.cursor = 'pointer'; this._c.onclick = (e) => { e.stopPropagation(); this.trigger('click', {}); }; this._map.el.append(this._c); }
   }
-  const libs = { maps: { Map, InfoWindow, Polygon: Shape, Polyline: Shape, Circle: Shape, LatLngBounds },
-    marker: { AdvancedMarkerElement }, core: { ControlPosition: { TOP_RIGHT: 3, LEFT_BOTTOM: 6 } },
+  /* Laid out exactly as Google's real libraries are (checked on production):
+     LatLngBounds, LatLng and ControlPosition are in 'core', NOT in 'maps'. */
+  const libs = { maps: { Map, InfoWindow, Polygon: Shape, Polyline: Shape, Circle: Shape },
+    marker: { AdvancedMarkerElement }, core: { LatLngBounds, LatLng, ControlPosition: { TOP_RIGHT: 3, LEFT_BOTTOM: 6 } },
     geometry: { encoding: { decodePath: () => [] } } };
   window.google = { maps: { importLibrary: async (n) => libs[n] } };
   const cb = new URL(document.currentScript.src).searchParams.get('callback');
