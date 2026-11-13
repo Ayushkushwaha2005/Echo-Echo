@@ -686,3 +686,92 @@ h1,h2,h3,h4 { margin: 0; line-height: var(--lh-snug); font-weight: var(--w-bold)
     max-width: 300px; padding-top: var(--s-6); align-self: start;
   }
 }
+
+/* ---------- THE ONE OTP FIELD (packages/ui/otp-field.js) -----------------
+   Port of input-otp-10: a dark security panel with a particle sphere,
+   rotating rings and six spring-animated slots. Its own palette, so it looks
+   the same on every surface and in both themes. */
+.otp10{
+  --otp10-bg-1:#17111a; --otp10-bg-2:#0e0b10; --otp10-border:rgba(255,255,255,.09);
+  --otp10-fg:#f6eef1; --otp10-muted:rgba(246,238,241,.58); --otp10-faint:rgba(246,238,241,.38);
+  --otp10-accent:#E0567A; --otp10-accent-rgb:224,86,122;
+  --otp10-ok:#34d399; --otp10-ok-rgb:52,211,153; --otp10-bad:#f87171; --otp10-bad-rgb:248,113,113;
+  --otp10-spring:cubic-bezier(.34,1.56,.64,1);
+  position:relative; overflow:hidden; isolation:isolate; width:100%; box-sizing:border-box;
+  display:flex; flex-direction:column; align-items:center; gap:18px;
+  padding:24px 16px 18px; border-radius:18px; border:1px solid var(--otp10-border);
+  background:linear-gradient(180deg,var(--otp10-bg-1),var(--otp10-bg-2)); color:var(--otp10-fg);
+  box-shadow:0 18px 40px -22px rgba(0,0,0,.55);
+}
+.otp10-glow{position:absolute;width:128px;height:128px;border-radius:50%;filter:blur(32px);pointer-events:none;z-index:-1;transition:background .5s}
+.otp10-glow-a{top:-48px;right:-48px;background:rgba(var(--otp10-accent-rgb),.16)}
+.otp10-glow-b{bottom:-48px;left:-48px;background:rgba(var(--otp10-accent-rgb),.08)}
+.otp10:hover .otp10-glow-a{background:rgba(var(--otp10-accent-rgb),.24)}
+.otp10-orb{position:relative;width:148px;height:148px;display:flex;align-items:center;justify-content:center;flex:none}
+.otp10-ring{position:absolute;border-radius:50%;pointer-events:none}
+.otp10-ring-1{inset:0;border:1px dashed rgba(var(--otp10-accent-rgb),.32);animation:otp10-spin 60s linear infinite}
+.otp10-ring-2{inset:8px;border:1px solid rgba(var(--otp10-accent-rgb),.16);animation:otp10-spin 30s linear infinite reverse}
+.otp10-ring-3{inset:16px;border:1px dashed rgba(var(--otp10-accent-rgb),.07)}
+.otp10-halo{position:absolute;inset:-6px;border-radius:50%;
+  background:linear-gradient(0deg,rgba(var(--otp10-accent-rgb),0),rgba(var(--otp10-accent-rgb),.07),rgba(var(--otp10-accent-rgb),0));
+  animation:otp10-breathe 3s ease-in-out infinite}
+.otp10-sphere{width:120px;height:120px;border-radius:50%;overflow:hidden;transform:scale(.95);transition:transform .5s;opacity:.9}
+.otp10:hover .otp10-sphere{transform:scale(1);opacity:1}
+.otp10-sphere canvas{width:100%;height:100%;display:block;transform:scale(1.35)}
+.otp10-shield{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:50%;
+  background:rgba(14,11,16,.45);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
+  opacity:0;transform:scale(.6);pointer-events:none;transition:opacity .35s,transform .45s var(--otp10-spring);color:var(--otp10-ok)}
+.otp10-shield svg{padding:12px;border-radius:50%;background:rgba(var(--otp10-ok-rgb),.18);border:1px solid rgba(var(--otp10-ok-rgb),.45);box-sizing:content-box}
+.otp10-head{text-align:center;display:flex;flex-direction:column;gap:6px;max-width:300px}
+.otp10-title{margin:0;font-size:.8rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.otp10-help{margin:0;font-size:.75rem;line-height:1.5;color:var(--otp10-muted)}
+.otp10-label{font-size:.72rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--otp10-muted)}
+.otp10-slots{position:relative;display:flex;gap:8px;justify-content:center}
+.otp10-input{position:absolute;inset:0;width:100%;height:100%;z-index:2;opacity:0;border:0;padding:0;margin:0;
+  font-size:16px;/* stops iOS zooming */ letter-spacing:2.6em;color:transparent;background:transparent;caret-color:transparent;cursor:text}
+.otp10-slot{position:relative;width:44px;height:56px;display:flex;align-items:center;justify-content:center;flex:none;
+  border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.03);
+  font:700 1.25rem/1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--otp10-fg);
+  transition:border-color .3s,background .3s,box-shadow .3s}
+.otp10-slots:hover .otp10-slot{border-color:rgba(255,255,255,.2)}
+.otp10-slot.is-active{border-color:var(--otp10-accent);background:rgba(var(--otp10-accent-rgb),.07);
+  box-shadow:0 0 0 3px rgba(var(--otp10-accent-rgb),.18),0 0 18px rgba(var(--otp10-accent-rgb),.28)}
+.otp10-char{position:absolute;animation:otp10-in .42s var(--otp10-spring) both}
+.otp10-char.is-leaving{animation:otp10-out .2s ease-in both}
+.otp10-pulse{position:absolute;inset:0;border-radius:12px;border:1px solid var(--otp10-accent);pointer-events:none;animation:otp10-pulse .4s ease-out both}
+.otp10-caret{display:none;width:2px;height:24px;background:var(--otp10-accent);animation:otp10-blink 1s ease-in-out infinite}
+.otp10-slot.has-caret .otp10-caret{display:block}
+.otp10-status{margin:0;min-height:1em;font:500 .68rem/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--otp10-faint);text-align:center}
+/* states */
+.otp10[data-state=loading] .otp10-slot{opacity:.7}
+.otp10[data-state=loading] .otp10-status{color:var(--otp10-accent);animation:otp10-breathe 1.2s ease-in-out infinite}
+.otp10[data-state=loading] .otp10-ring-1{animation-duration:6s}
+.otp10[data-state=loading] .otp10-ring-2{animation-duration:4s}
+.otp10[data-state=success]{--otp10-accent:var(--otp10-ok);--otp10-accent-rgb:var(--otp10-ok-rgb)}
+.otp10[data-state=success] .otp10-slot{border-color:var(--otp10-ok);background:rgba(var(--otp10-ok-rgb),.1);color:var(--otp10-ok);box-shadow:none}
+.otp10[data-state=success] .otp10-shield{opacity:1;transform:scale(1)}
+.otp10[data-state=success] .otp10-sphere{transform:scale(1.05)}
+.otp10[data-state=success] .otp10-status{color:var(--otp10-ok)}
+.otp10[data-state=error]{--otp10-accent:var(--otp10-bad);--otp10-accent-rgb:var(--otp10-bad-rgb)}
+.otp10[data-state=error] .otp10-slot{border-color:rgba(var(--otp10-bad-rgb),.7)}
+.otp10[data-state=error] .otp10-slots{animation:otp10-shake .4s ease-in-out}
+.otp10[data-state=error] .otp10-status{color:var(--otp10-bad)}
+.otp10:focus-within .otp10-slots{outline:none}
+@keyframes otp10-spin{to{transform:rotate(360deg)}}
+@keyframes otp10-breathe{0%,100%{opacity:.55}50%{opacity:1}}
+@keyframes otp10-in{from{opacity:0;transform:translateY(6px) scale(.5)}to{opacity:1;transform:none}}
+@keyframes otp10-out{to{opacity:0;transform:translateY(-6px) scale(.7)}}
+@keyframes otp10-pulse{from{opacity:.8;transform:scale(.9);filter:blur(0)}to{opacity:0;transform:scale(1.5);filter:blur(2px)}}
+@keyframes otp10-blink{0%,100%{opacity:1}50%{opacity:0}}
+@keyframes otp10-shake{20%,60%{transform:translateX(-5px)}40%,80%{transform:translateX(5px)}}
+@media (max-width:380px){
+  .otp10{padding:20px 12px 16px;gap:14px}
+  .otp10-slots{gap:6px}
+  .otp10-slot{width:40px;height:52px}
+  .otp10-orb{width:124px;height:124px}
+  .otp10-sphere{width:100px;height:100px}
+}
+@media (prefers-reduced-motion:reduce){
+  .otp10 *,.otp10 *::before{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}

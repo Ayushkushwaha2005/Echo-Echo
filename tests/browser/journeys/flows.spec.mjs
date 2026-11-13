@@ -119,8 +119,7 @@ test('a student signs in with their university mailbox and reaches a cart that s
   await page.locator('#ob-em').fill(email.split('@')[0]);
   await page.locator('form[data-form=email] button[type=submit]').click();
   const [, code] = await lastMailTo(email, /(\d{6})/);
-  const boxes = page.locator('form[data-form=emailcode] [data-otp]');
-  for (let i = 0; i < code.length; i++) await boxes.nth(i).fill(code[i]);
+  await page.locator('form[data-form=emailcode] input[name=code]').fill(code);
   await page.locator('form[data-form=emailcode] button[type=submit]').click();
   await expect.poll(async () => (await db.query(`SELECT count(*)::int n FROM app_user WHERE student_email = $1`, [email])).rows[0].n, { timeout: 15000 }).toBe(1);
 

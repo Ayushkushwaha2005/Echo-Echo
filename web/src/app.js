@@ -26,6 +26,7 @@ import { onImageError, dishImage as dishImageFor, DishTile as DishTileFor, CafPh
 import { mapPointChosen, mapPointAnswered, gpsPointPlaced, spotFromPick, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
 import { deniedHelp } from '../../packages/data/geofix.js';
 import { loadModule } from '../../packages/ui/load-module.js';
+import { otpField, otpState, otpSucceeded } from '../../packages/ui/otp-field.js';
 import { startSiteSync, applyToDocument, liveBanners, linkAttrs } from '../../packages/data/site-config.js';
 
 restoreTheme();
@@ -731,8 +732,7 @@ function ScrObEmailCode() {
         <p class="t-sm muted">Our email service has accepted a code for <b style="color:var(--text)">${esc(a.email)}</b>.
           It usually arrives within a minute; university mail can take longer, so check Junk too. The code expires in 10 minutes.</p>
       </div>
-      <div class="otp">${[0, 1, 2, 3, 4, 5].map((i) =>
-        `<input inputmode="numeric" maxlength="1" aria-label="Digit ${i + 1}" data-otp="${i}">`).join('')}</div>
+      ${otpField({ label: 'Code from your email', state: a.error ? 'error' : 'idle' })}
       ${a.error ? `<p class="t-xs" role="alert" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
       <button class="btn btn-primary btn-lg btn-block" type="submit">Verify</button>
       <button class="btn btn-ghost btn-block t-sm" type="button" data-act="resendEmail" id="resend-email" ${resendWait() ? 'disabled' : ''}>${resendLabel()}</button>
@@ -2149,7 +2149,7 @@ function ScrVerify() {
     <form class="card card-pad stack g3" data-form="linkcode">
       ${Label('Recommended · University email')}
       <p class="t-sm muted">Enter the 6-digit code sent to <b>${esc(S.verify.email)}</b>. Check Junk if it has not arrived.</p>
-      <input class="input code" name="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000" required>
+      ${otpField({ label: 'Code from your university email' })}
       <button class="btn btn-primary btn-block" type="submit">Verify code</button>
     </form>` : `
     <form class="card card-pad stack g3" data-form="linkemail">
@@ -3588,10 +3588,10 @@ document.addEventListener('submit', async (e) => {
   }
 
   if (kind === 'emailcode') {
-    const code = [...form.querySelectorAll('[data-otp]')].map((i) => i.value).join('').replace(/\D/g, '');
+    const code = String(form.code.value || '').replace(/\D/g, '');
     if (code.length !== 6) { S.auth.error = 'Enter the 6-digit code.'; return render(); }
     await withBusy(btn, async () => {
-      try { await quad.verifyEmailCode(S.auth.email, code); await signedInNow(); }
+      try { await quad.verifyEmailCode(S.auth.email, code); await otpSucceeded(form); await signedInNow(); }
       catch (err) { S.auth.error = explain(err); render(); }
     });
   }
@@ -3610,7 +3610,9 @@ document.addEventListener('submit', async (e) => {
   if (kind === 'linkcode') {
     const code = form.code.value.replace(/\D/g, '');
     await withBusy(btn, async () => {
-      const out = await quad.linkEmailVerify(S.verify.email, code);
+      let out;
+      try { out = await quad.linkEmailVerify(S.verify.email, code); } catch (e) { otpState(form, 'error'); throw e; }
+      await otpSucceeded(form);
       S.verify = {};
       drop('me', 'myverif'); S.me = await quad.me();
       toast(out.verification.state === 'VERIFIED' ? 'You are a verified student' : 'Student email confirmed');
@@ -3718,19 +3720,9 @@ document.addEventListener('change', async (e) => {
   }
 });
 
-/* OTP boxes: one digit each, advancing as you type. */
-document.addEventListener('input', (e) => {
-  const box = e.target.closest('[data-otp]');
-  if (!box) return;
-  box.value = box.value.replace(/\D/g, '').slice(-1);
-  if (box.value) box.nextElementSibling?.focus();
-});
-
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && S.sheet) { setSheet(null); return; }
   if (e.key === 'Enter' && !e.shiftKey && e.target.id === 'ai-in') { e.preventDefault(); aiSend(); }
-  const box = e.target.closest?.('[data-otp]');
-  if (box && e.key === 'Backspace' && !box.value) box.previousElementSibling?.focus();
 });
 
 /* ---------- the two checkouts --------------------------------------------

@@ -16,6 +16,7 @@
 import { quad, ApiError, Offline } from '../data/client.js';
 import { logo, wordmark } from '../../brand/logo.js';
 import { animatedShell } from './login-art.js';
+import { otpField, otpSucceeded } from './otp-field.js';
 
 /* The sign-in cards open with the whole approved logo. */
 const BrandHead = () => `<div class="auth-brand">${logo({ size: 88, eager: true })}${wordmark()}</div>`;
@@ -141,9 +142,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
           <h1 class="auth-title">Authenticator code</h1>
           <p class="auth-sub">Enter the 6-digit code for ${safe(email)} from your authenticator app.</p>
 
-          <label class="auth-field"><span class="auth-label">6-digit code</span>
-            <input class="auth-input auth-code" name="code" inputmode="numeric" autocomplete="one-time-code"
-                   maxlength="6" placeholder="——————" required></label>
+          ${otpField({ label: 'Authenticator code', state: error ? 'error' : 'idle' })}
 
           ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
           <button class="auth-btn" type="submit">Sign in</button>
@@ -151,7 +150,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
         </form>
       </div>`);
 
-    const codeInput = node.querySelector('input');
+    const codeInput = node.querySelector('input[name=code]');
     node.querySelector('[data-act=back]').addEventListener('click', () => { challenge = null; render('admin'); });
     node.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -162,6 +161,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
       try {
         const out = await quad.adminLogin(challenge, code);
         challenge = null;
+        await otpSucceeded(node);
         onSignedIn ? onSignedIn(out) : (location.href = surfaceUrl(out.surface));
       } catch (err) {
         /* A challenge that has timed out or run out of attempts is spent, and
@@ -229,9 +229,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
           <h1 class="auth-title">Check your inbox</h1>
           <p class="auth-sub">${safe(notice || `Enter the code we sent to ${email}.`)}</p>
 
-          <label class="auth-field"><span class="auth-label">6-digit code</span>
-            <input class="auth-input auth-code" name="code" inputmode="numeric" autocomplete="one-time-code"
-                   maxlength="6" placeholder="——————" required></label>
+          ${otpField({ label: 'Code from the email', state: error ? 'error' : 'idle' })}
 
           ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
           <button class="auth-btn" type="submit">Continue</button>
@@ -239,7 +237,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
         </form>
       </div>`);
 
-    const codeInput = node.querySelector('input');
+    const codeInput = node.querySelector('input[name=code]');
     node.querySelector('[data-act=back]').addEventListener('click', () => render('admin'));
     node.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -250,6 +248,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
       try {
         const out = await quad.adminResetVerify(email, code);
         resetToken = out.token;
+        await otpSucceeded(node);
         render('reset-new');
       } catch (err) {
         render('reset-code', { error: message(err) });

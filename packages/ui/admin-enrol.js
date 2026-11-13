@@ -22,6 +22,7 @@
    ========================================================================== */
 import { quad, ApiError } from '../data/client.js';
 import { lockup } from '../../brand/logo.js';
+import { otpField, otpSucceeded } from './otp-field.js';
 
 const safe = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const message = (e) => (e instanceof ApiError ? (e.detail ? `${e.message} — ${e.detail}` : e.message) : e?.message || 'Something went wrong.');
@@ -107,8 +108,7 @@ export async function mountAdminEnrol(root) {
             <p class="auth-fine">Choose <b>Enter code manually</b>. Account name: ${safe(enrol.issuer)}. Time-based, 6 digits.</p>
             <code class="enrol-secret">${safe(groupKey(enrol.secret))}</code></details>
           <form class="stack" data-en-form="confirm" novalidate>
-            <label class="auth-field"><span class="auth-label">The 6-digit code the app shows now</span>
-              <input class="auth-input auth-code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>
+            ${otpField({ label: 'The 6-digit code the app shows now', state: error ? 'error' : 'idle' })}
             ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
             <button class="auth-btn" type="submit">Confirm authenticator</button>
           </form>` : `
@@ -156,6 +156,7 @@ export async function mountAdminEnrol(root) {
         const code = String(data.code || '').replace(/\D/g, '');
         if (code.length !== 6) throw new Error('Enter the 6 digits the app is showing.');
         status = await quad.confirmAuthenticator(code);
+        await otpSucceeded(f);
         enrol = null; done = true;
       }
       error = '';
