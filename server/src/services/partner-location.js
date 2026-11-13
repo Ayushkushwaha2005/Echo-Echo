@@ -16,6 +16,8 @@
    ageSeconds goes out with every position, so a phone with a wrong clock
    cannot make an old marker look new.
    ========================================================================== */
+import { forgetOrderRoute } from './routing.js';
+import { forgetMovement, forgetMovementForOrder } from './delivery-alerts.js';
 import { q } from '../db/index.js';
 import { BadRequest, can } from '../auth/rbac.js';
 
@@ -83,8 +85,11 @@ export function checkReport(body, now = Date.now()) {
   return { orderId: b.orderId, lat, lng, accuracy, takenAt };
 }
 
-/* Called inside the transaction that moves an order out of CARRYING. */
+/* Called inside the transaction that moves an order out of CARRYING. The
+   walking route and the stop-detection point (memory only) go with it. */
 export async function forgetForOrder(c, orderId) {
+  forgetOrderRoute(orderId);
+  forgetMovementForOrder(orderId);
   await c.query(`DELETE FROM partner_location WHERE order_id = $1`, [orderId]);
   await c.query(`UPDATE location_share_consent SET stopped_at = now(), stop_reason = 'delivery_ended'
                   WHERE order_id = $1 AND stopped_at IS NULL`, [orderId]);
@@ -92,6 +97,7 @@ export async function forgetForOrder(c, orderId) {
 
 /* Sign-out, or the partner stopping: the position and the live consent both go. */
 export async function stopSharing(partnerId, reason) {
+  forgetMovement(partnerId);
   await q(`DELETE FROM partner_location WHERE partner_id = $1`, [partnerId]);
   await q(`UPDATE location_share_consent SET stopped_at = now(), stop_reason = $2
             WHERE partner_id = $1 AND stopped_at IS NULL`, [partnerId, reason]);

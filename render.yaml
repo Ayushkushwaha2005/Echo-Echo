@@ -124,6 +124,18 @@ services:
       # privilege only, restricted to the site's referrer. Unset = no Satellite.
       - key: ARCGIS_BASEMAP_TOKEN
         sync: false
+      # Optional. Google Maps for the delivery partner's map and Campus Control's
+      # fleet map (server/src/services/maps.js). The browser key is locked in
+      # Google Cloud to the Maps JavaScript API and to echoecho.tech; the map
+      # id enables Advanced Markers. Unset = OpenStreetMap, as before.
+      - key: GOOGLE_MAPS_BROWSER_KEY
+        sync: false
+      - key: GOOGLE_MAPS_MAP_ID
+        sync: false
+      # Server only. Routes API (walking routes), locked to the Routes API.
+      # Never sent to a browser. Unset = straight lines, as before.
+      - key: GOOGLE_ROUTES_API_KEY
+        sync: false
 
       # ---- private object storage (Backblaze B2, S3-compatible) ------------
       - key: STORAGE_PROVIDER

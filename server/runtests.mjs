@@ -62,6 +62,7 @@ const FILES = [
   ['e2e', 'test/cafe-hours.test.mjs'],
   ['e2e', 'test/cafe-list-speed.test.mjs'],
   ['e2e', 'test/tracking-privacy.test.mjs'],
+  ['e2e', 'test/delivery-maps.test.mjs'],
   ['e2e', 'test/site-config.test.mjs'],
   ['e2e', 'test/order-history.test.mjs'],
   ['e2e', 'test/admin-enrol-reset.test.mjs'],

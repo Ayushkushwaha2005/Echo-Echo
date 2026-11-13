@@ -1687,7 +1687,9 @@ function shareWhileCarrying(orderId) {
   positionShare = createPositionShare({
     orderId,
     start: (id) => quad.startSharing(id),
-    send: (body) => quad.sendPosition(body),
+    /* Each fix that is sent also moves the partner's own marker on the map
+       already on screen; it never creates a map. */
+    send: (body) => { lastFix = body; partnerMap.ctl?.setSelf(body); return quad.sendPosition(body); },
     clear: (reason) => quad.clearLocation(reason),
     onChange: (next) => {
       share = next;
@@ -1737,6 +1739,44 @@ function ShareStatus() {
   return `<div class="campusnote"><span class="share-dot" aria-hidden="true"></span><div class="stack g2"><p class="t-xs" style="color:var(--text-2)"><b>Sharing your location</b> for this delivery<span data-share-at>${share.sentAt ? `, last sent at ${clockTime(share.sentAt)}` : ''}</span>.
     Keep this screen open: ${share.wakeLocked ? 'it will stay on for now, and ' : ''}sharing pauses when the browser is in the background or the phone is locked. It stops by itself when the delivery ends.</p>
     <button class="btn btn-ghost btn-sm" style="align-self:flex-start" data-act="stopLocation">Stop sharing</button></div></div>`;
+}
+
+/* ---------- the delivery partner's Google map ---------------------------
+   Only the partner carrying an order gets Google Maps (the server decides,
+   through tracking.maps); students keep the OpenStreetMap map, so ordering
+   food never costs a Google map load. Google bills each map created, so this
+   screen creates ONE and keeps it here: a re-render puts the same element
+   back into the new placeholder, the next delivery reuses it, and each GPS
+   fix only moves the marker. If Google cannot load, the OpenStreetMap map is
+   drawn instead, for the rest of the visit. */
+const partnerMap = { el: null, ctl: null, failed: false };
+let lastFix = null;
+async function paintPartnerGoogle(slot, t, note) {
+  if (partnerMap.failed) return false;
+  if (!partnerMap.el) {
+    partnerMap.el = document.createElement('div');
+    partnerMap.el.className = 'echo-map';
+    partnerMap.el.style.height = '320px';
+  }
+  slot.replaceChildren(partnerMap.el);
+  let mod;
+  try {
+    mod = await loadModule(() => import('../../packages/ui/map-google.js'), import.meta.url);
+    if (!partnerMap.ctl) partnerMap.ctl = await mod.createLiveMap(partnerMap.el, t.maps, { boundary: t.boundary });
+  } catch {
+    partnerMap.failed = true; partnerMap.el = null; partnerMap.ctl = null;
+    return false;
+  }
+  partnerMap.ctl.update([{ orderId: t.orderId, code: t.vendorName, state: t.state, pickup: t.pickup,
+    destination: t.destination, partner: t.partner, route: t.route, address: t.address }], { selfOrderId: t.orderId });
+  if (lastFix && lastFix.orderId === t.orderId) partnerMap.ctl.setSelf(lastFix);
+  if (note) {
+    const to = t.state === 'assigned' ? t.pickup : t.destination;
+    const walk = mod.walkText(t.route);
+    note.innerHTML = `${walk ? `<span>${esc(t.state === 'assigned' ? 'To the café' : 'To the student')}: ${esc(walk)}</span> ` : ''}`
+      + (to ? `<a class="btn btn-secondary btn-sm" style="margin-left:6px" target="_blank" rel="noopener" href="${esc(mod.directionsUrl(to))}">Open in Google Maps</a>` : '');
+  }
+  return true;
 }
 
 /* Draws every map placeholder currently on screen. Called after each render;
@@ -1806,10 +1846,13 @@ function onPickerSelect(dest) {
   render();
 }
 
+let googlePickerFailed = false;
 async function paintPicker() {
   const slot = document.querySelector('.echo-picker-slot');
   if (!slot) {
-    if (picker) { picker.ctl?.destroy(); picker = null; }
+    /* A Google picker is kept, detached, for the rest of the visit: reopening
+       the sheet reuses it instead of paying for a new map load. */
+    if (picker && picker.ctl?.provider !== 'google') { picker.ctl?.destroy(); picker = null; }
     return;
   }
   if (picker) {
@@ -1830,8 +1873,23 @@ async function paintPicker() {
   const mine = picker = { host, ctl: null };
   try {
     if (!S.campusMap) S.campusMap = await quad.campusMap();
-    const { drawPickerMap } = await loadModule(() => import('../../packages/ui/map.js'), import.meta.url);
-    const ctl = await drawPickerMap(host, S.campusMap, { ...pickerState(), onTap: onPickerTap, onSelect: onPickerSelect });
+    let ctl = null;
+    if (S.campusMap.maps?.provider === 'google' && !googlePickerFailed) {
+      try {
+        const { createPickerMap } = await loadModule(() => import('../../packages/ui/map-google.js'), import.meta.url);
+        ctl = await createPickerMap(host, S.campusMap, { ...pickerState(), onTap: onPickerTap, onSelect: onPickerSelect });
+      } catch {
+        /* Google unreachable, key refused, or no WebGL: the OpenStreetMap
+           picker instead, for the rest of this visit. */
+        googlePickerFailed = true;
+        host.replaceChildren();
+        host.className = 'echo-map picker';
+      }
+    }
+    if (!ctl) {
+      const { drawPickerMap } = await loadModule(() => import('../../packages/ui/map.js'), import.meta.url);
+      ctl = await drawPickerMap(host, S.campusMap, { ...pickerState(), onTap: onPickerTap, onSelect: onPickerSelect });
+    }
     if (picker !== mine) { ctl?.destroy(); return; }   // closed while loading
     mine.ctl = ctl;
     /* A render may have replaced the slot while the map was loading. */
@@ -1850,6 +1908,8 @@ async function paintMaps() {
     const note = slot.parentElement?.querySelector('.echo-map-note');
     try {
       const tracking = await quad.tracking(orderId);
+      if (slot.dataset.mapSelf === '1' && tracking.maps?.provider === 'google'
+          && await paintPartnerGoogle(slot, tracking, note)) continue;
       const { drawTrackingMap, partnerVisibilityNote } = await loadModule(() => import('../../packages/ui/map.js'), import.meta.url);
       await drawTrackingMap(slot, tracking);
       if (note) {

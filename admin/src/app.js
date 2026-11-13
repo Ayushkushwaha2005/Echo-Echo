@@ -4001,7 +4001,8 @@ async function scrDeliveries() {
       </div>
       ${mapped.length ? `<section class="card card-pad cc-section">
         <h2 class="cc-h">Live map</h2>
-        <div id="cc-track-map" class="cc-track-map" data-order="${esc(trackSelected(mapped))}" role="region" aria-label="Map of the selected delivery"></div>
+        <div id="cc-fleet-slot" data-order="${esc(trackSelected(mapped))}" role="region" aria-label="Map of deliveries being carried"></div>
+        <div id="cc-fleet-alerts" aria-live="polite"></div>
         <p class="t-xs faint" id="cc-track-note" aria-live="polite"></p>
       </section>` : ''}
       <section class="card card-pad cc-section">
@@ -4016,7 +4017,72 @@ async function scrDeliveries() {
       <p class="t-xs faint">A partner chooses to share per delivery, and their phone then sends a position when they move while the delivery screen is open; a locked phone or a backgrounded browser pauses it.
         Fresh means under ${FRESH_S} s, stale up to ${STALE_S / 60} min; after that the customer's map stops drawing it.</p>`;
   }, { label: 'Loading deliveries' });
-  paintTrackMap();
+  paintFleet();
+}
+
+/* ---------- the fleet map ------------------------------------------------
+   With Google Maps configured (the server's `maps` answer), ONE map for every
+   delivery being carried. Google bills each map created, so the map element
+   and its controller live here, outside the page: a live reload or a visit to
+   another page and back re-attaches the same element instead of creating a
+   new map, and positions are refreshed in place every FLEET_POLL_MS while
+   this page is open and visible. Without Google, or if it fails to load, the
+   OpenStreetMap map of one selected delivery is drawn exactly as before. */
+const FLEET_POLL_MS = 10_000;
+const fleet = { el: null, ctl: null, timer: null, failed: false, data: null };
+async function paintFleet() {
+  const slot = document.getElementById('cc-fleet-slot');
+  if (!slot) return stopFleetPoll();
+  let data;
+  try { data = await quad.deliveryFleet(); } catch (e) { return osmFallback(slot, explain(e)); }
+  fleet.data = data;
+  if (data.maps?.provider !== 'google' || fleet.failed) return osmFallback(slot);
+  if (!fleet.el) { fleet.el = document.createElement('div'); fleet.el.className = 'cc-track-map cc-fleet-map'; }
+  if (fleet.el.parentElement !== slot) slot.replaceChildren(fleet.el);
+  try {
+    if (!fleet.ctl) {
+      const { createLiveMap } = await import('../../packages/ui/map-google.js');
+      fleet.ctl = await createLiveMap(fleet.el, data.maps, { onSelect: (id) => { trackChoice = id; } });
+    }
+  } catch (e) {
+    fleet.failed = true; fleet.el = null; fleet.ctl = null;
+    return osmFallback(slot, `Google Maps could not load (${e.message}); showing the OpenStreetMap map.`);
+  }
+  fleet.ctl.update(data.deliveries);
+  paintFleetAlerts(data);
+  if (!fleet.timer) fleet.timer = setInterval(fleetTick, FLEET_POLL_MS);
+}
+async function fleetTick() {
+  if (S.route !== 'deliveries' || !document.getElementById('cc-fleet-slot')) return stopFleetPoll();
+  if (document.visibilityState !== 'visible' || !fleet.ctl) return;
+  try {
+    const data = await quad.deliveryFleet();
+    fleet.data = data;
+    fleet.ctl.update(data.deliveries);
+    paintFleetAlerts(data);
+  } catch { /* the next tick tries again; the map keeps its last state */ }
+}
+function stopFleetPoll() { clearInterval(fleet.timer); fleet.timer = null; }
+function osmFallback(slot, why) {
+  stopFleetPoll();
+  if (!document.getElementById('cc-track-map')) {
+    slot.innerHTML = `<div id="cc-track-map" class="cc-track-map" data-order="${esc(slot.dataset.order || '')}" aria-label="Map of the selected delivery"></div>`;
+  }
+  if (why) document.getElementById('cc-fleet-alerts').innerHTML = `<p class="t-xs faint">${esc(why)}</p>`;
+  return paintTrackMap();
+}
+const fleetAge = (s) => (s == null ? 'no position yet' : s < 60 ? `${Math.max(1, s)} s ago` : `${Math.round(s / 60)} min ago`);
+function paintFleetAlerts(data) {
+  const box = document.getElementById('cc-fleet-alerts');
+  const note = document.getElementById('cc-track-note');
+  if (!box) return;
+  const list = data.deliveries || [];
+  box.innerHTML = list.length ? `<ul class="cc-fleet-list">${list.map((d) => `<li>
+      <button type="button" class="btn btn-ghost btn-sm" data-act="trackOnMap" data-id="${esc(d.orderId)}"><b>${esc(d.code)}</b></button>
+      <span class="t-xs">${esc(d.partnerName || 'Partner')} · ${esc(ORDER_LABEL[d.state] || d.state)} · ${esc(fleetAge(d.partner?.ageSeconds))}${d.route?.distanceM ? ` · ${esc(Math.round(d.route.distanceM))} m, about ${esc(Math.max(1, Math.round(d.route.durationS / 60)))} min walk left` : ''}</span>
+      ${(d.alerts || []).map((a) => `<span class="badge ${a.level === 'bad' ? 'badge-danger' : 'badge-warn'}">${esc(a.text)}</span>`).join(' ')}
+    </li>`).join('')}</ul>` : '';
+  if (note) note.textContent = `Google Maps, walking routes. Positions refresh every ${FLEET_POLL_MS / 1000} s while this page is open; a route is fetched once per leg and reused. Updated ${new Date(data.at).toLocaleTimeString()}.`;
 }
 
 /* The delivery shown on the map: the one chosen, or the first being carried. */
@@ -4153,7 +4219,7 @@ Object.assign(ACTIONS, WZ_ACTIONS, {
     if (!m.hidden) m.querySelector('button')?.focus();
   },
   deliveriesRefresh: () => scrDeliveries(),
-  trackOnMap: (t) => { trackChoice = t.dataset.id; const el = document.getElementById('cc-track-map'); if (el) { el.dataset.order = trackChoice; paintTrackMap(); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } },
+  trackOnMap: (t) => { trackChoice = t.dataset.id; if (fleet.ctl && document.getElementById('cc-fleet-slot')) { fleet.ctl.focus(trackChoice); document.getElementById('cc-fleet-slot').scrollIntoView({ behavior: 'smooth', block: 'center' }); return; } const el = document.getElementById('cc-track-map'); if (el) { el.dataset.order = trackChoice; paintTrackMap(); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } },
   decideApproval: (t) => modal(`${t.dataset.v === 'approve' ? 'Approve' : 'Reject'}: ${t.dataset.name}`,
     `<p class="t-sm muted">${t.dataset.v === 'approve' ? 'The server re-checks the current state, then carries this out now.' : 'Nothing will be done.'}</p>${textarea('note', 'Note (optional)')}`,
     (d) => quad.decideApproval(t.dataset.id, t.dataset.v, d.note), '', { submitLabel: t.dataset.v === 'approve' ? 'Approve' : 'Reject' }),
