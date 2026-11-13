@@ -12,7 +12,7 @@ import { stopSharing } from '../services/partner-location.js';
 import { issueSession, revokeSession, cookieOptions } from '../auth/session.js';
 import { landingSurface, SURFACE_ROLES, Forbidden, HttpError, verificationView, isPlatformRole } from '../auth/rbac.js';
 import { q, one, tx } from '../db/index.js';
-import { SESSION, PLATFORM_OWNER, providerStatus, RATE_LIMITS, STUDENT_EMAIL, ADMIN } from '../config.js';
+import { SESSION, PLATFORM_OWNER, providerStatus, RATE_LIMITS, STUDENT_EMAIL, ADMIN, MICROSOFT } from '../config.js';
 import { audit } from '../audit.js';
 import { flag } from '../services/flags.js';
 import { profileOf, validateMobile } from '../services/profile.js';
@@ -44,6 +44,58 @@ export async function grantConfiguredAdminRoles(c, userId, email) {
   }
 }
 
+/* The one account system behind both student sign-in methods. `email` is
+   a mailbox already proven (a code read from it, or a verified Microsoft
+   identity in the university's tenant) and already normalised.
+
+   With `microsoft` ({ tid, oid }) the account is also bound to that Entra
+   object. Binding is refused, never overwritten, when the account is
+   already bound to a different object - a mailbox name reissued to someone
+   else must not reach the earlier owner's orders. Nothing here touches a
+   password, an authenticator or a role other than the bootstrap grants the
+   email code already applies. */
+export class AccountLinkConflict extends Error {
+  constructor(detail) { super(detail); this.code = 'conflict'; this.detail = detail; }
+}
+
+export async function signInStudentMailbox(email, { microsoft = null } = {}) {
+  return tx(async (c) => {
+    /* Serialise account creation for one mailbox. */
+    await c.query(`SELECT pg_advisory_xact_lock(hashtext('student-email:' || $1))`, [email]);
+    let u = (await c.query(`SELECT * FROM app_user WHERE student_email = $1`, [email])).rows[0];
+    if (microsoft) {
+      const bound = (await c.query(
+        `SELECT id, student_email FROM app_user WHERE microsoft_tid = $1 AND microsoft_oid = $2`,
+        [microsoft.tid, microsoft.oid])).rows[0];
+      if (bound && bound.id !== u?.id) throw new AccountLinkConflict('oid_bound_to_other_account');
+      if (u?.microsoft_oid && (u.microsoft_oid !== microsoft.oid || u.microsoft_tid !== microsoft.tid)) {
+        throw new AccountLinkConflict('account_bound_to_other_oid');
+      }
+    }
+    let created = false;
+    if (!u) {
+      u = (await c.query(
+        `INSERT INTO app_user (student_email, student_email_verified_at)
+         VALUES ($1, now()) RETURNING *`, [email])).rows[0];
+      created = true;
+      await c.query(`INSERT INTO user_role (user_id, role) VALUES ($1,'student') ON CONFLICT DO NOTHING`, [u.id]);
+    }
+    /* A suspended account gains nothing from signing in, including a status
+       change or a new Microsoft binding. */
+    if (u.status !== 'active') return { user: u, created, proof: { before: u.student_status, after: u.student_status } };
+    let linked = false;
+    if (microsoft && !u.microsoft_oid) {
+      await c.query(`UPDATE app_user SET microsoft_tid = $2, microsoft_oid = $3, microsoft_linked_at = now() WHERE id = $1`,
+        [u.id, microsoft.tid, microsoft.oid]);
+      linked = true;
+    }
+    const proof = await recordMailboxProof(c, u.id, email);
+    await grantConfiguredAdminRoles(c, u.id, email);
+    u = (await c.query(`SELECT * FROM app_user WHERE id = $1`, [u.id])).rows[0];
+    return { user: u, created, proof, linked };
+  });
+}
+
 export default async function authRoutes(app) {
   /* Surfaces call this on boot to know what is actually available, so they
      can render a truthful unavailable state instead of a dead form. */
@@ -54,6 +106,7 @@ export default async function authRoutes(app) {
     otp: { configured: false, removed: true },
     email: { configured: emailConfigured(), domains: STUDENT_EMAIL.domains,
              codeLength: STUDENT_EMAIL.length },
+    microsoft: { configured: MICROSOFT.configured },
     providers: providerStatus(),
   }));
 
@@ -83,25 +136,7 @@ export default async function authRoutes(app) {
       throw e;
     }
 
-    const { user, created, proof } = await tx(async (c) => {
-      /* Serialise account creation for one mailbox. */
-      await c.query(`SELECT pg_advisory_xact_lock(hashtext('student-email:' || $1))`, [email]);
-      let u = (await c.query(`SELECT * FROM app_user WHERE student_email = $1`, [email])).rows[0];
-      let created = false;
-      if (!u) {
-        u = (await c.query(
-          `INSERT INTO app_user (student_email, student_email_verified_at)
-           VALUES ($1, now()) RETURNING *`, [email])).rows[0];
-        created = true;
-        await c.query(`INSERT INTO user_role (user_id, role) VALUES ($1,'student') ON CONFLICT DO NOTHING`, [u.id]);
-      }
-      /* A suspended account gains nothing from a code, including a status change. */
-      if (u.status !== 'active') return { user: u, created, proof: { before: u.student_status, after: u.student_status } };
-      const proof = await recordMailboxProof(c, u.id, email);
-      await grantConfiguredAdminRoles(c, u.id, email);
-      u = (await c.query(`SELECT * FROM app_user WHERE id = $1`, [u.id])).rows[0];
-      return { user: u, created, proof };
-    });
+    const { user, created, proof } = await signInStudentMailbox(email);
 
     if (user.status !== 'active') {
       await audit(req, { action: 'auth.login', resourceId: user.id, outcome: 'denied',

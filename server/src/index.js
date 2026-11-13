@@ -17,6 +17,7 @@ import { audit } from './audit.js';
 import { edgeLimitHook, edgePeer } from './edge-limit.js';
 
 import authRoutes from './routes/auth.js';
+import microsoftAuthRoutes from './routes/microsoft-auth.js';
 import catalogRoutes from './routes/catalog.js';
 import campusRoutes from './routes/campus.js';
 import orderRoutes from './routes/orders.js';
@@ -189,6 +190,10 @@ export function build() {
     const PUBLIC = [
       /^\/health$/, /^\/health\/client$/, /^\/csp-report$/, /^\/ready$/,
       /^\/auth\/(status|otp\/send|otp\/verify|email\/send|email\/verify|logout|me)$/,
+      /* Microsoft sign-in: start only redirects to the university's tenant;
+         the callback opens a session only after the ID token and the
+         student-domain rule have been verified (routes/microsoft-auth.js). */
+      /^\/auth\/microsoft\/(start|callback)$/,
       /* Administrator sign-in is public in exactly the sense the student's
          email code is: it proves possession of a password AND a code from a
          registered authenticator, and only then does a session exist. The
@@ -379,6 +384,7 @@ export function build() {
 
     installAtomicRoutes(app);
     await app.register(authRoutes);
+    await app.register(microsoftAuthRoutes);
     await app.register(adminSignInRoutes);
     await app.register(adminResetRoutes);
     await app.register(trackingRoutes);

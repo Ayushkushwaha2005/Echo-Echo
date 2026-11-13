@@ -16,7 +16,7 @@
    and it holds ids and quantities — never prices, because the server prices
    the draft.
    ========================================================================== */
-import { quad, ApiError, Offline, rupees, ratingLabel } from '../../packages/data/client.js';
+import { quad, ApiError, Offline, rupees, ratingLabel, API_BASE } from '../../packages/data/client.js';
 import { createPositionShare } from '../../packages/data/position-share.js';
 import { followChanges } from '../../packages/data/live.js';
 import { esc, VegMark, StatusPill, I as KIT, toggleTheme, restoreTheme } from '../../packages/ui/kit.js';
@@ -718,8 +718,59 @@ function ScrObEmail() {
       </div>
       ${a.error ? `<p class="t-xs" role="alert" style="color:var(--danger)">${esc(a.error)}</p>` : ''}
       <button class="btn btn-primary btn-lg btn-block" type="submit">Send code</button>
+      ${microsoftSignInAvailable() ? `
+        <div class="author" aria-hidden="true"><span>or</span></div>
+        <button class="msbtn" type="button" data-act="microsoftSignIn">
+          <svg width="21" height="21" viewBox="0 0 21 21" aria-hidden="true" focusable="false">
+            <rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+            <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+          </svg>
+          <span>Continue with Microsoft</span>
+        </button>
+        <p class="t-xs muted" style="text-align:center">Use your @${esc(studentDomain())} Microsoft account.</p>` : ''}
     </form>
   </div>`;
+}
+
+/* ---------- Continue with Microsoft -------------------------------------
+   The whole exchange happens on the server (GET /auth/microsoft/start and
+   /callback); this page only leaves and comes back. The server decides who
+   is a student. What the student chose before leaving (campus, the screen
+   they were heading to) is kept for the return in sessionStorage. */
+const MS_KEY = 'quad.ms.return';
+const microsoftSignInAvailable = () => !!S.providers?.microsoft_signin?.configured;
+const MS_REASONS = {
+  cancelled: 'Microsoft sign-in was cancelled. You can try again or use the email code.',
+  not_student: `Only @${'stu.upes.ac.in'} student Microsoft accounts can sign in. Personal Microsoft accounts and other organisations are not accepted.`,
+  not_verified: 'Microsoft did not confirm a university student identity for that account. Use the email code instead.',
+  expired: 'That sign-in took too long or was already used. Please try again.',
+  consent: 'Your university has not yet approved ECHO ECHO for Microsoft sign-in. Use the email code for now.',
+  conflict: 'We could not sign you in with Microsoft. Use the email code, or contact campus support.',
+  suspended: 'This account is suspended. Contact campus support.',
+  unavailable: 'Microsoft sign-in is not available right now. Use the email code.',
+  network: 'Could not reach Microsoft. Check your connection and try again.',
+  failed: 'Microsoft sign-in did not complete. Please try again or use the email code.',
+};
+function microsoftSignIn() {
+  try {
+    sessionStorage.setItem(MS_KEY, JSON.stringify({ campusId: S.auth.campusId || '', college: S.auth.college || '',
+      next: S.auth.next || null }));
+  } catch { /* storage blocked: the student just chooses the campus again */ }
+  location.assign(`${API_BASE}/auth/microsoft/start`);
+}
+/* Reads and clears ?ms= left by the server's redirect. */
+function microsoftReturn() {
+  let reason = null;
+  try {
+    const u = new URL(location.href);
+    reason = u.searchParams.get('ms');
+    if (reason === null) return null;
+    u.searchParams.delete('ms');
+    history.replaceState(history.state, '', u.pathname + u.search + u.hash);
+  } catch { return null; }
+  let saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem(MS_KEY) || 'null'); sessionStorage.removeItem(MS_KEY); } catch { /* none */ }
+  return { reason: reason in MS_REASONS || reason === 'ok' ? reason : 'failed', saved };
 }
 
 function ScrObEmailCode() {
@@ -3444,6 +3495,7 @@ document.addEventListener('click', async (e) => {
       });
       break;
 
+    case 'microsoftSignIn': microsoftSignIn(); break;
     case 'resendEmail':
       if (resendWait()) break;
       await withBusy(t, async () => {
@@ -3965,6 +4017,22 @@ async function openGateway(intent, draft) {
   }
   S.campuses ??= [];
   lastCampus = null;
+  /* Back from Microsoft sign-in. Success continues exactly as a verified
+     email code does; anything else returns to the email screen with the
+     reason, and the email code remains right there. */
+  const ms = PREVIEW ? null : microsoftReturn();
+  if (ms) {
+    if (ms.reason === 'ok' && signedIn()) {
+      Object.assign(S.auth, { campusId: ms.saved?.campusId || '', college: ms.saved?.college || '', next: ms.saved?.next || null });
+      try { await signedInNow(); return; } catch { /* fall through to the normal landing */ }
+    } else if (!signedIn()) {
+      /* 'ok' without a session means the cookie did not survive the trip. */
+      Object.assign(S.auth, { campusId: ms.saved?.campusId || S.auth.campusId || '', college: ms.saved?.college || '',
+        next: ms.saved?.next || null, error: MS_REASONS[ms.reason === 'ok' ? 'failed' : ms.reason] });
+      go('ob-email', {}, { history: 'replace' });
+      return;
+    }
+  }
   /* A link to a screen (a café's menu, Deliver with ECHO ECHO) opens that
      screen. Signed out, only the screens anyone may see are honoured. */
   const asked = routeFromHash();

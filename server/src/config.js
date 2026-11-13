@@ -402,6 +402,35 @@ export const STUDENT_EMAIL = {
   get configured() { return NOTIFY.email.configured && this.domains.length > 0; },
 };
 
+/* ---------- Microsoft (Entra ID) student sign-in -------------------------
+   Off until all four values are set on the server. The tenant is PINNED:
+   the authorize URL names it, so personal Microsoft accounts and every other
+   organisation are refused by Microsoft itself, and the ID token's issuer
+   and `tid` are checked against it again here. The email domain rule is the
+   same STUDENT_EMAIL.domains list the email code uses.
+
+   MICROSOFT_TENANT_ID      the university's Entra tenant (a GUID), not ours
+   MICROSOFT_CLIENT_ID      the app registration's Application (client) ID
+   MICROSOFT_CLIENT_SECRET  a client secret of that registration (server only)
+   MICROSOFT_REDIRECT_URI   defaults to <first WEB_ORIGIN>/api/auth/microsoft/callback */
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const MICROSOFT = {
+  tenantId: String(env('MICROSOFT_TENANT_ID', '')).trim().toLowerCase(),
+  clientId: String(env('MICROSOFT_CLIENT_ID', '')).trim(),
+  clientSecret: env('MICROSOFT_CLIENT_SECRET', ''),
+  authorityHost: 'https://login.microsoftonline.com',
+  attemptTtlSeconds: 600,
+  get redirectUri() {
+    return env('MICROSOFT_REDIRECT_URI') ||
+      `${String(env('WEB_ORIGIN', 'http://localhost:3000')).split(',')[0].trim().replace(/\/$/, '')}/api/auth/microsoft/callback`;
+  },
+  get configured() {
+    /* The consumer-account tenant can never be the pinned tenant. */
+    return GUID.test(this.tenantId) && this.tenantId !== '9188040d-6c67-4c5b-b112-36a304b66dad' &&
+      GUID.test(this.clientId) && !!this.clientSecret && STUDENT_EMAIL.domains.length > 0;
+  },
+};
+
 /* ---------- data retention -----------------------------------------------
    ID-card images are deleted this many days after a case is decided. */
 export const RETENTION = {
@@ -555,6 +584,7 @@ export function providerStatus() {
     email: { provider: NOTIFY.email.provider, configured: NOTIFY.email.configured },
     student_email: { configured: STUDENT_EMAIL.configured, domains: STUDENT_EMAIL.domains,
                      requiresAdminReview: STUDENT_EMAIL.emailRequiresAdminReview },
+    microsoft_signin: { configured: MICROSOFT.configured },
     push: { provider: null, configured: false },
     platform_owner: { configured: PLATFORM_OWNER.configured },
     admin_passkeys: { required: ADMIN.passkeyRequired, rpId: WEBAUTHN.rpId, configured: true },

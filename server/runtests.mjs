@@ -83,6 +83,7 @@ const FILES = [
   ['enrolment', 'test/enrolment.test.mjs'],
   ['auth', 'test/admin-login.test.mjs'],
   ['auth', 'test/student-email.test.mjs'],
+  ['auth', 'test/microsoft-signin.test.mjs'],
   ['auth', 'test/email-brevo.test.mjs'],
   ['payments', 'test/payments.test.mjs'],
   ['payments', 'test/payments-cashfree.test.mjs'],
