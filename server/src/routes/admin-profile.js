@@ -21,7 +21,7 @@
    ========================================================================== */
 import { createHash } from 'node:crypto';
 import { q, one } from '../db/index.js';
-import { BadRequest, Forbidden, NotFound, isPlatformRole } from '../auth/rbac.js';
+import { BadRequest, Forbidden, NotFound, isPlatformRole, can } from '../auth/rbac.js';
 import { assertPasskeySession, assertRecentPasskey } from '../auth/passkey-policy.js';
 import { revokeAllForUser } from '../auth/session.js';
 import { sessionHandle } from '../services/device.js';
@@ -149,6 +149,10 @@ export default async function adminProfileRoutes(app) {
      key is the public, site-locked one; the Routes key never leaves the server. */
   app.get('/admin/maps', async (req) => {
     me(req);
+    /* Only for someone who can see a map: campus places, or delivery positions. */
+    if (!['location.read', 'campus.read', 'boundary.read', 'delivery.track'].some((c) => can(req.actor, c))) {
+      throw Forbidden('You do not have access to Campus Control maps');
+    }
     return mapsConfig();
   });
 

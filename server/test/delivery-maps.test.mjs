@@ -374,10 +374,11 @@ test('fleet map groups waiting, carried and finished deliveries; finished ones n
   assert.equal(audited, 1);
 });
 
-test('Campus Control map setting: any administrator, never the Routes key; students refused', async () => {
+test('Campus Control map setting: only for map viewers, never the Routes key; others refused', async () => {
   await seed();
   process.env.GOOGLE_MAPS_BROWSER_KEY = 'browser-key'; process.env.GOOGLE_ROUTES_API_KEY = 'server-key';
-  const r = await (await as(viewAdmin, 'admin_totp')).get('/admin/maps');
+  assert.equal((await (await as(viewAdmin, 'admin_totp')).get('/admin/maps')).status, 403, 'orders.view alone sees no map');
+  const r = await (await as(trackAdmin, 'admin_totp')).get('/admin/maps');
   assert.equal(r.status, 200);
   assert.equal(r.body.provider, 'google');
   assert.doesNotMatch(JSON.stringify(r.body), /server-key/);
