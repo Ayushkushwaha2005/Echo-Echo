@@ -18,15 +18,44 @@
 
 let loading = null;
 
+/* ---------- Google failing AFTER a map is on screen ------------------------
+   A refused key, an exhausted daily quota or billing trouble does not stop
+   the script loading: Google then calls gm_authFailure and/or paints its own
+   "can't load Google Maps correctly" box inside the map. Either way the map
+   is useless, so every screen showing one is told (onGoogleFailure) and
+   swaps to the OpenStreetMap map for the rest of the visit. */
+let failed = false;
+const failureListeners = new Set();
+export function onGoogleFailure(fn) {
+  if (failed) { queueMicrotask(fn); return () => {}; }
+  failureListeners.add(fn);
+  return () => failureListeners.delete(fn);
+}
+export const googleFailed = () => failed;
+function reportFailure() {
+  if (failed) return;
+  failed = true;
+  for (const fn of failureListeners) { try { fn(); } catch { /* one screen's handler must not stop the others */ } }
+  failureListeners.clear();
+}
+/* Google's error box, inside a map container. */
+function watchForErrorBox(el) {
+  const check = () => (el.querySelector('.gm-err-container, .gm-err-message') ? (reportFailure(), true) : false);
+  if (check()) return;
+  const mo = new MutationObserver(() => { if (check()) mo.disconnect(); });
+  mo.observe(el, { childList: true, subtree: true });
+}
+
 /* One <script> per page, whatever the number of maps. Rejects on network
    failure, a refused key (gm_authFailure), or a timeout, so the caller can
    fall back to the OpenStreetMap map. */
 export function loadGoogleMaps(cfg, { timeoutMs = 12000 } = {}) {
+  if (failed) return Promise.reject(new Error('Google Maps is unavailable for this visit'));
   if (globalThis.google?.maps?.importLibrary) return Promise.resolve(globalThis.google.maps);
   if (loading) return loading;
   loading = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Google Maps did not load in time')), timeoutMs);
-    globalThis.gm_authFailure = () => { clearTimeout(timer); reject(new Error('Google Maps refused the key for this site')); };
+    globalThis.gm_authFailure = () => { clearTimeout(timer); reportFailure(); reject(new Error('Google Maps refused the key for this site')); };
     globalThis.__echoGoogleMapsReady = () => { clearTimeout(timer); resolve(globalThis.google.maps); };
     const s = document.createElement('script');
     s.src = 'https://maps.googleapis.com/maps/api/js?' + new URLSearchParams({
@@ -118,6 +147,7 @@ export async function createLiveMap(el, cfg, { center = null, boundary = null, o
     clickableIcons: false,
     gestureHandling: 'cooperative',
   });
+  watchForErrorBox(el);
   const info = new InfoWindow();
   const markers = new globalThis.Map();   // key -> { marker, kind, anim }
   const lines = new globalThis.Map();     // orderId -> Polyline
@@ -291,6 +321,7 @@ export async function createPickerMap(el, data, { onTap, onSelect, ...state } = 
     gestureHandling: 'greedy',
     restriction: { latLngBounds: pad(bounds, 0.6), strictBounds: false },
   });
+  watchForErrorBox(el);
   new Polygon({ map, paths: poly, clickable: false, strokeColor: '#E0567A', strokeOpacity: 0.95,
     strokeWeight: 2, fillColor: '#E0567A', fillOpacity: 0.07 });
 

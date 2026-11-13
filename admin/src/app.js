@@ -4041,8 +4041,15 @@ async function paintFleet() {
   if (fleet.el.parentElement !== slot) slot.replaceChildren(fleet.el);
   try {
     if (!fleet.ctl) {
-      const { createLiveMap } = await import('../../packages/ui/map-google.js');
-      fleet.ctl = await createLiveMap(fleet.el, data.maps, { onSelect: (id) => { trackChoice = id; } });
+      const gmod = await import('../../packages/ui/map-google.js');
+      /* Google failing after the map is drawn (key refused, quota spent):
+         the OpenStreetMap map of the selected delivery, as before. */
+      gmod.onGoogleFailure(() => {
+        fleet.failed = true; fleet.ctl = null; fleet.el = null;
+        const s = document.getElementById('cc-fleet-slot');
+        if (s) { s.replaceChildren(); osmFallback(s, 'Google Maps is unavailable right now (key or daily quota); showing the OpenStreetMap map.'); }
+      });
+      fleet.ctl = await gmod.createLiveMap(fleet.el, data.maps, { onSelect: (id) => { trackChoice = id; } });
     }
   } catch (e) {
     fleet.failed = true; fleet.el = null; fleet.ctl = null;

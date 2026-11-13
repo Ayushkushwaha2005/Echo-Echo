@@ -168,3 +168,31 @@ test('if Google Maps cannot load, the checkout picker falls back to OpenStreetMa
   await expect(page.locator('[data-act=useGps]').first()).toBeEnabled();
   await context.close();
 });
+
+/* Quota exhausted or key refused AFTER the map is on screen. Google reports
+   it through gm_authFailure and/or its own error box in the map; both are
+   simulated here exactly as Google delivers them. The student must end up
+   on the OpenStreetMap picker and still be able to choose a spot. */
+for (const how of ['gm_authFailure', 'error box']) {
+  test(`Google failing after load (${how}): checkout falls back to OpenStreetMap and a spot can still be chosen`, async ({ browser }) => {
+    test.setTimeout(90_000);
+    const { context, page } = await checkoutReady(browser);
+    await page.locator('[data-act=sheet][data-sheet=location]').first().click();
+    await expect(page.locator('.fake-gmap')).toHaveCount(1, { timeout: 15000 });
+    if (how === 'gm_authFailure') await page.evaluate(() => window.gm_authFailure());
+    else {
+      await page.evaluate(() => {
+        const box = document.createElement('div');
+        box.className = 'gm-err-container';
+        box.textContent = "This page can't load Google Maps correctly.";
+        window.__gm.map.el.append(box);
+      });
+    }
+    await expect(page.locator('.fake-gmap')).toHaveCount(0, { timeout: 15000 });
+    await expect(page.locator('.echo-picker-slot .leaflet-container, .echo-picker-slot .map-empty')).toHaveCount(1, { timeout: 25000 });
+    await page.locator('[data-act=useGps]').first().click();
+    await expect(page.locator('#spot-ok')).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('.sheet-foot .btn-primary:not([disabled])')).toHaveCount(1);
+    await context.close();
+  });
+}
