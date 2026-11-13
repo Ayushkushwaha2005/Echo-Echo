@@ -30,7 +30,7 @@ import { audit } from '../audit.js';
 export async function agentContext(actor, now = new Date()) {
   const campusId = actor?.campusId || null;
   const { rows: vendors } = await q(
-    `SELECT v.id, v.slug, v.name, v.opens_at, v.closes_at, v.open_days, v.is_open, v.accepting,
+    `SELECT v.id, v.slug, v.name, v.opens_at, v.closes_at, v.open_days, v.is_open, v.accepting, v.manual_availability,
             v.delivery_enabled, v.active, cs.service_status
        FROM vendor v LEFT JOIN campus_site cs ON cs.id = v.campus_site_id
       WHERE v.active AND ($1::uuid IS NULL OR v.campus_site_id = $1)

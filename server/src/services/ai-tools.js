@@ -21,6 +21,10 @@
    and still has to go through checkout and the payment gateway.
    ========================================================================== */
 import { q, one, tx } from '../db/index.js';
+import { statusOf } from './hours.js';
+
+/* The same open/closed answer the student site and the order check use. */
+const cafeOpen = (v) => statusOf(v).open;
 import { authorize } from '../auth/rbac.js';
 import { buildDraft, transition } from '../routes/orders.js';
 import * as campus from './campus.js';
@@ -106,14 +110,15 @@ export const TOOL_SPECS = [
 export const TOOLS = {
   async search_cafeterias(actor, { open_only } = {}) {
     const { rows } = await q(
-      `SELECT v.id, v.name, v.kind, v.is_open, v.accepting, v.prep_minutes, v.delivery_enabled,
+      `SELECT v.id, v.name, v.kind, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.is_open, v.accepting, v.prep_minutes, v.delivery_enabled,
               (SELECT count(*)::int FROM review r WHERE r.vendor_id = v.id AND NOT r.hidden) AS rating_count,
               (SELECT round(avg(stars)::numeric,2) FROM review r WHERE r.vendor_id = v.id AND NOT r.hidden) AS rating_avg
-         FROM vendor v WHERE v.active AND ($1::boolean IS NOT TRUE OR (v.is_open AND v.accepting))
+         FROM vendor v WHERE v.active
           AND v.campus_site_id IS NOT DISTINCT FROM $2
-        ORDER BY v.name`, [open_only ?? null, actor.campusId || '00000000-0000-0000-0000-000000000000']);
-    return { cafeterias: rows.map((v) => ({
-      id: v.id, name: v.name, kind: v.kind, open: v.is_open && v.accepting,
+        ORDER BY v.name`, [actor.campusId || '00000000-0000-0000-0000-000000000000']);
+    /* Open means what the student site and the order check say: statusOf. */
+    return { cafeterias: rows.filter((v) => !open_only || cafeOpen(v)).map((v) => ({
+      id: v.id, name: v.name, kind: v.kind, open: cafeOpen(v),
       prep_minutes: v.prep_minutes, delivers: v.delivery_enabled,
       rating: v.rating_count > 0 ? { average: Number(v.rating_avg), count: v.rating_count } : null,
     })) };
@@ -123,7 +128,7 @@ export const TOOLS = {
     const maxPaise = max_price_rupees ? Math.round(max_price_rupees * 100) : null;
     const { rows } = await q(
       `SELECT i.id, i.name, i.description, i.price_paise, i.veg, i.available, i.prep_minutes,
-              i.tags, v.id AS vendor_id, v.name AS vendor_name, v.is_open, v.accepting
+              i.tags, v.id AS vendor_id, v.name AS vendor_name, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.is_open, v.accepting
          FROM menu_item i JOIN vendor v ON v.id = i.vendor_id
         WHERE i.active AND v.active
           AND ($1 = '' OR i.name ILIKE $2
@@ -136,22 +141,22 @@ export const TOOLS = {
       [query, `%${query}%`, maxPaise, veg_only ?? null, vendor_id || null]);
     return { items: rows.map((i) => ({
       item_id: i.id, name: i.name, price: rupees(i.price_paise), price_paise: i.price_paise,
-      veg: i.veg, available: i.available && i.is_open && i.accepting,
+      veg: i.veg, available: i.available && cafeOpen(i),
       unavailable_reason: !i.available ? 'item marked unavailable'
-        : !(i.is_open && i.accepting) ? 'cafeteria closed' : null,
+        : !cafeOpen(i) ? 'cafeteria closed' : null,
       vendor_id: i.vendor_id, vendor_name: i.vendor_name, prep_minutes: i.prep_minutes, tags: i.tags,
     })) };
   },
 
   async get_item_details(actor, { item_id }) {
     const i = await one(
-      `SELECT i.*, v.name AS vendor_name, v.is_open, v.accepting,
+      `SELECT i.*, v.name AS vendor_name, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.is_open, v.accepting,
               (SELECT count(*)::int FROM review r WHERE r.item_id = i.id) AS rc,
               (SELECT round(avg(stars)::numeric,2) FROM review r WHERE r.item_id = i.id) AS ra
          FROM menu_item i JOIN vendor v ON v.id = i.vendor_id WHERE i.id = $1`, [item_id]);
     if (!i) return { error: 'no such item' };
     return { item_id: i.id, name: i.name, description: i.description, price: rupees(i.price_paise),
-             veg: i.veg, available: i.available && i.is_open && i.accepting,
+             veg: i.veg, available: i.available && cafeOpen(i),
              vendor_name: i.vendor_name, prep_minutes: i.prep_minutes,
              rating: i.rc > 0 ? { average: Number(i.ra), count: i.rc } : null };
   },
@@ -159,11 +164,11 @@ export const TOOLS = {
   async check_availability(actor, { item_ids = [] }) {
     if (!item_ids.length) return { items: [] };
     const { rows } = await q(
-      `SELECT i.id, i.name, i.available, v.is_open, v.accepting
+      `SELECT i.id, i.name, i.available, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.is_open, v.accepting
          FROM menu_item i JOIN vendor v ON v.id = i.vendor_id
         WHERE i.id = ANY($1::uuid[]) AND i.active`, [item_ids]);
     return { items: rows.map((i) => ({
-      item_id: i.id, name: i.name, available: i.available && i.is_open && i.accepting })) };
+      item_id: i.id, name: i.name, available: i.available && cafeOpen(i) })) };
   },
 
   async resolve_location(actor, { text }) {
@@ -227,19 +232,21 @@ export const TOOLS = {
 
   async recommend_items(actor, { mood, max_price_rupees, veg_only } = {}) {
     const maxPaise = max_price_rupees ? Math.round(max_price_rupees * 100) : null;
-    const { rows } = await q(
-      `SELECT i.id, i.name, i.price_paise, i.veg, i.tags, v.name AS vendor_name, v.id AS vendor_id,
+    const { rows: all } = await q(
+      `SELECT i.id, i.name, i.price_paise, i.veg, i.tags, v.name AS vendor_name, v.id AS vendor_id, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.is_open, v.accepting,
               (SELECT count(*)::int FROM review r WHERE r.item_id = i.id AND NOT r.hidden) AS rc,
               (SELECT round(avg(stars)::numeric,2) FROM review r
                 WHERE r.item_id = i.id AND NOT r.hidden) AS ra
          FROM menu_item i JOIN vendor v ON v.id = i.vendor_id
-        WHERE i.active AND v.active AND i.available AND v.is_open AND v.accepting
+        WHERE i.active AND v.active AND i.available
           AND ($1::int IS NULL OR i.price_paise <= $1)
           AND ($2::boolean IS NOT TRUE OR i.veg IS TRUE)
           AND ($3 = '' OR EXISTS (SELECT 1 FROM unnest(i.tags) t WHERE t ILIKE $4)
                OR i.name ILIKE $4)
-        ORDER BY rc DESC, i.price_paise LIMIT 12`,
+        ORDER BY rc DESC, i.price_paise LIMIT 60`,
       [maxPaise, veg_only ?? null, mood || '', `%${mood || ''}%`]);
+    /* Only cafés that are open now, by the one shared rule. */
+    const rows = all.filter(cafeOpen).slice(0, 12);
     if (!rows.length) {
       return { items: [], note: 'Nothing on the live menu matches that right now. Say so — do not suggest anything that is not in this list.' };
     }

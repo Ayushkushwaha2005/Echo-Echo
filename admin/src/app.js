@@ -323,7 +323,7 @@ async function scrOverview() {
     return `
       <div class="grid-kpi">
         ${d.vendors ? kpi('Cafeterias', d.vendors.filter((v) => v.active).length,
-              `${d.vendors.filter((v) => v.is_open && v.accepting).length} open now`) : kpi('Cafeterias', '—', na)}
+              `${d.vendors.filter((v) => v.active && v.open_now).length} open now`) : kpi('Cafeterias', '—', na)}
         ${session.can('orders.view') ? kpi('Live orders', live.length, `${d.orders.length} total`) : kpi('Live orders', '—', na)}
         ${d.cases ? kpi('ID reviews waiting', d.cases.length,
               d.cases.length ? 'within a 24-hour SLA' : 'nothing waiting') : kpi('ID reviews waiting', '—', na)}
@@ -699,7 +699,7 @@ async function scrCafeterias() {
     const photos = session.can('menus.manage') || manage;
     return `<div class="cafe-grid">${d.vendors.map((raw) => {
       const v = vendorVM(raw);
-      const status = !raw.active ? ['Archived', 'badge-warn'] : v.open ? ['Open', 'badge-open'] : raw.is_open ? ['Orders paused', 'badge-warn'] : ['Closed', 'badge-closed'];
+      const status = !raw.active ? ['Archived', 'badge-warn'] : v.open ? ['Open', 'badge-open'] : raw.status?.state === 'paused' ? ['Orders paused', 'badge-warn'] : ['Closed', 'badge-closed'];
       return `
         <article class="cafe-card card${raw.active ? '' : ' is-archived'}">
           ${cafeImage(raw)}
@@ -710,7 +710,7 @@ async function scrCafeterias() {
               <span class="badge ${status[1]}">${status[0]}</span>
             </div>
             <dl class="cafe-facts">
-              <div><dt>Hours</dt><dd>${raw.opens_at && raw.closes_at ? `${esc(String(raw.opens_at).slice(0, 5))}–${esc(String(raw.closes_at).slice(0, 5))}` : 'Not set'}</dd></div>
+              <div><dt>Hours</dt><dd>${raw.opens_at && raw.closes_at ? `${esc(String(raw.opens_at).slice(0, 5))}–${esc(String(raw.closes_at).slice(0, 5))}` : 'Not set'}${raw.manual_availability ? ' · ignored (manual override)' : ''}</dd></div>
               <div><dt>Prep time</dt><dd>${raw.prep_minutes ? `${raw.prep_minutes} min` : '—'}</dd></div>
               <div><dt>Delivery</dt><dd>${raw.delivery_enabled ? 'Offered' : 'Pickup only'}</dd></div>
               <div><dt>Rating</dt><dd>${v.ratingText.empty ? 'No ratings yet' : `★ ${esc(v.ratingText.text)} (${v.ratingText.count})`}</dd></div>
@@ -2113,6 +2113,19 @@ document.addEventListener('change', (e) => {
 const field = (name, label, value = '', type = 'text') => `
   <label class="field"><span class="t-label">${esc(label)}</span>
   <input class="input" name="${name}" type="${type}" value="${esc(value ?? '')}"></label>`;
+/* What students see for a café right now: the server's own answer. */
+const effectiveLabel = (v) => !v.active ? 'Archived'
+  : `${v.open_now ? 'Open' : v.status?.state === 'paused' ? 'Orders paused' : 'Closed'}`
+    + `${v.manual_availability ? ' (manual override)' : v.hours?.scheduled ? ' (by schedule)' : ''}`;
+/* The Edit café availability fields as an update. With the override off the
+   Open/Closed choice is not sent, so the schedule decides as before. */
+const availabilityPayload = (d) => {
+  const manual = !!d.manualAvailability;
+  delete d.manualAvailability;
+  const open = d.availabilityState === 'open';
+  delete d.availabilityState;
+  return manual ? { manualAvailability: true, isOpen: open, accepting: open } : { manualAvailability: false };
+};
 const check = (name, label, on) => `
   <label class="row" style="gap:8px"><input type="checkbox" name="${name}" ${on ? 'checked' : ''}>
   <span class="t-sm">${esc(label)}</span></label>`;
@@ -2429,6 +2442,16 @@ ${added.length ? `Grant: ${added.join(', ')}
       ${field('prepMinutes', 'Prep minutes', v.prep_minutes, 'number')}
       ${field('contactPhone', 'Business contact phone', v.contact_phone)}
       ${check('contactPublic', 'Show this number to customers', v.contact_public)}
+      <fieldset class="field" style="border:1px solid var(--line, rgba(0,0,0,.12));border-radius:10px;padding:12px;margin:0">
+        <legend class="t-label" style="padding:0 6px">Café availability (Open / Closed)</legend>
+        <p class="t-sm" style="margin:0 0 8px">Students currently see: <b data-effective>${esc(effectiveLabel(v))}</b></p>
+        ${check('manualAvailability', 'Manual availability override: ignore the scheduled hours', v.manual_availability)}
+        <div class="row" role="radiogroup" aria-label="Open or closed" style="gap:16px;margin:8px 0 4px">
+          <label class="row" style="gap:6px"><input type="radio" name="availabilityState" value="open" ${v.is_open && v.accepting ? 'checked' : ''}><span class="t-sm">Open</span></label>
+          <label class="row" style="gap:6px"><input type="radio" name="availabilityState" value="closed" ${v.is_open && v.accepting ? '' : 'checked'}><span class="t-sm">Closed</span></label>
+        </div>
+        <p class="t-xs muted" style="margin:0">While the override is on, the opening hours above are ignored and this Open/Closed choice is what students see and can order from, on every day and at every hour. Turn it off to go back to the scheduled hours. Delivery and archiving are separate settings.</p>
+      </fieldset>
       ${check('deliveryEnabled', 'Offers delivery', v.delivery_enabled)}
       <label class="field"><span class="t-label">Pickup point (for walking-time estimates)</span>
         <select class="input" name="campusNodeId">
@@ -2438,11 +2461,15 @@ ${added.length ? `Grant: ${added.join(', ')}
         </select></label>`,
       (d) => quad.updateVendor(v.id, { ...d, revision: v.revision, opensAt: d.opensAt || null, closesAt: d.closesAt || null,
         prepMinutes: +d.prepMinutes, campusNodeId: d.campusNodeId || null,
-        deliveryEnabled: !!d.deliveryEnabled, contactPublic: !!d.contactPublic }));
+        deliveryEnabled: !!d.deliveryEnabled, contactPublic: !!d.contactPublic,
+        ...availabilityPayload(d) }));
   },
 
+  /* Open / Close on the card is an explicit administrator choice, so it puts
+     the café under manual availability: the schedule can no longer undo it.
+     Edit café turns the override off again. */
   toggleOpen: (t) => act(t, () => quad.updateVendor(t.dataset.id,
-    { isOpen: t.dataset.v === '1', accepting: t.dataset.v === '1' }), { after: route }),
+    { manualAvailability: true, isOpen: t.dataset.v === '1', accepting: t.dataset.v === '1' }), { after: route }),
 
   toggleAccepting: (t) => act(t, () => quad.updateVendor(t.dataset.id, { accepting: t.dataset.v === '1' }),
     { after: route }),

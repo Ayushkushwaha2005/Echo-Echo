@@ -11,6 +11,9 @@
 
    No open_days means the café has no schedule, and its own is_open /
    accepting switches decide, as before. Delivery has no hours of its own.
+
+   manual_availability (migration 045) puts a scheduled café under the
+   administrator's Open/Closed switch instead: the hours are ignored.
    ========================================================================== */
 
 const TZ = 'Asia/Kolkata';
@@ -56,7 +59,19 @@ export function hoursOf(v, now = new Date()) {
   const week = DAY.map((day, i) => ({ day, open: days.includes(i + 1),
     hours: days.includes(i + 1) ? `${clock(v.opens_at)}–${clock(v.closes_at)}` : 'Closed' }));
   const today = days.includes(weekday);
-  const inHours = today && minutes >= mins(v.opens_at) && minutes < mins(v.closes_at);
+  const o = mins(v.opens_at), c = mins(v.closes_at);
+  /* Overnight hours (closes before it opens, e.g. 18:00-02:00): after
+     midnight the café is still inside the hours that began yesterday. */
+  const yesterday = days.includes(((weekday + 5) % 7) + 1);
+  const scheduledNow = c > o ? today && minutes >= o && minutes < c
+    : c < o ? (today && minutes >= o) || (yesterday && minutes < c)
+      : false;
+  /* Manual override: the hours are shown for information but decide nothing. */
+  if (v.manual_availability) {
+    return { scheduled: true, manual: true, label: label(days, v.opens_at, v.closes_at), week,
+             inHours: true, closedReason: null };
+  }
+  const inHours = scheduledNow;
   const closedReason = inHours ? null
     : !today ? `Closed today (${DAY[weekday - 1]}). Open ${label(days, v.opens_at, v.closes_at).split(' · ')[0]}.`
       : `Open today ${clock(v.opens_at)}–${clock(v.closes_at)}.`;
@@ -85,6 +100,15 @@ function nextOpening(days, opens, { weekday, minutes }) {
  */
 export function statusOf(v, now = new Date()) {
   if (v.active === false) return { open: false, state: 'inactive', line: 'No longer on ECHO ECHO' };
+  /* Manual availability override: the administrator's Open/Closed is the
+     source of truth and the weekly hours are not consulted at all - not the
+     day, not the time, not overnight or midnight boundaries. `accepting`
+     still works as the emergency pause. */
+  if (v.manual_availability) {
+    if (!v.is_open) return { open: false, state: 'closed', manual: true, line: 'Closed right now' };
+    if (!v.accepting) return { open: false, state: 'paused', manual: true, line: 'Not taking orders right now' };
+    return { open: true, state: 'open', manual: true, line: 'Open now' };
+  }
   const h = hoursOf(v, now);
   if (!h.scheduled) {
     const open = Boolean(v.is_open && v.accepting);

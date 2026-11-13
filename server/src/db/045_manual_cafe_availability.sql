@@ -1,0 +1,14 @@
+-- ============================================================================
+-- ECHO ECHO - migration 045: manual café availability override
+--
+-- Since 029 a scheduled café's open/closed status came from its hours alone
+-- and `is_open` was ignored, so an administrator pressing Open had no effect
+-- on the student site. With `manual_availability` on, the café's hours are
+-- ignored and `is_open` (with `accepting`) is the whole answer
+-- (src/services/hours.js). Off is the existing schedule behaviour.
+--
+-- Additive only: every café starts with the override off, so nothing that
+-- is trading today changes until an administrator turns it on.
+-- Numbered 045: 043 and 044 are taken by open branches.
+-- ============================================================================
+ALTER TABLE vendor ADD COLUMN IF NOT EXISTS manual_availability boolean NOT NULL DEFAULT false;
