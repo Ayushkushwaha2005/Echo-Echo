@@ -342,6 +342,8 @@ export const quad = {
      The server decides what a map may draw, including whether the partner's
      position is disclosed at all. */
   tracking: (orderId) => get(`/orders/${orderId}/tracking`),
+  /* Campus Control's fleet map (delivery.track). */
+  deliveryFleet: () => get('/admin/deliveries/fleet'),
   trackingTicket: (orderId) => post(`/orders/${orderId}/tracking/ticket`),
   myDataExport: () => get('/me/data-export'),
   myDeletionRequest: () => get('/me/deletion-request'),

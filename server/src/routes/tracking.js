@@ -32,6 +32,9 @@ import {
   checkReport, kmBetween, stopSharing,
 } from '../services/partner-location.js';
 import { publishPosition } from '../services/live.js';
+import { mapsConfig } from '../services/maps.js';
+import { routeForOrder } from '../services/routing.js';
+import { alertsFor, noteMovement, stillSince, forgetMovement } from '../services/delivery-alerts.js';
 import { tx } from '../db/index.js';
 
 /* One audit row per administrator, per order, per few minutes: a map that
@@ -46,6 +49,12 @@ function auditPositionView(req, orderId) {
   if (lastAudit.size > 5000) lastAudit.clear();
   lastAudit.set(key, now);
   return audit(req, { action: 'delivery.track.view', resource: 'food_order', resourceId: orderId, outcome: 'ok' });
+}
+
+/* When the order entered its current state, from the order's own event log. */
+async function stateSince(orderId, state) {
+  const r = await one(`SELECT max(at) AS at FROM order_event WHERE order_id = $1 AND to_state = $2`, [orderId, state]);
+  return r?.at || null;
 }
 
 const point = (row, label) => (row && row.lat != null && row.lng != null
@@ -95,6 +104,7 @@ export default async function trackingRoutes(app) {
       /* Finished, cancelled or not yet picked up: nothing to follow, and
          anything stored is removed rather than left behind. */
       await q(`DELETE FROM partner_location WHERE partner_id = $1`, [req.actor.id]);
+      forgetMovement(req.actor.id);
       throw Forbidden('That delivery is not in progress',
         `An order in "${o.state}" is not being carried anywhere.`);
     }
@@ -117,6 +127,7 @@ export default async function trackingRoutes(app) {
        WHERE partner_location.order_id IS DISTINCT FROM EXCLUDED.order_id OR partner_location.at < EXCLUDED.at`,
       [req.actor.id, o.id, r.lat, r.lng, r.accuracy, r.takenAt]);
     if (!stored.rowCount) throw Conflict('That fix is older than the last one', 'It was ignored.');
+    noteMovement(req.actor.id, o.id, r);
     publishPosition(o.id);
     return { recorded: true };
   });
@@ -206,10 +217,25 @@ export default async function trackingRoutes(app) {
         WHERE v.id = (SELECT vendor_id FROM food_order WHERE id = $1)
           AND cb.status = 'active' LIMIT 1`, [o.id]);
 
+    /* Google Maps, the walking route and the alerts are for the partner
+       carrying the order and for delivery.track staff. Customers keep the
+       OpenStreetMap map: no Google map load per order. */
+    const working = (isPartner || mayTrack) && carrying;
+    const route = working && seesExact
+      ? await routeForOrder({ orderId: o.id, state: o.state, partner, pickup, destination }, { log: req.log })
+      : null;
+    const since = working ? await stateSince(o.id, o.state) : null;
+
     return {
       orderId: o.id,
       state: o.state,
       fulfilment: o.fulfilment,
+      maps: isPartner || mayTrack ? mapsConfig() : { provider: 'osm' },
+      route,
+      alerts: working && mayTrack
+        ? alertsFor({ state: o.state, partner, pickup, destination, stateSince: since,
+                      stillSinceMs: stillSince(o.partner_id, o.id), route })
+        : [],
       vendorName: o.vendor_name,
       pickup,
       destination: seesExact ? destination : (destination ? { label: destination.label, name: destination.name } : null),
@@ -231,5 +257,52 @@ export default async function trackingRoutes(app) {
         ? 'No positions have been recorded for this cafeteria or delivery point yet.'
         : null,
     };
+  });
+
+  /* ---------- Campus Control's fleet map ------------------------------------
+     Every delivery being carried, on one map: partner position and age, both
+     ends of the leg, the walking route and the alerts. delivery.track only,
+     exactly like a single order's exact position; each order's view is audited
+     at most once per AUDIT_EVERY_MS, so polling does not flood the log.
+     Partner names need partners.view as on the Live Deliveries table. */
+  app.get('/admin/deliveries/fleet', async (req) => {
+    authorize(req.actor, 'delivery.track');
+    const showNames = can(req.actor, 'partner.read');
+    const { rows } = await q(
+      `SELECT o.id, o.code, o.state, o.partner_id, o.destination_snapshot, o.spot_lat, o.spot_lng,
+              v.name AS vendor_name, u.name AS partner_name,
+              pn.name AS pickup_name, pn.lat AS pickup_lat, pn.lng AS pickup_lng,
+              dn.name AS dest_name, dn.lat AS dest_lat, dn.lng AS dest_lng,
+              pl.lat, pl.lng, pl.accuracy_m, pl.at,
+              GREATEST(0, EXTRACT(EPOCH FROM now() - pl.at))::int AS age_seconds,
+              (SELECT max(e.at) FROM order_event e WHERE e.order_id = o.id AND e.to_state = o.state) AS state_since
+         FROM food_order o
+         JOIN vendor v ON v.id = o.vendor_id
+         LEFT JOIN app_user u ON u.id = o.partner_id
+         LEFT JOIN campus_node pn ON pn.id = v.campus_node_id
+         LEFT JOIN campus_node dn ON dn.id = o.destination_id
+         LEFT JOIN partner_location pl ON pl.partner_id = o.partner_id AND pl.order_id = o.id
+        WHERE o.fulfilment = 'delivery' AND o.state::text = ANY($1::text[]) AND o.partner_id IS NOT NULL
+        ORDER BY o.created_at
+        LIMIT 100`, [CARRYING]);
+    const deliveries = [];
+    for (const r of rows) {
+      const pickup = point({ name: r.pickup_name || r.vendor_name, lat: r.pickup_lat, lng: r.pickup_lng }, 'pickup');
+      const destination = r.dest_lat != null ? point({ name: r.dest_name, lat: r.dest_lat, lng: r.dest_lng }, 'destination')
+        : r.spot_lat != null ? point({ name: 'Delivery spot', lat: r.spot_lat, lng: r.spot_lng }, 'destination') : null;
+      const partner = r.lat == null ? null : { lat: Number(r.lat), lng: Number(r.lng),
+        accuracyM: r.accuracy_m == null ? null : Number(r.accuracy_m), at: r.at, ageSeconds: Number(r.age_seconds) };
+      if (partner) await auditPositionView(req, r.id);
+      const route = await routeForOrder({ orderId: r.id, state: r.state, partner, pickup, destination }, { log: req.log });
+      deliveries.push({
+        orderId: r.id, code: r.code, state: r.state, vendorName: r.vendor_name,
+        partnerId: r.partner_id, partnerName: showNames ? r.partner_name : null,
+        address: r.destination_snapshot || null, pickup, destination, partner, route,
+        stateSince: r.state_since,
+        alerts: alertsFor({ state: r.state, partner, pickup, destination, stateSince: r.state_since,
+                            stillSinceMs: stillSince(r.partner_id, r.id), route }),
+      });
+    }
+    return { deliveries, maps: mapsConfig(), at: new Date().toISOString() };
   });
 }
