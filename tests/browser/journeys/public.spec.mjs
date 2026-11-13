@@ -32,7 +32,9 @@ test('a partner chooses to share: a clear notice first, a visible indicator afte
   const start = page.getByRole('button', { name: 'Start sharing' });
   await start.waitFor({ timeout: 15000 }).catch(async () => { throw new Error(`partner screen: ${(await page.locator('body').innerText()).slice(0, 400)} @ ${page.url()}`); });
   await expect(start).toBeVisible({ timeout: 15000 });
-  await expect(page.getByText(/no location history is kept/)).toBeVisible();
+  /* The notice now says what is kept, for how long, and that nothing is recorded after the end. */
+  await expect(page.getByText(/keeps a short record of this delivery/)).toBeVisible();
+  await expect(page.getByText(/Nothing is recorded after the delivery ends/)).toBeVisible();
   expect((await db.query(`SELECT count(*)::int n FROM partner_location WHERE order_id = $1`, [order.id])).rows[0].n, 'nothing before the choice').toBe(0);
 
   await start.click();

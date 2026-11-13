@@ -18,6 +18,7 @@ import { assignDelivery } from './delivery.js';
 import { purgeExpiredIdImages } from './storage.js';
 import { notifyAsync } from './notify.js';
 import { pruneFinished } from './partner-location.js';
+import { purgeTraces } from './delivery-trace.js';
 import { expireStale } from './approvals.js';
 import { settleBeforeClosing } from '../routes/payments.js';
 
@@ -104,6 +105,8 @@ export async function sweepOnce(log) {
     ['approvals', async () => ({ expired: await expireStale() })],
     ['recoveryTickets', async () => ({ removed: (await q(`DELETE FROM admin_recovery_ticket WHERE expires_at < now() - interval '1 day'`)).rowCount })],
     ['idImages', () => purgeExpiredIdImages(RETENTION.idImageDays).then((n) => ({ purged: n }))],
+    /* Delivery records past DELIVERY_TRACE_RETENTION_DAYS. */
+    ['deliveryTraces', purgeTraces],
   ]) {
     try { out[name] = await fn(); }
     catch (e) { out[name] = { error: e.message }; log?.error({ e }, `sweeper ${name} failed`); }

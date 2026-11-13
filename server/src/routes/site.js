@@ -79,7 +79,7 @@ async function publicView() {
 
 async function liveRow(c = { query: q }) {
   return (await c.query(
-    `SELECT v.version, v.config, v.published_at, v.note, v.kind, u.name AS published_by_name
+    `SELECT v.version, v.config, v.published_at, v.note, v.kind, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS published_by_name
        FROM site_config_live l JOIN site_config_version v ON v.version = l.version
        LEFT JOIN app_user u ON u.id = v.published_by WHERE l.id`)).rows[0] || null;
 }
@@ -140,7 +140,7 @@ export default async function siteRoutes(app) {
     authorize(req.actor, 'site.read');
     const live = await liveRow();
     const draft = await one(
-      `SELECT d.config, d.revision, d.base_version, d.updated_at, u.name AS updated_by_name
+      `SELECT d.config, d.revision, d.base_version, d.updated_at, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS updated_by_name
          FROM site_config_draft d LEFT JOIN app_user u ON u.id = d.updated_by WHERE d.id`);
     return {
       draft: draft

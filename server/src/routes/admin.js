@@ -70,7 +70,7 @@ export default async function adminRoutes(app) {
     authorize(req.actor, 'user.read');
     const term = String(req.query?.q || '').trim();
     const { rows } = await q(
-      `SELECT u.id, u.name, u.phone, u.email, u.student_email, u.status, u.student_status, u.roll_number,
+      `SELECT u.id, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS name, u.name AS account_name, u.phone, u.email, u.student_email, u.status, u.student_status, u.roll_number,
               u.created_at, u.last_seen_at,
               coalesce(json_agg(json_build_object('role', r.role, 'vendorId', r.vendor_id,
                        'vendorName', v.name, 'status', r.status))
@@ -233,7 +233,7 @@ export default async function adminRoutes(app) {
   app.get('/admin/partners', async (req) => {
     authorize(req.actor, 'partner.read');
     const { rows } = await q(
-      `SELECT p.*, u.name, u.phone, u.student_status, u.roll_number,
+      `SELECT p.*, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS name, u.phone, u.student_status, u.roll_number,
               (SELECT count(*)::int FROM food_order o
                 WHERE o.partner_id = p.user_id AND o.state='delivered') AS deliveries
          FROM partner_profile p JOIN app_user u ON u.id = p.user_id
@@ -362,7 +362,7 @@ export default async function adminRoutes(app) {
     authorize(req.actor, 'audit.read');
     const { rows } = await q(
       `SELECT a.at, a.action, a.resource, a.resource_id, a.outcome, a.detail,
-              a.actor_role, u.name AS actor_name, u.phone AS actor_phone
+              a.actor_role, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS actor_name, u.phone AS actor_phone
          FROM audit_log a LEFT JOIN app_user u ON u.id = a.actor_id
         WHERE ($1 = '' OR a.action ILIKE $2)
         ORDER BY a.at DESC LIMIT 200`,

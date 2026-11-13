@@ -282,3 +282,105 @@ test('the checkout picker gets Google only when the browser key is set, and neve
   assert.doesNotMatch(JSON.stringify(r.body), /server-key/);
   assert.equal(calls.length, 0, 'opening the picker asks Google for no route');
 });
+
+/* ---------------- the record of a delivery (migration 043) ---------------- */
+
+const traceOf = async (orderId) => (await pool.query(`SELECT * FROM delivery_trace WHERE order_id = $1`, [orderId])).rows[0];
+
+test('a record is kept only under the notice that says so, thinned, and closed with the delivery', async () => {
+  await seed();
+  const { transition } = await import('../src/routes/orders.js');
+  const { tx } = await import('../src/db/index.js');
+  const o = await mkOrder('picked_up');
+  await share(o.id, PICKUP);   // consent under the current notice version
+  const p = await as(partner);
+  const send = (pt, extra = {}) => p.post('/partner/location', { orderId: o.id, lat: pt.lat, lng: pt.lng, accuracy: 8, takenAt: Date.now(), ...extra });
+  /* 5 m away: too close to keep; 120 m away: kept. */
+  await send({ lat: PICKUP.lat + 0.00004, lng: PICKUP.lng });
+  await new Promise((r) => setTimeout(r, 5100));
+  assert.equal((await send(NEAR)).status, 200);
+  let t = await traceOf(o.id);
+  assert.equal(t.points.length, 2, 'first fix and the 120 m one; the 5 m one thinned out');
+  assert.equal(t.pickup_name, 'Map Cafe counter');
+  assert.equal(t.ended_at, null);
+  await tx((c) => transition(c, o.id, 'delivered', partner));
+  t = await traceOf(o.id);
+  assert.ok(t.ended_at, 'closed with the delivery');
+  assert.equal(t.final_lat, NEAR.lat, 'last position saved before the live row went');
+  const days = Math.round((new Date(t.purge_after) - new Date(t.ended_at)) / 86400000);
+  assert.equal(days, 30, 'deleted after the default retention');
+  assert.equal((await pool.query(`SELECT count(*)::int n FROM partner_location WHERE order_id = $1`, [o.id])).rows[0].n, 0, 'live position gone');
+  /* Nothing is recorded after the end. */
+  assert.equal((await send(NEAR)).status, 403);
+  assert.equal((await traceOf(o.id)).points.length, 2);
+});
+
+test('a partner who agreed to the old "no history" notice gets no record', async () => {
+  await seed();
+  const o = await mkOrder('picked_up');
+  const p = await as(partner);
+  assert.equal((await p.post('/partner/location/start', { orderId: o.id })).status, 200);
+  await pool.query(`UPDATE location_share_consent SET notice_version = '2026-11-location-1' WHERE order_id = $1`, [o.id]);
+  assert.equal((await p.post('/partner/location', { orderId: o.id, lat: NEAR.lat, lng: NEAR.lng, accuracy: 8, takenAt: Date.now() })).status, 200);
+  assert.equal(await traceOf(o.id), undefined);
+});
+
+test('the sweeper deletes records past their retention, and only those', async () => {
+  await seed();
+  const { purgeTraces } = await import('../src/services/delivery-trace.js');
+  const a = await mkOrder('delivered'), b = await mkOrder('delivered');
+  await pool.query(`INSERT INTO delivery_trace (order_id, ended_at, purge_after) VALUES ($1, now() - interval '31 days', now() - interval '1 day'), ($2, now(), now() + interval '29 days')`, [a.id, b.id]);
+  assert.deepEqual(await purgeTraces(), { purged: 1 });
+  assert.equal(await traceOf(a.id), undefined);
+  assert.ok(await traceOf(b.id));
+});
+
+test('fleet map groups waiting, carried and finished deliveries; finished ones never show a live partner', async () => {
+  await seed();
+  process.env.GOOGLE_MAPS_BROWSER_KEY = 'browser-key'; process.env.GOOGLE_ROUTES_API_KEY = 'server-key';
+  const waiting = (await pool.query(
+    `INSERT INTO food_order (code, customer_id, vendor_id, fulfilment, state, subtotal_paise, total_paise,
+                             destination_snapshot, delivery_contact_phone, destination_kind, spot_lat, spot_lng)
+     VALUES ('WAIT1',$1,$2,'delivery','ready',9000,10000,'{"name":"Block 4"}','+919999900002','manual_map_spot',$3,$4) RETURNING id`,
+    [cust.id, V.id, NEAR.lat, NEAR.lng])).rows[0];
+  const carried = await mkOrder('picked_up');
+  await share(carried.id, { lat: (PICKUP.lat + NEAR.lat) / 2, lng: (PICKUP.lng + NEAR.lng) / 2 });
+  const finished = await mkOrder('delivered');
+  await pool.query(`UPDATE food_order SET delivered_at = now() WHERE id = $1`, [finished.id]);
+  await pool.query(`INSERT INTO delivery_trace (order_id, partner_id, final_lat, final_lng, final_at, ended_at, purge_after, points)
+                    VALUES ($1,$2,$3,$4, now(), now(), now() + interval '30 days', '[[30.4172,77.9681,1,8]]')`, [finished.id, partner.id, NEAR.lat, NEAR.lng]);
+  await pool.query(`INSERT INTO admin_profile (user_id, display_name) VALUES ($1, 'AYUSH')`, [partner.id]);
+
+  const f = (await (await as(namedAdmin, 'admin_totp')).get('/admin/deliveries/fleet')).body;
+  const by = (id) => f.deliveries.find((d) => d.orderId === id);
+  assert.equal(by(waiting.id).kind, 'waiting');
+  assert.equal(by(waiting.id).partner, undefined);
+  assert.equal(by(waiting.id).cafeRoute.mode, 'walk', 'café to drop route for a waiting order');
+  assert.equal(by(carried.id).kind, 'active');
+  assert.equal(by(carried.id).stage, 'Picked up, on the way to the student');
+  assert.ok(by(carried.id).progress && by(carried.id).progress.percent >= 0 && by(carried.id).progress.percent <= 100);
+  assert.equal(by(finished.id).kind, 'completed');
+  assert.equal(by(finished.id).partner, undefined, 'no live marker for a finished delivery');
+  assert.equal(by(finished.id).record.finalPosition.lat, NEAR.lat);
+  assert.equal(by(carried.id).partnerName, 'AYUSH', 'display name, not the account name');
+
+  const rec = await (await as(namedAdmin, 'admin_totp')).get(`/admin/deliveries/${finished.id}/record`);
+  assert.equal(rec.status, 200);
+  assert.equal(rec.body.record.trail.length, 1);
+  assert.equal(rec.body.live, false);
+  assert.equal((await (await as(viewAdmin, 'admin_totp')).get(`/admin/deliveries/${finished.id}/record`)).status, 403, 'delivery.track required');
+  assert.equal((await (await as(cust)).get(`/admin/deliveries/${finished.id}/record`)).status, 403);
+  const audited = (await pool.query(`SELECT count(*)::int n FROM audit_log WHERE action = 'delivery.record.view' AND resource_id = $1`, [finished.id])).rows[0].n;
+  assert.equal(audited, 1);
+});
+
+test('Campus Control map setting: only for map viewers, never the Routes key; others refused', async () => {
+  await seed();
+  process.env.GOOGLE_MAPS_BROWSER_KEY = 'browser-key'; process.env.GOOGLE_ROUTES_API_KEY = 'server-key';
+  assert.equal((await (await as(viewAdmin, 'admin_totp')).get('/admin/maps')).status, 403, 'orders.view alone sees no map');
+  const r = await (await as(trackAdmin, 'admin_totp')).get('/admin/maps');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.provider, 'google');
+  assert.doesNotMatch(JSON.stringify(r.body), /server-key/);
+  assert.notEqual((await (await as(cust)).get('/admin/maps')).status, 200);
+});

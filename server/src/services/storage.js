@@ -80,10 +80,19 @@ export async function putImage(buf, { ownerId, kind }) {
     [ownerId, kind, mime, buf.length, width, height, key, uploadedSha]);
 }
 
-export async function getImage(assetId) {
+/* stream: true returns the bytes even from object storage, for images shown
+   on Campus Control. Its enforced Content-Security-Policy allows images only
+   from the site itself, so a redirect to a signed bucket URL is blocked there
+   (and would hand a private storage URL to the browser). Public menu
+   photography keeps the redirect. */
+export async function getImage(assetId, { stream = false } = {}) {
   const a = await one(`SELECT * FROM asset WHERE id = $1`, [assetId]);
   if (!a) return null;
-  if (STORAGE.provider === 's3') return { asset: a, url: await signedS3Url(a.storage_key) };
+  if (STORAGE.provider === 's3') {
+    if (!stream) return { asset: a, url: await signedS3Url(a.storage_key) };
+    const bytes = await s3.getObject(a.storage_key);
+    return bytes ? { asset: a, bytes } : null;
+  }
   return { asset: a, bytes: await readFile(join(STORAGE.localDir, a.storage_key)) };
 }
 

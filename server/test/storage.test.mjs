@@ -438,3 +438,34 @@ test('with S3 configured the deployment reports itself production-ready for stor
   assert.equal(body.note, null, 'no local-disk warning when S3 is in use');
   assert.ok(!JSON.stringify(body).includes(SECRET_KEY), 'credentials must not be exposed');
 });
+
+/* Campus Control enforces a Content-Security-Policy that allows images only
+   from the site itself, so a redirect to a signed bucket URL is blocked there
+   and the photo never shows (the "letter instead of my photo" bug). Every
+   image Campus Control displays must come back as bytes from the API. */
+test('Campus Control images stream from the API under S3: admin photo, partner photo and ID image, no redirect', async () => {
+  const sharp = (await import('sharp')).default;
+  const jpeg = await sharp({ create: { width: 200, height: 200, channels: 3, background: { r: 200, g: 80, b: 120 } } }).jpeg().toBuffer();
+  const admin = await makeUser(pool, { phone: '+919800000071', name: 'Photo Admin', roles: ['platform_owner'] });
+  const student = await makeUser(pool, { phone: '+919800000072', name: 'Photo Partner' });
+  const photo = await storage.putImage(jpeg, { ownerId: admin.id, kind: 'admin_photo' });
+  await pool.query(`INSERT INTO admin_profile (user_id, photo_asset) VALUES ($1,$2)`, [admin.id, photo.id]);
+  const pphoto = await storage.putImage(jpeg, { ownerId: student.id, kind: 'partner_photo' });
+  await pool.query(`UPDATE app_user SET partner_photo_asset = $2 WHERE id = $1`, [student.id, pphoto.id]);
+  const id = await storage.putImage(jpeg, { ownerId: student.id, kind: 'id_front' });
+  const vcase = (await pool.query(
+    `INSERT INTO verification_case (user_id, front_asset) VALUES ($1,$2) RETURNING id`, [student.id, id.id])).rows[0];
+
+  const c = client(app, await sessionFor(pool, admin.id, { method: 'admin_totp' }));
+  received.length = 0;
+  const urls = [`/admin/photos/${admin.id}/`, `/admin/partners/${student.id}/photo`];
+  urls.push(`/admin/verification/${vcase.id}/image/front`);
+  for (const u of urls) {
+    const r = await c.get(u);
+    assert.equal(r.status, 200, `${u}: ${r.status} ${r.headers.location || ''}`);
+    assert.equal(r.headers.location, undefined, `${u} must not redirect to the bucket`);
+    assert.match(r.headers['content-type'], /^image\//, u);
+  }
+  assert.ok(received.every((x) => x.method !== 'GET' || !x.presigned), 'no presigned URL was handed out');
+  assert.ok(received.some((x) => x.method === 'GET' && x.verified), 'the server read the object itself');
+});

@@ -398,7 +398,7 @@ export default async function catalogRoutes(app) {
     const vendorId = entity === 'vendor' ? req.params.id : await vendorOfItem(req.params.id);
     authorize(req.actor, entity === 'vendor' ? 'vendor.read' : 'menu.read', { vendorId });
     const { rows } = await q(
-      `SELECT v.revision, v.snapshot, v.at, u.name AS actor_name FROM catalog_version v LEFT JOIN app_user u ON u.id = v.actor_id
+      `SELECT v.revision, v.snapshot, v.at, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS actor_name FROM catalog_version v LEFT JOIN app_user u ON u.id = v.actor_id
         WHERE v.entity = $1 AND v.entity_id = $2 ORDER BY v.revision DESC LIMIT 50`, [entity, req.params.id]);
     return { versions: rows };
   });

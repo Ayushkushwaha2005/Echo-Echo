@@ -177,5 +177,45 @@ export async function routeForOrder({ orderId, state, partner, pickup, destinati
 
 export function forgetOrderRoute(orderId) { legs.delete(orderId); }
 
+/* ---------- the café -> drop route of a delivery --------------------------
+   The same for every order between the same two points, so it is fetched
+   once per pair and reused for PAIR_TTL_MS by every order and every viewer
+   (memory only, never stored). Used for deliveries waiting for a partner and
+   to measure a carried order's progress. */
+export const PAIR_TTL_MS = 6 * 60 * 60 * 1000;
+const pairs = new Map();   // key -> { at, route, path } | { at, failed: true }
+const pairKey = (a, b) => [a.lat, a.lng, b.lat, b.lng].map((n) => Number(n).toFixed(5)).join(',');
+export async function pairRoute(from, to, opts = {}) {
+  if (!from || !to) return null;
+  const now = opts.now ?? Date.now();
+  const k = pairKey(from, to);
+  const hit = pairs.get(k);
+  if (hit && now - hit.at < (hit.failed ? FAILURE_BACKOFF_MS : PAIR_TTL_MS)) return hit.route || null;
+  const route = await fetchWalkingRoute(from, to, { ...opts, now });
+  pairs.set(k, route ? { at: now, route, path: decodePolyline(route.polyline) } : { at: now, failed: true });
+  if (pairs.size > 300) pairs.delete(pairs.keys().next().value);
+  return route;
+}
+export function pairPath(from, to) { return pairs.get(pairKey(from, to))?.path || null; }
+
+/** Metres along a path to the point on it nearest p, and the path length. */
+export function metresAlong(p, path) {
+  if (!p || !path || path.length < 2) return null;
+  const k = 111_320, c = Math.cos((p.lat * Math.PI) / 180);
+  const xy = (q) => [(q.lng - p.lng) * k * c, (q.lat - p.lat) * k];
+  let walked = 0, total = 0, best = Infinity, at = 0;
+  for (let i = 0; i < path.length - 1; i++) {
+    const [ax, ay] = xy(path[i]), [bx, by] = xy(path[i + 1]);
+    const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy);
+    const t = len ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / (len * len))) : 0;
+    const d = Math.hypot(ax + t * dx, ay + t * dy);
+    if (d < best) { best = d; at = walked + t * len; }
+    walked += len;
+  }
+  total = walked;
+  return { along: at, total, off: best };
+}
+
+
 /* Tests only. */
-export function _reset() { legs.clear(); failedAt = 0; counter = { day: '', used: 0 }; }
+export function _reset() { legs.clear(); pairs.clear(); failedAt = 0; counter = { day: '', used: 0 }; }

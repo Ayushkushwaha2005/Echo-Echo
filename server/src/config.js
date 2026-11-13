@@ -406,6 +406,9 @@ export const STUDENT_EMAIL = {
    ID-card images are deleted this many days after a case is decided. */
 export const RETENTION = {
   idImageDays: Number(env('ID_IMAGE_RETENTION_DAYS', 90)),
+  /* A finished delivery's record (pickup, drop, trail, last position),
+     services/delivery-trace.js. */
+  deliveryTraceDays: Math.max(1, Number(env('DELIVERY_TRACE_RETENTION_DAYS', 30)) || 30),
 };
 
 /* ---------- AI ordering assistant ---------------------------------------- */

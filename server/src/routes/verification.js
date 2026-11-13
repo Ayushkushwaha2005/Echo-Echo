@@ -233,10 +233,13 @@ export default async function verificationRoutes(app) {
     if (!k) throw NotFound('No such case');
     const assetId = req.params.which === 'back' ? k.back_asset : k.front_asset;
     if (!assetId) throw NotFound('No image');
-    const got = await getImage(assetId);
+    /* Streamed, never presigned: the check above and the audit row below
+       cannot be bypassed with a copied URL (services/s3.js). */
+    const got = await getImage(assetId, { stream: true });
+    if (!got) throw NotFound('No image');
     await audit(req, { action: 'verification.image.view', resource: 'verification_case',
                        resourceId: k.id, outcome: 'ok' });
-    if (got.url) return reply.redirect(got.url);
+    reply.header('Cache-Control', 'private, no-store');
     return reply.type(got.asset.mime).send(got.bytes);
   });
 

@@ -17,6 +17,7 @@
    cannot make an old marker look new.
    ========================================================================== */
 import { forgetOrderRoute } from './routing.js';
+import { closeTrace } from './delivery-trace.js';
 import { forgetMovement, forgetMovementForOrder } from './delivery-alerts.js';
 import { q } from '../db/index.js';
 import { BadRequest, can } from '../auth/rbac.js';
@@ -30,7 +31,9 @@ export const VISIBLE_TO_CUSTOMER = ['picked_up'];
 /* The partner's phone sends at most one fix every 5 s (web/src/app.js). */
 export const REPORTS_PER_MINUTE = 20;
 /* What the partner agreed to, stored with their consent. */
-export const SHARE_NOTICE_VERSION = '2026-11-location-1';
+/* -2: the notice says a time-limited record of the delivery is kept
+   (services/delivery-trace.js). Trails are recorded only under this version. */
+export { TRACE_NOTICE_VERSION as SHARE_NOTICE_VERSION } from './delivery-trace.js';
 /* A fix the phone took longer ago than this is not "where they are". */
 export const MAX_FIX_AGE_SECONDS = 120;
 /* A phone clock may run a little fast; more than this is not a real fix. */
@@ -88,6 +91,8 @@ export function checkReport(body, now = Date.now()) {
 /* Called inside the transaction that moves an order out of CARRYING. The
    walking route and the stop-detection point (memory only) go with it. */
 export async function forgetForOrder(c, orderId) {
+  /* The record keeps the last position before the live row goes. */
+  await closeTrace(c, orderId);
   forgetOrderRoute(orderId);
   forgetMovementForOrder(orderId);
   await c.query(`DELETE FROM partner_location WHERE order_id = $1`, [orderId]);

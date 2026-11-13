@@ -77,7 +77,7 @@ export default async function supportRoutes(app) {
     /* Support staff see the queue; everyone else sees only their own. */
     const staff = can(req.actor, 'support.read');
     const { rows } = await q(
-      `SELECT k.*, u.name AS user_name, u.phone AS user_phone, o.code AS order_code
+      `SELECT k.*, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS user_name, u.phone AS user_phone, o.code AS order_code
          FROM support_case k
          JOIN app_user u ON u.id = k.user_id
          LEFT JOIN food_order o ON o.id = k.order_id
@@ -96,7 +96,7 @@ export default async function supportRoutes(app) {
     if (!staff && k.user_id !== req.actor?.id) throw Forbidden('That case is not yours');
 
     const messages = (await q(
-      `SELECT m.*, u.name AS author_name FROM support_message m
+      `SELECT m.*, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS author_name FROM support_message m
          JOIN app_user u ON u.id = m.author_id
         WHERE m.case_id = $1 ORDER BY m.at`, [k.id])).rows;
 
@@ -104,7 +104,7 @@ export default async function supportRoutes(app) {
     if (k.order_id && staff) {
       const order = await one(
         `SELECT o.*, v.name AS vendor_name, v.contact_phone, COALESCE(d.name, o.destination_snapshot->>'label') AS destination,
-                p.name AS partner_name, p.phone AS partner_phone
+                COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = p.id), p.name) AS partner_name, p.phone AS partner_phone
            FROM food_order o JOIN vendor v ON v.id = o.vendor_id
            LEFT JOIN campus_node d ON d.id = o.destination_id
            LEFT JOIN app_user p ON p.id = o.partner_id
@@ -199,7 +199,7 @@ export default async function supportRoutes(app) {
   app.get('/admin/refunds', async (req) => {
     authorize(req.actor, 'order.refund');
     const { rows } = await q(
-      `SELECT r.*, o.code AS order_code, u.name AS requested_by_name
+      `SELECT r.*, o.code AS order_code, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = u.id), u.name) AS requested_by_name
          FROM refund r JOIN food_order o ON o.id = r.order_id
          LEFT JOIN app_user u ON u.id = r.requested_by
         ORDER BY r.created_at DESC LIMIT 100`);

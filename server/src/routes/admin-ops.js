@@ -193,7 +193,7 @@ export default async function adminOpsRoutes(app) {
   app.get('/admin/orders/:id/timeline', async (req) => {
     authorize(req.actor, 'order.read_all');
     const o = await one(`SELECT o.id, o.code, o.state, o.fulfilment, o.total_paise, o.created_at, v.name AS vendor_name,
-                                cu.name AS customer_name, pu.name AS partner_name
+                                COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = cu.id), cu.name) AS customer_name, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = pu.id), pu.name) AS partner_name
                            FROM food_order o JOIN vendor v ON v.id = o.vendor_id
                            JOIN app_user cu ON cu.id = o.customer_id
                            LEFT JOIN app_user pu ON pu.id = o.partner_id WHERE o.id = $1::uuid`,
@@ -269,7 +269,7 @@ export default async function adminOpsRoutes(app) {
               p.created_at, p.settled_at, p.reconciled_at, p.settlement_id, p.flagged_reason,
               o.id AS order_id, o.code AS order_code, o.state AS order_state, o.fulfilment,
               v.id AS vendor_id, v.name AS vendor_name,
-              c.name AS customer_name,
+              COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = c.id), c.name) AS customer_name,
               CASE WHEN COALESCE(c.phone, c.contact_phone) IS NULL THEN NULL
                    ELSE '…' || right(COALESCE(c.phone, c.contact_phone), 4) END AS customer_phone_masked,
               COALESCE(f.gateway_fee_paise, 0)::int AS gateway_fee_paise,

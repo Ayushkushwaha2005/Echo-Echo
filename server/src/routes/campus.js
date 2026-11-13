@@ -379,7 +379,7 @@ export default async function campusRoutes(app) {
     authorize(req.actor, 'boundary.read');
     const { rows } = await q(
       `SELECT b.id, b.name, b.polygon, b.status, b.source, b.source_note, b.created_at, b.verified_at,
-              cu.name AS created_by_name, vu.name AS verified_by_name
+              COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = cu.id), cu.name) AS created_by_name, COALESCE((SELECT ap.display_name FROM admin_profile ap WHERE ap.user_id = vu.id), vu.name) AS verified_by_name
          FROM campus_boundary b LEFT JOIN app_user cu ON cu.id = b.created_by
          LEFT JOIN app_user vu ON vu.id = b.verified_by
         WHERE b.campus_site_id = $1 ORDER BY (b.status = 'active') DESC, b.created_at DESC`, [req.params.id]);
