@@ -63,7 +63,8 @@ const maskEmail = (e) => e.replace(/^(.)[^@]*@/, (_, f) => `${f}***@`);
 async function load(client, token, { lock = false } = {}) {
   if (typeof token !== 'string' || token.length < 40 || token.length > 64) throw Dead();
   const row = (await client.query(
-    `SELECT i.*, u.name AS inviter_name FROM admin_invitation i JOIN app_user u ON u.id = i.invited_by
+    `SELECT i.*, COALESCE(ip.display_name, u.name) AS inviter_name FROM admin_invitation i JOIN app_user u ON u.id = i.invited_by
+         LEFT JOIN admin_profile ip ON ip.user_id = i.invited_by
       WHERE i.token_hash = $1 ${lock ? 'FOR UPDATE OF i' : ''}`, [sha(token)])).rows[0];
   if (!row || state(row) !== 'waiting') throw Dead();
   return row;

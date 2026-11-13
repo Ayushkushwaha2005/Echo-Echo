@@ -425,3 +425,38 @@ test('a staff administrator can reset a forgotten password by email', async () =
   const v = await anon().post('/auth/admin/password-reset/verify', { email, code });
   assert.equal(v.status, 200, JSON.stringify(v.body));
 });
+
+/* The owner's student account can carry a nickname or a misspelling (in
+   production it read "ayu Kushwahaa"). Every place an invitee or a colleague
+   sees the inviter must use the Campus Control display name the inviter chose,
+   and must not rewrite the account's own name to do it. */
+test('the inviter is named by their Campus Control display name, never the raw account name', async () => {
+  const o = await owner();
+  await pool.query(`UPDATE app_user SET name = 'ayu Kushwahaa' WHERE id = $1`, [o.u.id]);
+  assert.equal((await o.c.patch('/admin/me', { displayName: 'AYUSH' })).status, 200);
+
+  const email = 'named.right@gmail.com';
+  const { token } = await invite(o, email);
+  const mail = mailbox.at(-1);
+  assert.match(mail.text, /^AYUSH has invited you to Campus Control\./m);
+  assert.doesNotMatch(JSON.stringify(mail), /ayu Kushwahaa/i);
+
+  const list = (await o.c.get('/admin/access/invitations')).body.invitations;
+  assert.equal(list.find((i) => i.email === email).invited_by_name, 'AYUSH');
+  assert.doesNotMatch(JSON.stringify(list), /ayu Kushwahaa/i);
+
+  const { v, done } = await finish(token, email);
+  assert.equal(v.invitedBy, 'AYUSH', 'the invitation page names the display name');
+  assert.equal(done.status, 200, JSON.stringify(done.body));
+  const admins = (await o.c.get('/admin/access/admins')).body;
+  assert.doesNotMatch(JSON.stringify(admins), /ayu Kushwahaa/i, 'the administrators list says AYUSH as well');
+
+  assert.equal((await pool.query(`SELECT name FROM app_user WHERE id = $1`, [o.u.id])).rows[0].name, 'ayu Kushwahaa',
+    'the student account name itself is not rewritten');
+});
+
+test('without a display name the inviter falls back to the account name, as before', async () => {
+  const o = await owner();
+  await invite(o, 'fallback@gmail.com');
+  assert.match(mailbox.at(-1).text, /^Owner has invited you to Campus Control\./m);
+});

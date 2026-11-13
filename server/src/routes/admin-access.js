@@ -81,7 +81,7 @@ const ADMIN_LIST_SQL = `
          pr.photo_asset IS NOT NULL AS has_photo,
          coalesce(a.status, CASE WHEN r.roles IS NOT NULL THEN 'active' END) AS status,
          a.permissions, a.invited_at, a.activated_at, a.suspended_at, a.revoked_at, a.status_reason,
-         a.permissions_updated_at, ib.name AS invited_by_name, r.roles,
+         a.permissions_updated_at, COALESCE(ibp.display_name, ib.name) AS invited_by_name, r.roles,
          (SELECT count(*)::int FROM webauthn_credential w WHERE w.user_id = u.id AND w.revoked_at IS NULL) AS passkeys,
          /* Whether this administrator can actually sign in: a password AND
             a confirmed authenticator. Never the values themselves. */
@@ -94,6 +94,7 @@ const ADMIN_LIST_SQL = `
     LEFT JOIN admin_account a ON a.user_id = u.id
     LEFT JOIN admin_profile pr ON pr.user_id = u.id
     LEFT JOIN app_user ib ON ib.id = a.invited_by
+    LEFT JOIN admin_profile ibp ON ibp.user_id = a.invited_by
     LEFT JOIN LATERAL (SELECT array_agg(role ORDER BY role) AS roles FROM user_role x
                         WHERE x.user_id = u.id AND x.status = 'active'
                           AND x.role IN ('platform_owner','platform_admin','support')) r ON true
@@ -138,8 +139,9 @@ export default async function adminAccessRoutes(app) {
       `SELECT at, action, resource, resource_id, outcome FROM audit_log
         WHERE actor_id = $1 ORDER BY at DESC LIMIT 100`, [row.id])).rows;
     const history = (await q(
-      `SELECT l.at, l.action, l.outcome, l.detail, u.name AS actor_name FROM audit_log l
+      `SELECT l.at, l.action, l.outcome, l.detail, COALESCE(up.display_name, u.name) AS actor_name FROM audit_log l
          LEFT JOIN app_user u ON u.id = l.actor_id
+         LEFT JOIN admin_profile up ON up.user_id = l.actor_id
         WHERE (l.resource = 'admin_account' AND l.resource_id = $1)
            OR (l.resource = 'admin_invitation' AND l.detail->>'email' = $2)
         ORDER BY l.at DESC LIMIT 50`, [row.id, row.email])).rows;
@@ -189,7 +191,12 @@ export default async function adminAccessRoutes(app) {
   /* Delivery happens after the commit: a provider outage must not undo the
      invitation, and the owner is told plainly which case this is. */
   async function deliver(req, invitationId, { token, expiresAt }, email, name) {
-    const inviterName = req.actor.name || null;
+    /* The name the invitee sees is the inviter's Campus Control display name
+       (admin_profile), not the raw student-account name, which may be a
+       nickname or misspelt and is not theirs to present to staff. */
+    const inviterName = (await q(
+      `SELECT COALESCE(p.display_name, u.name) AS name FROM app_user u
+         LEFT JOIN admin_profile p ON p.user_id = u.id WHERE u.id = $1`, [req.actor.id])).rows[0]?.name || null;
     let emailed = false;
     if (emailConfigured()) {
       try {
@@ -230,12 +237,13 @@ export default async function adminAccessRoutes(app) {
     authorize(req.actor, 'admin.read');
     const { rows } = await q(
       `SELECT i.id, i.email, i.name, i.role, i.permissions, i.created_at, i.expires_at, i.email_sent_at, i.send_count, i.last_sent_at,
-              i.accepted_at, i.revoked_at, u.name AS invited_by_name,
+              i.accepted_at, i.revoked_at, COALESCE(ip.display_name, u.name) AS invited_by_name,
               i.email_verified_at IS NOT NULL AS email_verified, i.terms_accepted_at IS NOT NULL AS terms_accepted,
               i.token_hash IS NULL AS legacy,
               CASE WHEN i.revoked_at IS NOT NULL THEN 'revoked' WHEN i.accepted_at IS NOT NULL THEN 'accepted'
                    WHEN i.expires_at <= now() THEN 'expired' ELSE 'waiting' END AS state
          FROM admin_invitation i JOIN app_user u ON u.id = i.invited_by
+         LEFT JOIN admin_profile ip ON ip.user_id = i.invited_by
         ORDER BY i.created_at DESC LIMIT 100`);
     return { invitations: rows };
   });
