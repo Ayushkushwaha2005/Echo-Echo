@@ -108,7 +108,7 @@ export async function mountAdminEnrol(root) {
             <p class="auth-fine">Choose <b>Enter code manually</b>. Account name: ${safe(enrol.issuer)}. Time-based, 6 digits.</p>
             <code class="enrol-secret">${safe(groupKey(enrol.secret))}</code></details>
           <form class="stack" data-en-form="confirm" novalidate>
-            ${otpField({ label: 'The 6-digit code the app shows now', state: error ? 'error' : 'idle' })}
+            ${otpField({ label: 'The 6-digit code the app shows now', state: error ? 'error' : 'idle', autoSubmit: true })}
             ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
             <button class="auth-btn" type="submit">Confirm authenticator</button>
           </form>` : `

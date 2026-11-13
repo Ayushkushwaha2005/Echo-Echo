@@ -45,8 +45,8 @@ test('employee invitation, in a browser: link, code, review, password, authentic
   await p.getByRole('button', { name: 'Show my QR code' }).click();
   await p.locator('.enrol-key summary').click();
   const secret = (await p.locator('.enrol-secret').textContent()).replace(/\s/g, '');
+  /* The sixth digit finishes setup by itself: there is no button to press. */
   await p.locator('input[name=code]').fill(totp(secret));
-  await p.getByRole('button', { name: 'Finish setup' }).click();
   await expect(p.getByRole('heading', { name: /all set/ })).toBeVisible();
 
   /* Now a real sign-in with what they just set up. */
@@ -56,7 +56,6 @@ test('employee invitation, in a browser: link, code, review, password, authentic
   await p.locator('input[type=password]').first().fill(PASSWORD);
   await p.locator('button[type=submit]').first().click();
   await p.locator('input[inputmode=numeric]').first().fill(totp(secret));
-  await p.locator('button[type=submit]').first().click();
   await expect(p.locator('.cc-frame')).toBeVisible();
   /* It holds exactly what was granted: the nav has Users but not Access Management. */
   await expect(p.locator('.cc-navbtn[data-route=users]')).toHaveCount(1);

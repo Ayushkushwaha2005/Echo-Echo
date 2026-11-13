@@ -4297,7 +4297,7 @@ const pwField = (name, label, auto) => `
     <span class="pw-wrap"><input class="input" type="password" name="${name}" autocomplete="${auto}" required>
       <button type="button" class="pw-toggle" data-act="pwToggle" aria-label="Show ${esc(label.toLowerCase())}" aria-pressed="false">Show</button></span></label>`;
 /* Every authenticator code on the profile uses the platform's one OTP field. */
-const codeField = (name = 'code', label = 'Code from your authenticator app') => otpField({ name, label });
+const codeField = (name = 'code', label = 'Code from your authenticator app', opts = {}) => otpField({ name, label, ...opts });
 
 async function scrProfile() {
   setTitle('My Profile', 'Your own account and sign-in. Only you can change these.');
@@ -4429,7 +4429,7 @@ function replaceStep() {
     <div class="enrol-qr">${r.qr || '<p class="pf-help">The QR code could not be drawn. Use the key below.</p>'}</div>
     <details class="enrol-key"><summary>Can’t scan? Enter the key instead</summary>
       <code class="enrol-secret">${esc(groupKey(r.secret))}</code></details>
-    ${codeField('code', 'Code from the NEW entry')}
+    ${codeField('code', 'Code from the NEW entry', { autoSubmit: true })}
     <p class="pf-msg" role="status" id="pf-rep-msg">${esc(r.error || '')}</p>
     <div class="pf-actions"><button type="button" class="btn btn-ghost btn-sm" data-act="pfReplaceCancel">Cancel</button>
       <button type="submit" class="btn btn-primary btn-sm">Confirm new authenticator</button></div></form>`;

@@ -142,7 +142,7 @@ export async function mountLogin(root, { onSignedIn, surface = 'admin' } = {}) {
           <h1 class="auth-title">Authenticator code</h1>
           <p class="auth-sub">Enter the 6-digit code for ${safe(email)} from your authenticator app.</p>
 
-          ${otpField({ label: 'Authenticator code', state: error ? 'error' : 'idle' })}
+          ${otpField({ label: 'Authenticator code', state: error ? 'error' : 'idle', autoSubmit: true })}
 
           ${error ? `<p class="auth-error" role="alert">${safe(error)}</p>` : ''}
           <button class="auth-btn" type="submit">Sign in</button>

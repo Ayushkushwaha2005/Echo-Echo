@@ -100,7 +100,7 @@ export async function mountAdminInvite(root, { token, onDone }) {
             <p class="auth-fine">Choose <b>Enter code manually</b>. Account name: ${safe(enrol.issuer)}. Time-based, 6 digits.</p>
             <code class="enrol-secret">${safe(groupKey(enrol.secret))}</code></details>
           <form class="stack" data-inv-form="complete" novalidate>
-            ${otpField({ label: 'The 6-digit code the app shows now', state: busy ? 'loading' : error ? 'error' : 'idle' })}
+            ${otpField({ label: 'The 6-digit code the app shows now', state: busy ? 'loading' : error ? 'error' : 'idle', autoSubmit: true })}
             ${errorLine()}
             <button class="auth-btn" type="submit" ${busy ? 'disabled' : ''}>Finish setup</button>
           </form>` : `<h1 class="auth-title">Add your authenticator</h1>
