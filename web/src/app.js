@@ -1846,10 +1846,13 @@ function onPickerSelect(dest) {
   render();
 }
 
+let googlePickerFailed = false;
 async function paintPicker() {
   const slot = document.querySelector('.echo-picker-slot');
   if (!slot) {
-    if (picker) { picker.ctl?.destroy(); picker = null; }
+    /* A Google picker is kept, detached, for the rest of the visit: reopening
+       the sheet reuses it instead of paying for a new map load. */
+    if (picker && picker.ctl?.provider !== 'google') { picker.ctl?.destroy(); picker = null; }
     return;
   }
   if (picker) {
@@ -1870,8 +1873,23 @@ async function paintPicker() {
   const mine = picker = { host, ctl: null };
   try {
     if (!S.campusMap) S.campusMap = await quad.campusMap();
-    const { drawPickerMap } = await loadModule(() => import('../../packages/ui/map.js'), import.meta.url);
-    const ctl = await drawPickerMap(host, S.campusMap, { ...pickerState(), onTap: onPickerTap, onSelect: onPickerSelect });
+    let ctl = null;
+    if (S.campusMap.maps?.provider === 'google' && !googlePickerFailed) {
+      try {
+        const { createPickerMap } = await loadModule(() => import('../../packages/ui/map-google.js'), import.meta.url);
+        ctl = await createPickerMap(host, S.campusMap, { ...pickerState(), onTap: onPickerTap, onSelect: onPickerSelect });
+      } catch {
+        /* Google unreachable, key refused, or no WebGL: the OpenStreetMap
+           picker instead, for the rest of this visit. */
+        googlePickerFailed = true;
+        host.replaceChildren();
+        host.className = 'echo-map picker';
+      }
+    }
+    if (!ctl) {
+      const { drawPickerMap } = await loadModule(() => import('../../packages/ui/map.js'), import.meta.url);
+      ctl = await drawPickerMap(host, S.campusMap, { ...pickerState(), onTap: onPickerTap, onSelect: onPickerSelect });
+    }
     if (picker !== mine) { ctl?.destroy(); return; }   // closed while loading
     mine.ctl = ctl;
     /* A render may have replaced the slot while the map was loading. */

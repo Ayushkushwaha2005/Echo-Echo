@@ -4,6 +4,7 @@
    otherwise the one named in the request, otherwise the single campus in
    service. Boundaries are proposed, then confirmed by an administrator; only
    a confirmed boundary is ever used. */
+import { mapsConfig } from '../services/maps.js';
 import { q, one, tx } from '../db/index.js';
 import { authorize, can, BadRequest, NotFound, Conflict, Forbidden, Unauthenticated } from '../auth/rbac.js';
 import * as campus from '../services/campus.js';
@@ -162,6 +163,9 @@ export default async function campusRoutes(app) {
       pinRadiusM: campus.PIN_RADIUS_M,
       maxAccuracyM: campus.GPS_MAX_ACCURACY_M,
       tiles: campus.mapTiles(),
+      /* Google Maps for the checkout picker when configured (services/maps.js);
+         otherwise the OpenStreetMap picker. */
+      maps: mapsConfig(),
     };
   });
 

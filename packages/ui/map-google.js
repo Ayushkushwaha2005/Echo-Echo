@@ -246,3 +246,171 @@ export async function createLiveMap(el, cfg, { center = null, boundary = null, o
     destroy() { for (const r of markers.values()) r.marker.map = null; for (const l of lines.values()) l.setMap(null); markers.clear(); lines.clear(); },
   };
 }
+
+/* ==========================================================================
+   THE STUDENT'S DELIVERY-SPOT PICKER (checkout), on Google Maps
+
+   The same controller as drawPickerMap in map.js - sync / refresh / setBase /
+   base / focusLive / focusPin / destroy - so the checkout code, the
+   POST /campus/pin check and the order's own re-validation are untouched.
+   It draws only what GET /campus/map sent: the active outline, the
+   confirmed delivery points (grouped exactly as map.js groups them), the
+   student's pin, and their phone's accepted reading with its accuracy.
+
+   Billing: one map load when the picker is first opened. The caller keeps
+   this controller for the rest of the visit, so closing and reopening the
+   sheet, or every re-render while it is open, reuses the same map.
+   ========================================================================== */
+export async function createPickerMap(el, data, { onTap, onSelect, ...state } = {}) {
+  const { destinationMarkers } = await import('./map.js');
+  const maps = await loadGoogleMaps(data.maps);
+  const [{ Map, InfoWindow, Polygon, Circle, LatLngBounds }, { AdvancedMarkerElement }, core] = await Promise.all([
+    maps.importLibrary('maps'), maps.importLibrary('marker'), maps.importLibrary('core')]);
+  const { ControlPosition } = core;
+  injectStyles();
+  injectPickerStyles();
+  el.classList.add('echo-gmap');
+  const poly = data.boundary.polygon.map(([lat, lng]) => ({ lat, lng }));
+  const bounds = new LatLngBounds();
+  for (const p of poly) bounds.extend(p);
+  const pad = (b, k) => {
+    const ne = b.getNorthEast(), sw = b.getSouthWest();
+    const dl = (ne.lat() - sw.lat()) * k, dg = (ne.lng() - sw.lng()) * k;
+    return { north: ne.lat() + dl, south: sw.lat() - dl, east: ne.lng() + dg, west: sw.lng() - dg };
+  };
+  const map = new Map(el, {
+    mapId: data.maps.mapId || 'DEMO_MAP_ID',
+    center: data.boundary.center ? { lat: data.boundary.center[0], lng: data.boundary.center[1] } : poly[0],
+    zoom: 16,
+    mapTypeId: 'hybrid',
+    mapTypeControl: true,
+    mapTypeControlOptions: { mapTypeIds: ['roadmap', 'satellite', 'hybrid'], position: ControlPosition.TOP_RIGHT },
+    streetViewControl: false,
+    fullscreenControl: false,
+    clickableIcons: false,
+    gestureHandling: 'greedy',
+    restriction: { latLngBounds: pad(bounds, 0.6), strictBounds: false },
+  });
+  new Polygon({ map, paths: poly, clickable: false, strokeColor: '#E0567A', strokeOpacity: 0.95,
+    strokeWeight: 2, fillColor: '#E0567A', fillOpacity: 0.07 });
+
+  const info = new InfoWindow();
+  const byId = new globalThis.Map((data.destinations || []).map((d) => [d.id, d]));
+  const choose = (id) => { const d = byId.get(id); if (d) onSelect?.(d); };
+  const groups = destinationMarkers(data.destinations);
+  const destEl = (g, chosen) => {
+    const w = document.createElement('div');
+    w.className = 'eg-wrap';
+    w.innerHTML = `<div class="eg-dest${chosen ? ' sel' : ''}" role="button" aria-label="${esc(g.label)}">${chosen ? '✓' : g.ids.length > 1 ? g.ids.length : ''}</div>`
+      + `<span class="eg-tag ${g.labelSide === 'bottom' ? '' : 'up'}">${esc(g.label)}</span>`;
+    return w;
+  };
+  const markers = groups.map((g) => {
+    const m = new AdvancedMarkerElement({ map, position: { lat: g.lat, lng: g.lng }, content: destEl(g, false), title: g.label, zIndex: 20 });
+    m.addListener('click', () => {
+      if (g.ids.length === 1) return choose(g.ids[0]);
+      /* Two points too close to tap apart: ask which, by name. */
+      const box = document.createElement('div');
+      box.className = 'eg-info';
+      box.innerHTML = g.ids.map((id, i) => `<button type="button" class="btn btn-secondary btn-sm" style="display:block;width:100%;margin:4px 0" data-dest-id="${esc(id)}">${esc(g.names[i])}</button>`).join('');
+      box.addEventListener('click', (e) => { const b = e.target.closest('[data-dest-id]'); if (b) { info.close(); choose(b.dataset.destId); } });
+      info.setContent(box);
+      info.open({ map, anchor: m });
+      return null;
+    });
+    return { g, m };
+  });
+
+  let tapped = null, liveDot = null, liveRing = null, lastLive = null;
+  const pinEl = (status) => {
+    const w = document.createElement('div');
+    w.className = `eg-spot ${status}`;
+    w.setAttribute('aria-label', status === 'refused' ? 'Your delivery spot: outside the campus delivery area'
+      : status === 'checking' ? 'Your delivery spot (checking)' : 'Your delivery spot. Drag to move it.');
+    w.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s-7-6.2-7-12a7 7 0 0 1 14 0c0 5.8-7 12-7 12z"/><circle cx="12" cy="10" r="2.6" fill="#fff"/></svg>';
+    return w;
+  };
+
+  /* "My location" and "Pin the centre", bottom-left by the thumb. */
+  const lower = document.createElement('div');
+  lower.className = 'echo-map-tools echo-map-tools-low';
+  lower.style.margin = '10px';
+  lower.innerHTML = '<button type="button" class="echo-map-recentre" aria-label="Centre the map on my location" style="display:none">◎ My location</button>'
+    + '<button type="button" class="echo-map-recentre echo-map-pincentre" aria-label="Put the delivery pin at the centre of the map">+ Pin the centre</button>';
+  const [recentre, pinCentre] = lower.querySelectorAll('button');
+  map.controls[ControlPosition.LEFT_BOTTOM].push(lower);
+  const cross = document.createElement('div');
+  cross.className = 'echo-map-cross';
+  cross.setAttribute('aria-hidden', 'true');
+  el.append(cross);
+
+  const num = (v) => (typeof v === 'function' ? v() : v);
+  function sync({ pin: at = null, pinStatus = 'ok', selectedId = null, live = null } = {}) {
+    if (at) {
+      if (tapped) { tapped.position = { lat: at.lat, lng: at.lng }; tapped.content = pinEl(pinStatus); } else {
+        /* Draggable: a phone's reading or a first tap is rarely exactly the spot. */
+        tapped = new AdvancedMarkerElement({ map, position: { lat: at.lat, lng: at.lng }, content: pinEl(pinStatus),
+          gmpDraggable: true, title: 'Your delivery spot', zIndex: 100 });
+        tapped.addListener('dragend', () => { const p = tapped.position; onTap?.(num(p.lat), num(p.lng)); });
+      }
+    } else if (tapped) { tapped.map = null; tapped = null; }
+    for (const { g, m } of markers) m.content = destEl(g, Boolean(selectedId && g.ids.includes(selectedId)));
+    if (live && Number.isFinite(live.lat) && Number.isFinite(live.lng)) {
+      lastLive = live;
+      const c = { lat: live.lat, lng: live.lng };
+      if (!liveDot) {
+        liveRing = new Circle({ map, center: c, radius: live.accuracy || 0, clickable: false,
+          strokeColor: '#2563EB', strokeOpacity: 0.5, strokeWeight: 1, fillColor: '#2563EB', fillOpacity: 0.12 });
+        const d = document.createElement('div');
+        d.className = 'eg-live';
+        liveDot = new AdvancedMarkerElement({ map, position: c, content: d, zIndex: 50 });
+      } else { liveDot.position = c; liveRing.setCenter(c); liveRing.setRadius(live.accuracy || 0); }
+      liveDot.title = `Your phone, roughly (±${Math.round(live.accuracy || 0)} m)`;
+      recentre.style.display = '';
+    } else {
+      lastLive = null;
+      if (liveDot) { liveDot.map = null; liveRing.setMap(null); liveDot = null; liveRing = null; }
+      recentre.style.display = 'none';
+    }
+  }
+  const zoomTo = (p) => { map.panTo(p); if (map.getZoom() < 17) map.setZoom(17); };
+  function focusLive() { if (lastLive) zoomTo({ lat: lastLive.lat, lng: lastLive.lng }); }
+  const focusPin = (at) => { if (at) zoomTo({ lat: at.lat, lng: at.lng }); };
+  recentre.addEventListener('click', (e) => { e.stopPropagation(); focusLive(); });
+  pinCentre.addEventListener('click', (e) => { e.stopPropagation(); const c = map.getCenter(); onTap?.(c.lat(), c.lng()); });
+
+  /* A tap on the map itself (not a marker or control) is the student's own point. */
+  map.addListener('click', (e) => { if (e.latLng) onTap?.(e.latLng.lat(), e.latLng.lng()); });
+  map.fitBounds(bounds, 16);
+  sync(state);
+
+  const toGoogle = { default: 'roadmap', satellite: 'hybrid' };
+  return {
+    map,
+    sync,
+    refresh: () => {},   // Google re-measures its container itself
+    setBase: (name) => { if (toGoogle[name]) map.setMapTypeId(toGoogle[name]); return name; },
+    base: () => (map.getMapTypeId() === 'roadmap' ? 'default' : 'satellite'),
+    focusLive,
+    focusPin,
+    destroy: () => { for (const { m } of markers) m.map = null; if (tapped) tapped.map = null; },
+    markers: groups,
+    provider: 'google',
+  };
+}
+
+function injectPickerStyles() {
+  if (document.getElementById('echo-gpick-css')) return;
+  const st = document.createElement('style');
+  st.id = 'echo-gpick-css';
+  st.textContent = `
+  .eg-dest{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#2F7D5F;border:3px solid #fff;
+    box-shadow:0 1px 5px rgba(0,0,0,.4);color:#fff;font:800 11px/1 system-ui,sans-serif;cursor:pointer}
+  .eg-dest.sel{background:#1F5E46;width:28px;height:28px;box-shadow:0 0 0 4px rgba(47,125,95,.35),0 1px 5px rgba(0,0,0,.4)}
+  .eg-tag.up{top:auto;bottom:28px}
+  .eg-spot{width:38px;height:38px;cursor:grab;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))}
+  .eg-spot svg{width:38px;height:38px;fill:#E0567A;stroke:#fff;stroke-width:1.5}
+  .eg-spot.refused svg{fill:#8A817C}.eg-spot.checking svg{opacity:.6}
+  .eg-live{width:16px;height:16px;border-radius:50%;background:#2563EB;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}`;
+  document.head.append(st);
+}

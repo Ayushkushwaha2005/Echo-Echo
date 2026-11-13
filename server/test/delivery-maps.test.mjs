@@ -269,3 +269,16 @@ test('the fleet map needs delivery.track; names need partners.view; the server k
   const audited = (await pool.query(`SELECT count(*)::int n FROM audit_log WHERE action = 'delivery.track.view' AND resource_id = $1`, [b.id])).rows[0].n;
   assert.ok(audited >= 1 && audited <= 2, `position views audited, not flooded (${audited})`);
 });
+
+test('the checkout picker gets Google only when the browser key is set, and never the Routes key', async () => {
+  await seed();
+  const s = await as(cust);
+  assert.deepEqual((await s.get('/campus/map')).body.maps, { provider: 'osm' });
+  process.env.GOOGLE_MAPS_BROWSER_KEY = 'browser-key'; process.env.GOOGLE_ROUTES_API_KEY = 'server-key';
+  process.env.GOOGLE_MAPS_MAP_ID = 'map-id-1';
+  const r = await s.get('/campus/map');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.maps, { provider: 'google', browserKey: 'browser-key', mapId: 'map-id-1' });
+  assert.doesNotMatch(JSON.stringify(r.body), /server-key/);
+  assert.equal(calls.length, 0, 'opening the picker asks Google for no route');
+});
