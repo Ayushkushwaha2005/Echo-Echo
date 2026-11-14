@@ -153,8 +153,7 @@ test('3. the page trusts an edge copy for 10 s, and a live change is fetched pas
 
 test('2. the cart asks again only when its answer is old (an unconditional re-ask re-rendered forever)', () => {
   const fn = WEB.slice(WEB.indexOf('function cartCafe()'), WEB.indexOf('const CartClosedNotice'));
-  const calls = fn.split('
-').filter((l) => /revalidate\(/.test(l) && !/^\s*(\/\*|\*)/.test(l));
+  const calls = fn.split(/\r?\n/).filter((l) => /revalidate\(/.test(l) && !/^\s*(\/\*|\*)/.test(l));
   assert.equal(calls.length, 1);
   assert.match(calls[0], /if \(cache\[key\]\?\.ok && Date\.now\(\) - fetchedAt\[key\] > CART_CAFE_MAX_AGE\) revalidate\(/);
 });
