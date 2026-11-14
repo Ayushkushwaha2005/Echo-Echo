@@ -25,6 +25,7 @@ import { passwordStrength } from '../../packages/ui/password-strength.js';
 import { cropImage } from '../../packages/ui/image-crop.js';
 import { mountChat } from '../../packages/ui/team-chat.js';
 import { CafPhoto, DishTile, dishImage, onImageError } from '../../packages/ui/photo-tiles.js';
+import { availabilityUpdate } from '../../packages/ui/cafe-availability.js';
 
 const root = document.getElementById('app');
 restoreAdminTheme();
@@ -2124,7 +2125,8 @@ const availabilityPayload = (d) => {
   delete d.manualAvailability;
   const open = d.availabilityState === 'open';
   delete d.availabilityState;
-  return manual ? { manualAvailability: true, isOpen: open, accepting: open } : { manualAvailability: false };
+  /* Closed never touches the separate emergency pause (`accepting`). */
+  return availabilityUpdate({ manual, open });
 };
 const check = (name, label, on) => `
   <label class="row" style="gap:8px"><input type="checkbox" name="${name}" ${on ? 'checked' : ''}>
@@ -2469,7 +2471,7 @@ ${added.length ? `Grant: ${added.join(', ')}
      the café under manual availability: the schedule can no longer undo it.
      Edit café turns the override off again. */
   toggleOpen: (t) => act(t, () => quad.updateVendor(t.dataset.id,
-    { manualAvailability: true, isOpen: t.dataset.v === '1', accepting: t.dataset.v === '1' }), { after: route }),
+    availabilityUpdate({ manual: true, open: t.dataset.v === '1' })), { after: route }),
 
   toggleAccepting: (t) => act(t, () => quad.updateVendor(t.dataset.id, { accepting: t.dataset.v === '1' }),
     { after: route }),

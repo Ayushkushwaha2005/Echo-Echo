@@ -128,7 +128,7 @@
       "headers": [
         {
           "key": "Vercel-CDN-Cache-Control",
-          "value": "max-age=15, stale-while-revalidate=86385"
+          "value": "max-age=5, stale-while-revalidate=86395"
         }
       ]
     },

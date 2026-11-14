@@ -103,10 +103,10 @@ test('reference data is the same for everyone and sets no cookie, so a day-old c
 /* Lists the page reads the age of, and shows as "Checking" past a minute (web/src/app.js, vendorsFor). */
 const AGED = ['/api/vendors/'];
 
-test('an aged café list is fresh 15 s, never older than a day, and its age reaches the page', async () => {
+test('an aged café list is fresh 5 s, never older than a day, and its age reaches the page', async () => {
   const value = VERCEL.headers.find((h) => h.source === '/api/vendors/').headers.find((x) => /cdn-cache-control/i.test(x.key)).value;
   const n = (k) => Number(new RegExp(`${k}=(\\d+)`).exec(value)?.[1] ?? 0);
-  assert.equal(n('max-age'), 15);
+  assert.equal(n('max-age'), 5);   // was 15; a closed café showed Open for up to a minute (14 Nov 2026)
   assert.ok(n('max-age') + n('stale-while-revalidate') <= 86_400, value);
   assert.doesNotMatch(value, /stale-if-error/);
   globalThis.QUAD_API_BASE = '/api';
