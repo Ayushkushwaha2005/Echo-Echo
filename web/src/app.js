@@ -1359,7 +1359,9 @@ function cartCafe() {
   if (!id) return null;
   const key = `cartcafe:${id}`;
   const load = () => quad.menu(id).then((m) => m.vendor);
-  revalidate(key, load, CART_CAFE_MAX_AGE, (v) => v);
+  /* Only when the answer is old: revalidate() always asks and then re-renders,
+     so calling it on every render would loop. */
+  if (cache[key]?.ok && Date.now() - fetchedAt[key] > CART_CAFE_MAX_AGE) revalidate(key, load, Infinity);
   const r = need(key, load);
   return r?.ok ? r.v : null;
 }
