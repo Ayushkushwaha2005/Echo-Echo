@@ -889,7 +889,7 @@ const needVendors = () => {
    must change without a reload. Once a minute the server is asked again
    (it computes the status in campus time); the page re-renders only when
    a café's status actually changed, or the open menu did. */
-const refreshCafes = async ({ fresh: pastEdge = false } = {}) => {
+const refreshCafes = async ({ fresh: pastEdge = false, withMenu = true } = {}) => {
   if (document.hidden || S.sheet || S.campuses === null) return;
   /* The cart and checkout follow the café in the cart, asked past the edge. */
   if (['cart', 'checkout'].includes(S.route) && S.cart[0]?.vendorId) {
@@ -910,7 +910,7 @@ const refreshCafes = async ({ fresh: pastEdge = false } = {}) => {
     keep('vendors', fresh);
     /* An open menu follows its prices and sold-out items, not only the café's hours. */
     let menuMoved = false;
-    if (S.route === 'menu' && S.params.caf) {
+    if (withMenu && S.route === 'menu' && S.params.caf) {
       const key = `menu:${S.params.caf}`;
       const menu = await quad.menu(S.params.caf);
       menuMoved = !!cache[key]?.ok && JSON.stringify(cache[key].v.items) !== JSON.stringify(menu.items);
@@ -921,7 +921,12 @@ const refreshCafes = async ({ fresh: pastEdge = false } = {}) => {
     render();
   } catch { /* offline: the next tick tries again */ }
 };
-setInterval(() => refreshCafes(), 60_000);
+/* Production has no live stream (it answers 204), so this poll is what moves an
+   open page: every 10 s for the café list (an edge copy, max-age 5) and the
+   cart's café; an open menu's items are compared once a minute, as before. */
+const CAFE_POLL_MS = 10_000;
+let cafeTick = 0;
+setInterval(() => refreshCafes({ withMenu: ++cafeTick % 6 === 0 }), CAFE_POLL_MS);
 /* The minute above is the fallback. When a stream is available, a change on the
    server asks for the same refresh straight away. */
 let cafeNudge = null;
