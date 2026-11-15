@@ -18,9 +18,13 @@ import {
 import { esc, toggleTheme, restoreTheme, Mark, VegMark } from '../../packages/ui/kit.js';
 import { lockup } from '../../brand/logo.js';
 import { mountChat } from '../../packages/ui/team-chat.js';
+import { Switch, bindSwitches } from '../../packages/ui/switch.js';
+import { ThemeSwitch, bindThemeSwitch } from '../../packages/ui/theme-switch.js';
 
 const root = document.getElementById('app');
 restoreTheme();
+bindThemeSwitch();
+bindSwitches();
 
 const S = { route: 'orders', vendor: null, vendorId: null, canPrice: false };
 
@@ -81,7 +85,7 @@ function render(vendors = []) {
         <div class="rail-foot">
           <div class="t-xs faint">${esc(session.me.user.name || session.me.user.phone)}</div>
           <div class="t-xs faint">${session.roles.map(esc).join(' · ')}</div>
-          <button class="railbtn" data-act="theme">Theme</button>
+          <div class="rail-theme">${ThemeSwitch({ className: 'shop-theme' })}</div>
           <button class="railbtn" data-act="signout">Sign out</button>
         </div>
       </aside>
@@ -90,7 +94,7 @@ function render(vendors = []) {
              style="padding:var(--s-3) var(--s-4);border-bottom:1px solid var(--line)">
           ${navFor().map(([r, l]) =>
             `<button class="chip" data-route="${r}" ${S.route === r ? 'aria-pressed="true"' : ''}>${esc(l)}</button>`).join('')}
-          <button class="chip" data-act="theme">Theme</button>
+          ${ThemeSwitch({ className: 'shop-theme' })}
           <button class="chip" data-act="signout">Sign out</button>
         </nav>
         <header class="webhead">
@@ -468,9 +472,8 @@ document.addEventListener('keydown', (e) => {
 const field = (name, label, value = '', type = 'text') => `
   <label class="field"><span class="t-label">${esc(label)}</span>
   <input class="input" name="${name}" type="${type}" value="${esc(value ?? '')}"></label>`;
-const check = (name, label, on) => `
-  <label class="row" style="gap:8px"><input type="checkbox" name="${name}" ${on ? 'checked' : ''}>
-  <span class="t-sm">${esc(label)}</span></label>`;
+/* An on/off setting: the shared switch (packages/ui/switch.js). */
+const check = (name, label, on) => Switch({ name, checked: !!on, label: esc(label) });
 const splitList = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
 /* The owner's own sections, from the server. An empty choice is allowed:
    an item does not need a category to be sold. */

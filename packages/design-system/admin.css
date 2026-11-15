@@ -1028,3 +1028,30 @@ body { background: var(--cc-c-canvas); color: var(--cc-c-text); font-family: var
 @media (max-width: 700px) { .cc-fleet-map { height: 340px; } }
 .cc-fleet-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
 .cc-fleet-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+/* ---- light/dark switch in the top bar: the supplied 104×64 switch at half size ---- */
+.cc-theme { --cts-scale: .5; align-self: center; }
+
+/* ---- Edit café: weekly operating schedule ------------------------------------ */
+.wk { border: 1px solid var(--cc-c-border, var(--line)); border-radius: 12px; padding: 12px; margin: 0; display: grid; gap: 10px; min-width: 0; }
+.wk legend { padding: 0 6px; }
+.wk-summary { margin: 0; font-size: var(--t-sm); font-weight: 600; }
+.wk-tools, .wk-bulk, .wk-foot, .wk-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.wk-time { width: auto; min-width: 0; padding-inline: 8px; }
+.wk-from { width: auto; }
+.wk-rows { display: grid; gap: 2px; }
+.wk-row { display: grid; grid-template-columns: 24px minmax(84px, 110px) minmax(120px, auto) 1fr; align-items: center; gap: 4px 10px;
+  padding: 2px 6px; border-radius: 10px; }
+.wk-row.is-invalid { box-shadow: inset 0 0 0 1px var(--danger); }
+.wk-row.is-closed .wk-day { color: var(--cc-c-muted, var(--text-muted)); }
+.wk-open { display: flex; align-items: center; gap: 2px; }
+.wk-state { min-width: 44px; }
+.wk-hours { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wk-hours .wk-time:disabled { opacity: .45; }
+.wk-errors:empty { display: none; }
+.wk-errors { color: var(--danger); font-size: var(--t-xs); display: grid; gap: 2px; }
+.wk-tz { margin: 0; flex: 1 1 200px; }
+@media (max-width: 560px) {
+  .wk-row { grid-template-columns: 24px 1fr auto; }
+  .wk-hours { grid-column: 2 / -1; }
+}

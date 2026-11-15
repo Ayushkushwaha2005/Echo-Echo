@@ -982,3 +982,7 @@ textarea.input { resize: vertical; min-height: 72px; }
 .invite-perms { margin: 2px 0 10px; padding-left: 18px; font-size: 13px; }
 
 .share-dot { flex: none; width: 10px; height: 10px; margin-top: 3px; border-radius: 50%; background: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, .25); }
+
+/* The supplied 104×64 light/dark switch, at half size in a header or rail. */
+.site-theme, .shop-theme { --cts-scale: .5; align-self: center; }
+.rail-theme { padding: 6px 0; }

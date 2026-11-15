@@ -110,7 +110,7 @@ export const TOOL_SPECS = [
 export const TOOLS = {
   async search_cafeterias(actor, { open_only } = {}) {
     const { rows } = await q(
-      `SELECT v.id, v.name, v.kind, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.is_open, v.accepting, v.prep_minutes, v.delivery_enabled,
+      `SELECT v.id, v.name, v.kind, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.weekly_hours, v.timezone, v.is_open, v.accepting, v.prep_minutes, v.delivery_enabled,
               (SELECT count(*)::int FROM review r WHERE r.vendor_id = v.id AND NOT r.hidden) AS rating_count,
               (SELECT round(avg(stars)::numeric,2) FROM review r WHERE r.vendor_id = v.id AND NOT r.hidden) AS rating_avg
          FROM vendor v WHERE v.active
@@ -128,7 +128,7 @@ export const TOOLS = {
     const maxPaise = max_price_rupees ? Math.round(max_price_rupees * 100) : null;
     const { rows } = await q(
       `SELECT i.id, i.name, i.description, i.price_paise, i.veg, i.available, i.prep_minutes,
-              i.tags, v.id AS vendor_id, v.name AS vendor_name, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.is_open, v.accepting
+              i.tags, v.id AS vendor_id, v.name AS vendor_name, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.weekly_hours, v.timezone, v.is_open, v.accepting
          FROM menu_item i JOIN vendor v ON v.id = i.vendor_id
         WHERE i.active AND v.active
           AND ($1 = '' OR i.name ILIKE $2
@@ -150,7 +150,7 @@ export const TOOLS = {
 
   async get_item_details(actor, { item_id }) {
     const i = await one(
-      `SELECT i.*, v.name AS vendor_name, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.is_open, v.accepting,
+      `SELECT i.*, v.name AS vendor_name, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.weekly_hours, v.timezone, v.is_open, v.accepting,
               (SELECT count(*)::int FROM review r WHERE r.item_id = i.id) AS rc,
               (SELECT round(avg(stars)::numeric,2) FROM review r WHERE r.item_id = i.id) AS ra
          FROM menu_item i JOIN vendor v ON v.id = i.vendor_id WHERE i.id = $1`, [item_id]);
@@ -164,7 +164,7 @@ export const TOOLS = {
   async check_availability(actor, { item_ids = [] }) {
     if (!item_ids.length) return { items: [] };
     const { rows } = await q(
-      `SELECT i.id, i.name, i.available, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.is_open, v.accepting
+      `SELECT i.id, i.name, i.available, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.weekly_hours, v.timezone, v.is_open, v.accepting
          FROM menu_item i JOIN vendor v ON v.id = i.vendor_id
         WHERE i.id = ANY($1::uuid[]) AND i.active`, [item_ids]);
     return { items: rows.map((i) => ({
@@ -233,7 +233,7 @@ export const TOOLS = {
   async recommend_items(actor, { mood, max_price_rupees, veg_only } = {}) {
     const maxPaise = max_price_rupees ? Math.round(max_price_rupees * 100) : null;
     const { rows: all } = await q(
-      `SELECT i.id, i.name, i.price_paise, i.veg, i.tags, v.name AS vendor_name, v.id AS vendor_id, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.is_open, v.accepting,
+      `SELECT i.id, i.name, i.price_paise, i.veg, i.tags, v.name AS vendor_name, v.id AS vendor_id, v.active, v.open_days, v.opens_at, v.closes_at, v.manual_availability, v.weekly_hours, v.timezone, v.is_open, v.accepting,
               (SELECT count(*)::int FROM review r WHERE r.item_id = i.id AND NOT r.hidden) AS rc,
               (SELECT round(avg(stars)::numeric,2) FROM review r
                 WHERE r.item_id = i.id AND NOT r.hidden) AS ra
