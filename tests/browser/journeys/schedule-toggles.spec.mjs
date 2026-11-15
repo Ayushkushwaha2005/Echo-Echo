@@ -162,3 +162,50 @@ test('light/dark switch: one beside the profile, remembered after reload, operab
   await shot(page, 'web-phone');
   expect(problems).toEqual([]);
 });
+
+/* Production showed the closing time wrapping under the opening time (the hours
+   column got ~183px of the ~200px it needs). Both fields stay on one line, inside
+   the dialog, for Chai Garam and Tulips' week, on desktop, tablet and phone. */
+for (const [label, width] of [['wide desktop', 1707], ['desktop', 1440], ['tablet', 820], ['phone', 390]]) {
+  test(`weekly schedule: opening and closing times side by side on ${label} (${width}px)`, async ({ page, context }) => {
+    const problems = watchProblems(page);
+    const o = await owner();
+    await signInAs(context, o.id);
+    await page.setViewportSize({ width, height: 900 });
+    for (const name of ['Chai Garam', 'Tulips']) {
+      const v = await vendor(name);
+      await db.query(`UPDATE vendor SET open_days = '{1,2,3,4,5,6}', opens_at = '08:00', closes_at = '18:00', weekly_hours = $2::jsonb,
+                             manual_availability = true WHERE id = $1`, [v.id, JSON.stringify(LEGACY_WEEK)]);
+      await openAdmin(page, 'cafeterias');
+      await page.locator(`[data-act=editVendor][data-id="${v.id}"]`).evaluate((b) => b.click());
+      const wk = page.locator('.modalwrap [data-wk]');
+      await expect(wk.locator('[data-wk-summary]')).toHaveText('Mon–Sat 8 AM–6 PM · Sun closed');
+      /* As on Chrome for Windows, where the dialog's scrollbar takes 17px from its
+         content (headless Chromium's overlay scrollbar takes none, which is why
+         the wrap only showed on echoecho.tech: rows 479px there, 490px here),
+         plus wider day names than this stack's fallback font draws. */
+      await page.addStyleTag({ content: '.modalwrap .modal-body { padding-right: calc(var(--s-5, 20px) + 17px) !important; } .wk-day { letter-spacing: .06em; }' });
+      /* an overnight day, so the "past midnight" note is showing too */
+      await wk.locator('.wk-row[data-day="5"] [data-wk-closes]').fill('02:00');
+      await expect(wk.locator('.wk-row[data-day="5"] [data-wk-night]')).toBeVisible();
+      const rows = await wk.evaluate((box) => {
+        const body = box.closest('.modal-body').getBoundingClientRect();
+        return [...box.querySelectorAll('.wk-row')].map((r) => {
+          const a = r.querySelector('[data-wk-opens]').getBoundingClientRect();
+          const b = r.querySelector('[data-wk-closes]').getBoundingClientRect();
+          return { day: r.dataset.day, sameLine: Math.abs(a.top - b.top) < 2, order: b.left > a.right,
+                   inside: a.left >= body.left - 1 && b.right <= body.right + 1, opens: r.querySelector('[data-wk-opens]').value,
+                   closes: r.querySelector('[data-wk-closes]').value };
+        });
+      });
+      for (const r of rows) expect(r, `${name} day ${r.day} at ${width}px`).toMatchObject({ sameLine: true, order: true, inside: true });
+      expect(rows.map((r) => [r.opens, r.closes])).toEqual([1, 2, 3, 4, 5, 6, 7].map((d) => ['08:00', d === 5 ? '02:00' : '18:00']));
+      expect(await page.locator('.modalwrap .modal-body').evaluate((m) => m.scrollWidth - m.clientWidth)).toBeLessThanOrEqual(1);
+      await wk.locator('.wk-row[data-day="4"]').scrollIntoViewIfNeeded();
+      await shot(page, `hours-${name.replace(' ', '-').toLowerCase()}-${width}`);
+      await page.locator('.modalwrap [data-act=closeModal].btn').click();
+      expect((await db.query('SELECT weekly_hours FROM vendor WHERE id = $1', [v.id])).rows[0].weekly_hours).toEqual(LEGACY_WEEK);
+    }
+    expect(problems).toEqual([]);
+  });
+}
