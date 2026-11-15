@@ -2084,6 +2084,23 @@ function modal(title, bodyHtml, onSubmit, sub = '', { drawer = false, submitLabe
   m.querySelector('input:not([type=hidden]):not([disabled]), select, textarea')?.focus();
   return m;
 }
+/* Resolves once the browser has really loaded and decoded the image at this
+   URL, and rejects otherwise: a save is reported only when the saved photo can
+   be shown, never on the strength of the upload alone. */
+function imageLoads(url, timeoutMs = 20000) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const t = setTimeout(() => { img.src = ''; reject(new Error('The saved photo took too long to load. Reload the page to check it.')); }, timeoutMs);
+    img.onload = () => { clearTimeout(t); img.naturalWidth ? resolve() : reject(new Error('The saved photo could not be shown.')); };
+    img.onerror = () => { clearTimeout(t); reject(new Error('The photo was saved but could not be loaded back. Reload the page; if it is still missing, upload it again.')); };
+    img.src = url;
+  });
+}
+/* A dish photo counts as saved when the dish now points at it and it loads. */
+async function confirmSavedPhoto(row, photoAsset) {
+  if (row?.photo_asset !== photoAsset) throw new Error('The photo was uploaded but not attached to the dish. Try saving again.');
+  await imageLoads(quad.assetUrl(photoAsset));
+}
 /* Closes the given dialog, or the one on top — dialogs can open dialogs. */
 const closeModal = (target) => {
   const all = document.querySelectorAll('.modalwrap');
@@ -2657,12 +2674,14 @@ ${added.length ? `Grant: ${added.join(', ')}
         output: { maxSide: 1200, type: 'image/jpeg', quality: 0.88 } }) : null;
       if (file && !framed) throw new Error('The photo was not saved: framing was cancelled.');
       const photoAsset = framed ? (await quad.uploadPhoto(framed, 'food_photo')).id : undefined;
-      return quad.createItem(S.vendorId, {
+      const row = await quad.createItem(S.vendorId, {
         name: d.name, description: d.description, price: d.price,
         prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
         categoryId: d.categoryId || null, available: !!d.available,
         tags: splitList(d.tags), aliases: splitList(d.aliases),
       });
+      if (photoAsset) await confirmSavedPhoto(row, photoAsset);
+      return row;
     }),
 
   editItem: async (t) => {
@@ -2687,13 +2706,15 @@ ${added.length ? `Grant: ${added.join(', ')}
           output: { maxSide: 1200, type: 'image/jpeg', quality: 0.88 } }) : null;
         if (file && !framed) throw new Error('The photo was not saved: framing was cancelled.');
         const photoAsset = framed ? (await quad.uploadPhoto(framed, 'food_photo')).id : undefined;
-        return quad.updateItem(i.id, {
+        const row = await quad.updateItem(i.id, {
           revision: i.revision,
           name: d.name, description: d.description, price: d.price,
           prepMinutes: +d.prepMinutes || null, veg: !!d.veg, photoAsset,
           categoryId: d.categoryId || null,
           tags: splitList(d.tags), aliases: splitList(d.aliases),
         });
+        if (photoAsset) await confirmSavedPhoto(row, photoAsset);
+        return row;
       });
   },
 
@@ -4679,9 +4700,12 @@ const PROFILE_ACTIONS = {
   pfPhotoCancel: () => { URL.revokeObjectURL(P.photo?.url); P.photo = null; document.getElementById('pf-photo').innerHTML = photoBlock(); },
   pfPhotoSave: (t) => act(t, async () => {
     await quad.uploadMyAdminPhoto(P.photo.file);
+    /* Success only once the saved photo itself loads from the server. */
+    const v = photoBust.v + 1;
+    await imageLoads(`${quad.adminPhotoUrl(session.me.user.id)}?v=${v}`);
     URL.revokeObjectURL(P.photo.url); P.photo = null;
     session.me.adminProfile = { ...(session.me.adminProfile || {}), hasPhoto: true };
-    photoBust.v++;
+    photoBust.v = v;
     document.getElementById('pf-photo').innerHTML = photoBlock();
     refreshIdentity();
   }, { ok: 'Photo saved' }),

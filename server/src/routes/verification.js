@@ -236,7 +236,6 @@ export default async function verificationRoutes(app) {
     const got = await getImage(assetId);
     await audit(req, { action: 'verification.image.view', resource: 'verification_case',
                        resourceId: k.id, outcome: 'ok' });
-    if (got.url) return reply.redirect(got.url);
     return reply.type(got.asset.mime).send(got.bytes);
   });
 

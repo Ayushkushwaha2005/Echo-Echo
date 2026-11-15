@@ -315,7 +315,85 @@ test('ID card images are NEVER public, even to their owner, via the asset route'
 
   /* Food photography is public, and really serves the bytes. */
   const res = await app.inject({ method: 'GET', url: `/assets/${foodImage.id}` });
-  assert.ok([200, 302].includes(res.statusCode), 'a food photo is servable');
+  assert.equal(res.statusCode, 200, 'a food photo is served, not redirected');
+});
+
+/* ============ saved photos come back after a reload (S3 storage) ============
+   Production stores photos in a bucket. The image routes used to answer with a
+   302 to a signed bucket URL, which Campus Control's enforced CSP (img-src
+   'self') blocks: the photo was saved, then showed as missing. Every image
+   route now answers 200 with the bytes from our own origin. */
+
+async function multipartUpload(token, url, buf, kind) {
+  const b = '----persist' + Date.now() + Math.random();
+  const L = (...lines) => Buffer.from(lines.join('\r\n'));
+  const parts = [kind ? L(`--${b}`, 'Content-Disposition: form-data; name="kind"', '', kind, '') : Buffer.alloc(0),
+    L(`--${b}`, 'Content-Disposition: form-data; name="photo"; filename="p.png"', 'Content-Type: image/png', '', ''),
+    buf, L('', `--${b}--`, '')];
+  return app.inject({ method: 'POST', url, payload: Buffer.concat(parts),
+    headers: { origin: 'http://localhost:3000', cookie: `quad_session=${token}`, 'content-type': `multipart/form-data; boundary=${b}` } });
+}
+const solidPng = async (w, h, rgb) => (await import('sharp')).default({ create: { width: w, height: h, channels: 3, background: rgb } }).png().toBuffer();
+
+test('a dish photo saved from Menu Management is attached, survives a reload and is served from our origin', async () => {
+  const v = await makeVendor(pool, { name: 'Photo Cafe', slug: 'photo-cafe' });
+  const item = (await pool.query(`INSERT INTO menu_item (vendor_id, name, price_paise) VALUES ($1,'Test Dish',5000) RETURNING id, revision`, [v.id])).rows[0];
+  const owner = await makeUser(pool, { phone: '+919800000031', name: 'Cafe Owner', roles: ['vendor_owner'], vendorId: v.id });
+  const token = await sessionFor(pool, owner.id);
+  const c = client(app, token);
+
+  const up = await multipartUpload(token, '/assets', await solidPng(400, 400, { r: 200, g: 40, b: 40 }), 'food_photo');
+  assert.equal(up.statusCode, 200, up.body);
+  const assetId = JSON.parse(up.body).id;
+  assert.ok([...objects.keys()].some((k) => k.startsWith(`${BUCKET}/food_photo/`) || k.startsWith('food_photo/')), 'the bytes are in the bucket');
+
+  const saved = await c.patch(`/menu/${item.id}`, { revision: item.revision, photoAsset: assetId });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body.photo_asset, assetId, 'the save answers with the attached photo');
+
+  /* A fresh load: the admin and student menus both name the same photo. */
+  const menu = await client(app, null).get(`/vendors/${v.id}/menu`);
+  assert.equal(menu.body.items.find((i) => i.id === item.id).photo_asset, assetId);
+  assert.equal((await pool.query(`SELECT photo_asset FROM menu_item WHERE id = $1`, [item.id])).rows[0].photo_asset, assetId);
+
+  const img = await app.inject({ method: 'GET', url: `/assets/${assetId}` });
+  assert.equal(img.statusCode, 200, 'served, not redirected to the bucket');
+  assert.equal(img.headers.location, undefined);
+  assert.equal(img.headers['content-type'], 'image/png');
+  const meta = await (await import('sharp')).default(img.rawPayload).metadata();
+  assert.deepEqual([meta.width, meta.height], [400, 400], 'the exact photo that was saved');
+});
+
+test('a profile photo saved from My Profile is served from our origin and revalidated when replaced', async () => {
+  const o = await makeUser(pool, { phone: '+919800000032', name: 'Owner', roles: ['platform_owner'] });
+  const token = await sessionFor(pool, o.id, { method: 'admin_totp' });
+  const c = client(app, token);
+  const up = await multipartUpload(token, '/admin/me/photo', await solidPng(200, 200, { r: 20, g: 120, b: 220 }));
+  assert.equal(up.statusCode, 200, up.body);
+  const first = (await pool.query(`SELECT photo_asset FROM admin_profile WHERE user_id = $1`, [o.id])).rows[0].photo_asset;
+  assert.ok(first, 'saved against the signed-in administrator');
+  assert.equal((await c.get('/auth/me')).body.adminProfile.hasPhoto, true, 'a fresh load knows there is a photo');
+
+  const get = (etag) => app.inject({ method: 'GET', url: `/admin/photos/${o.id}`,
+    headers: { cookie: `quad_session=${token}`, ...(etag ? { 'if-none-match': etag } : {}) } });
+  const r1 = await get();
+  assert.equal(r1.statusCode, 200, 'served, not redirected to the bucket');
+  assert.equal(r1.headers.location, undefined);
+  assert.equal(r1.headers['cache-control'], 'private, no-cache');
+  assert.equal((await (await import('sharp')).default(r1.rawPayload).metadata()).width, 200);
+  assert.equal((await get(r1.headers.etag)).statusCode, 304, 'unchanged photo: not re-sent');
+
+  assert.equal((await multipartUpload(token, '/admin/me/photo', await solidPng(300, 300, { r: 0, g: 0, b: 0 }))).statusCode, 200);
+  const r2 = await get(r1.headers.etag);
+  assert.equal(r2.statusCode, 200, 'a replaced photo is never answered from the old cache entry');
+  assert.equal((await (await import('sharp')).default(r2.rawPayload).metadata()).width, 300);
+});
+
+test('a stored image the bucket cannot return is a 404, never an error page served as a photo', async () => {
+  const u = await makeUser(pool, { phone: '+919800000033', name: 'A' });
+  const a = await storage.putImage(PNG, { ownerId: u.id, kind: 'food_photo' });
+  objects.clear();
+  assert.equal((await app.inject({ method: 'GET', url: `/assets/${a.id}` })).statusCode, 404);
 });
 
 test('an ID image is never presigned — it streams through the authorization check', async () => {
@@ -358,7 +436,7 @@ test('a website image needs website.customize: a student and a café owner are r
   assert.equal(ok.statusCode, 200, ok.body);
   const id = JSON.parse(ok.body).id;
   assert.equal((await pool.query(`SELECT kind FROM asset WHERE id = $1`, [id])).rows[0].kind, 'site_image');
-  assert.ok([200, 302].includes((await app.inject({ method: 'GET', url: `/assets/${id}` })).statusCode), 'public once uploaded');
+  assert.equal((await app.inject({ method: 'GET', url: `/assets/${id}` })).statusCode, 200, 'public once uploaded');
 });
 
 test('only cafeteria staff and admins can upload menu photography', async () => {

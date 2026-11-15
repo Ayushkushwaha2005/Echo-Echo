@@ -181,7 +181,6 @@ export default async function trustRoutes(app) {
     const got = await getImage(assetId);
     if (!got) throw NotFound('No photo');
     reply.header('Cache-Control', 'private, max-age=300');
-    if (got.url) return reply.redirect(got.url);
     return reply.type(got.asset.mime).send(got.bytes);
   };
 

@@ -61,7 +61,6 @@ export default async function assetRoutes(app) {
     const got = await getImage(a.id);
     if (!got) throw NotFound('No such image');
     reply.header('Cache-Control', 'public, max-age=86400, immutable');
-    if (got.url) return reply.redirect(got.url);
     return reply.type(got.asset.mime).send(got.bytes);
   });
 
