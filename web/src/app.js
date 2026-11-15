@@ -1278,11 +1278,17 @@ function ScrMenu() {
       ${!c.open ? `<div class="campusnote">${Ico(I.clock, 18)}<p class="t-xs" style="color:var(--text-2)">${esc(c.name)}: ${esc(c.statusLine)}. You can look through the menu, but not order.</p></div>` : ''}
       ${c.hours?.week ? `<div class="card card-pad stack g1" aria-label="Opening hours">${Label('Hours')}
         ${c.hours.week.map((d) => `<div class="between t-xs"><span>${esc(d.day)}</span><span class="${d.open ? '' : 'muted'}">${esc(d.open ? d.hours : 'Closed')}</span></div>`).join('')}</div>` : ''}
-      ${items.length ? cats.map((cat, i) => `
-        <div class="stack g1" id="cat-${i}">
-          ${Label(cat)}
-          <div class="menugrid">${items.filter((m) => sectionFor(m) === cat).map((m) => ItemRow(m, c)).join('')}</div>
-        </div>`).join('')
+      ${items.length ? cats.map((cat, i) => {
+        /* Every section gets the same heading, in both cafés: a real heading
+           (h2) a screen reader can jump between, with how many dishes follow. */
+        const inCat = items.filter((m) => sectionFor(m) === cat);
+        return `
+        <section class="menusec" id="cat-${i}" aria-labelledby="cat-${i}-h">
+          <h2 class="menucat" id="cat-${i}-h"><span class="menucat-name">${esc(cat)}</span>
+            <span class="menucat-count">${inCat.length} ${inCat.length === 1 ? 'item' : 'items'}</span></h2>
+          <div class="menugrid">${inCat.map((m) => ItemRow(m, c)).join('')}</div>
+        </section>`;
+      }).join('')
         : `<div class="empty"><div class="empty-art">${Ico(I.plate, 34)}</div><div class="t-h2">No menu published yet.</div>
              <p class="t-sm muted">${esc(c.name)} has not added any items. Check back later.</p></div>`}
     </div>
