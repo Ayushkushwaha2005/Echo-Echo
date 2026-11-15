@@ -26,6 +26,7 @@ import { onImageError, dishImage as dishImageFor, DishTile as DishTileFor, CafPh
 import { mapPointChosen, mapPointAnswered, gpsPointPlaced, spotFromPick, destinationChosen, pickerCta } from '../../packages/ui/picker-state.js';
 import { deniedHelp } from '../../packages/data/geofix.js';
 import { loadModule } from '../../packages/ui/load-module.js';
+import { cartAvailability } from '../../packages/ui/cafe-availability.js';
 import { otpField, otpState, otpSucceeded } from '../../packages/ui/otp-field.js';
 import { startSiteSync, applyToDocument, liveBanners, linkAttrs } from '../../packages/data/site-config.js';
 
@@ -835,12 +836,14 @@ function ScrObLocation() {
    Three short steps, each showing what the server already knows so nothing
    is typed twice. Completion is whatever GET /me/profile says, never a flag
    this screen sets. */
-const VENDORS_MAX_AGE = 60_000;
+/* An edge copy older than this is not trusted to say who is open now (vercel.json
+   keeps /api/vendors/ fresh for 5 s). Was 60 s: a closed café could show Open for a minute. */
+const VENDORS_MAX_AGE = 10_000;
 const CAMPUS_KEY = 'echo.campus';
 /* Each list remembers which campus it is for, so a list for another campus
    (after signing in, or changing campus) is never shown. */
-const vendorsFor = async (campusId) => {
-  let r = await quad.vendors({ campusId });
+const vendorsFor = async (campusId, { fresh = false } = {}) => {
+  let r = await quad.vendors(fresh ? { campusId, fresh: 1 } : { campusId });
   /* The edge may hand back a copy kept while the server slept (vercel.json). It
      still says which cafés exist, but not who is open now: shown with "Checking",
      and the server itself is asked, past the edge. */
@@ -853,7 +856,7 @@ const vendorsFor = async (campusId) => {
   rememberCafes({ ...r, campusId });
   return { ...r, campusId };
 };
-const loadVendors = () => vendorsFor(browseCampus()?.id);
+const loadVendors = (opts) => vendorsFor(browseCampus()?.id, opts);
 /* The last list this browser was given, so a returning visitor sees the cafés at
    once instead of waiting while a sleeping server wakes (measured 25-50 s). Which
    cafés exist and their photos and weekly hours are shown straight away; whether
@@ -886,10 +889,22 @@ const needVendors = () => {
    must change without a reload. Once a minute the server is asked again
    (it computes the status in campus time); the page re-renders only when
    a café's status actually changed, or the open menu did. */
-const refreshCafes = async () => {
-  if (document.hidden || S.sheet || !['home', 'cafes', 'welcome', 'menu'].includes(S.route) || S.campuses === null) return;
+const refreshCafes = async ({ fresh: pastEdge = false } = {}) => {
+  if (document.hidden || S.sheet || S.campuses === null) return;
+  /* The cart and checkout follow the café in the cart, asked past the edge. */
+  if (['cart', 'checkout'].includes(S.route) && S.cart[0]?.vendorId) {
+    try {
+      const key = `cartcafe:${S.cart[0].vendorId}`;
+      const v = (await quad.menu(S.cart[0].vendorId)).vendor;
+      const moved = !cache[key]?.ok || cache[key].v.open_now !== v.open_now || cache[key].v.status?.line !== v.status?.line;
+      keep(key, v);
+      if (moved) render();
+    } catch { /* offline: the next tick tries again */ }
+    return;
+  }
+  if (!['home', 'cafes', 'welcome', 'menu'].includes(S.route)) return;
   try {
-    const fresh = await loadVendors();
+    const fresh = await loadVendors({ fresh: pastEdge });
     const sig = (r) => (r?.vendors || []).map((v) => `${v.id}:${v.open_now}:${v.status?.line}:${!!v.checking}`).join('|');
     const same = cache.vendors?.ok && sig(cache.vendors.v) === sig(fresh);
     keep('vendors', fresh);
@@ -906,11 +921,13 @@ const refreshCafes = async () => {
     render();
   } catch { /* offline: the next tick tries again */ }
 };
-setInterval(refreshCafes, 60_000);
+setInterval(() => refreshCafes(), 60_000);
 /* The minute above is the fallback. When a stream is available, a change on the
    server asks for the same refresh straight away. */
 let cafeNudge = null;
-followChanges('/live/stream', () => { clearTimeout(cafeNudge); cafeNudge = setTimeout(refreshCafes, 500); });
+/* A change the server announced is asked for past the edge, so an administrator's
+   Open or Closed shows at once instead of after the edge copy expires. */
+followChanges('/live/stream', () => { clearTimeout(cafeNudge); cafeNudge = setTimeout(() => refreshCafes({ fresh: true }), 500); });
 const CAMPUSES_KEY = 'echo.campuses';
 /* Only which screen to draw first on the next visit (see boot); never trusted for access. */
 const SIGNED_IN_KEY = 'echo.signed-in';
@@ -1284,10 +1301,12 @@ function ScrCart() {
   }
   const vendorId = S.cart[0].vendorId;
   const vendorName = S.cart[0].vendorName;
+  const avail = cartAvailability(cartCafe());
   return `<div class="screen">
     ${TopBar('Your cart', { back: { act: 'menu', route: 'menu' }, sub: vendorName })}
     <div class="pad site-split enter">
     <div class="stack g4">
+      ${CartClosedNotice(avail)}
       <div class="card card-pad stack g3">
         ${S.cart.map((l, i) => `
           <div class="row g3">
@@ -1322,13 +1341,34 @@ function ScrCart() {
       ${Bill()}
       <div class="actionbar">
         <button class="btn btn-primary btn-lg btn-block" data-act="go" data-route="checkout"
-          ${S.fulfilment === 'delivery' && !S.destination ? 'disabled' : ''}>
-          ${S.fulfilment === 'delivery' && !S.destination ? 'Choose where to deliver' : `Continue · ${money(cartSubtotal())} + fees`}</button>
+          ${avail.blocked || (S.fulfilment === 'delivery' && !S.destination) ? 'disabled' : ''}>
+          ${avail.blocked ? 'Ordering unavailable'
+            : S.fulfilment === 'delivery' && !S.destination ? 'Choose where to deliver' : `Continue · ${money(cartSubtotal())} + fees`}</button>
       </div>
     </aside>
     </div>
   </div>`;
 }
+
+/* The live answer for the café whose items are in the cart, from its menu
+   endpoint (never kept at the edge). Asked again when it is over 10 s old and
+   whenever the server announces a change (refreshCafes). */
+const CART_CAFE_MAX_AGE = 10_000;
+function cartCafe() {
+  const id = S.cart[0]?.vendorId;
+  if (!id) return null;
+  const key = `cartcafe:${id}`;
+  const load = () => quad.menu(id).then((m) => m.vendor);
+  /* Only when the answer is old: revalidate() always asks and then re-renders,
+     so calling it on every render would loop. */
+  if (cache[key]?.ok && Date.now() - fetchedAt[key] > CART_CAFE_MAX_AGE) revalidate(key, load, Infinity);
+  const r = need(key, load);
+  return r?.ok ? r.v : null;
+}
+const CartClosedNotice = (a) => a.blocked ? `
+  <div class="campusnote is-warn" role="alert">${Ico(I.warn, 18)}<div class="stack g1">
+    <p class="t-sm t-strong">${esc(a.title)}</p>
+    <p class="t-xs" style="color:var(--text-2)">${esc(a.detail)}</p></div></div>` : '';
 
 const FulfilTile = (vendorName, cta) => S.fulfilment === 'delivery' ? `
   <button class="tile row g3 desttile ${S.destination ? '' : 'is-empty'}" data-act="sheet" data-sheet="location" style="width:100%;text-align:left">
@@ -1568,6 +1608,7 @@ function ScrCheckout() {
     if (a?.ok) S.checkout = { ...S.checkout, ...addrFromSaved(a.v.address), addrLoaded: true };
   }
   const vendorName = S.cart[0].vendorName;
+  const avail = cartAvailability(cartCafe());
   const payReady = S.providers?.payments?.configured;
   const needsDest = S.fulfilment === 'delivery' && !S.destination;
   const verified = S.me?.user?.studentStatus === 'approved';
@@ -1626,9 +1667,11 @@ function ScrCheckout() {
     <aside class="stack g4">
       ${Bill()}
       <div class="actionbar">
+        ${CartClosedNotice(avail)}
         <button class="btn btn-primary btn-lg btn-block" data-act="placeOrder"
-                ${payReady && !needsDest && !needsPhone && !needsLocation && verified ? '' : 'disabled'}>
-          ${!payReady ? 'Online payment unavailable'
+                ${!avail.blocked && payReady && !needsDest && !needsPhone && !needsLocation && verified ? '' : 'disabled'}>
+          ${avail.blocked ? 'Ordering unavailable'
+            : !payReady ? 'Online payment unavailable'
             : needsLocation ? 'Confirm you are on campus'
             : needsDest ? 'Choose where to deliver'
             : needsPhone ? 'Add a delivery contact number'
