@@ -986,3 +986,26 @@ textarea.input { resize: vertical; min-height: 72px; }
 /* The supplied 104×64 light/dark switch, at half size in a header or rail. */
 .site-theme, .shop-theme { --cts-scale: .5; align-self: center; }
 .rail-theme { padding: 6px 0; }
+
+/* ---- menu category headings (both cafés) -----------------------------------
+   Each section opens with a heading that reads as a heading, not as another
+   dish: display face, a soft accent pill, the item count, and a rule that
+   carries the eye across. Sections are separated by space and a hairline.
+   Colours are theme tokens, so light and dark both work. */
+.menusec { display: flex; flex-direction: column; gap: var(--s-2); scroll-margin-top: calc(var(--nav-h, 64px) + 12px); }
+.menusec + .menusec { border-top: 1px solid var(--line); padding-top: var(--s-5); margin-top: var(--s-1); }
+.menucat { display: flex; align-items: center; gap: 10px; margin: 0 0 var(--s-1); min-width: 0; }
+.menucat::after { content: ''; flex: 1 1 24px; height: 1px; min-width: 24px;
+  background: linear-gradient(to right, var(--line-strong), transparent); }
+.menucat-name {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 6px 14px 6px 12px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent-text);
+  font-family: var(--font-display); font-size: 1.125rem; font-weight: 700; line-height: 1.2; letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+.menucat-name::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.menucat-count { flex-shrink: 0; font-size: var(--t-xs); font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+@media (min-width: 900px) {
+  .menucat-name { font-size: 1.25rem; }
+}

@@ -40,6 +40,7 @@ const FILES = [
   ['unit', 'test/pipeline.test.mjs'],
   ['unit', 'test/ai-contract.test.mjs'],
   ['unit', 'test/weekly-schedule-ui.test.mjs'],
+  ['unit', 'test/menu-headings.test.mjs'],
   ['unit', 'test/geofix.test.mjs'],
   ['unit', 'test/picker-flow.test.mjs'],
   ['unit', 'test/load-module.test.mjs'],
