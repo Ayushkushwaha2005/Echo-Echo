@@ -80,15 +80,25 @@ export async function putImage(buf, { ownerId, kind }) {
     [ownerId, kind, mime, buf.length, width, height, key, uploadedSha]);
 }
 
+/* Always the bytes, never a redirect. Campus Control's pages may load images
+   only from their own origin (its Content-Security-Policy is enforced), so a
+   redirect to a signed bucket URL was blocked there: a menu photo or profile
+   photo was saved correctly and then showed as missing. A signed URL also
+   expired after 5 minutes while the redirect to it was cached for a day.
+   An asset's bytes never change (a new photo is a new asset), so callers may
+   cache the answer for as long as they like. */
 export async function getImage(assetId) {
   const a = await one(`SELECT * FROM asset WHERE id = $1`, [assetId]);
   if (!a) return null;
-  if (STORAGE.provider === 's3') return { asset: a, url: await signedS3Url(a.storage_key) };
-  return { asset: a, bytes: await readFile(join(STORAGE.localDir, a.storage_key)) };
+  if (STORAGE.provider === 's3') {
+    const bytes = await s3.getObject(a.storage_key);
+    return bytes ? { asset: a, bytes } : null;
+  }
+  try { return { asset: a, bytes: await readFile(join(STORAGE.localDir, a.storage_key)) }; }
+  catch (e) { if (e.code === 'ENOENT') return null; throw e; }
 }
 
 const putS3 = (key, buf, mime) => s3.putObject(key, buf, mime);
-const signedS3Url = (key) => s3.presignGet(key, 300);
 
 /* Replace the bytes behind an asset, keeping the row (and therefore every
    reference to it) intact. Used when a shopkeeper swaps a food photo. */

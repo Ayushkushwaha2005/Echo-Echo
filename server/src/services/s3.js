@@ -86,6 +86,8 @@ export const deleteObject = (key) => signedRequest('DELETE', key);
 export async function getObject(key) {
   const res = await signedRequest('GET', key);
   if (res.status === 404) return null;
+  /* An error page is not an image: never serve it as one. */
+  if (!res.ok) throw new Error(`Object storage answered ${res.status} for a stored image`);
   return Buffer.from(await res.arrayBuffer());
 }
 

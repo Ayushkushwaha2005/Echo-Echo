@@ -150,10 +150,14 @@ export default async function adminProfileRoutes(app) {
     if (!/^[0-9a-f-]{36}$/i.test(req.params.userId)) throw NotFound('No photo');
     const p = await one(`SELECT photo_asset FROM admin_profile WHERE user_id = $1`, [req.params.userId]);
     if (!p?.photo_asset) throw NotFound('No photo');
+    /* The URL stays the same when the photo is replaced, so the browser must
+       ask every time; the asset id as ETag makes an unchanged photo a 304. */
+    const etag = `"${p.photo_asset}"`;
+    reply.header('Cache-Control', 'private, no-cache');
+    reply.header('ETag', etag);
+    if (req.headers['if-none-match'] === etag) return reply.code(304).send();
     const got = await getImage(p.photo_asset);
     if (!got) throw NotFound('No photo');
-    reply.header('Cache-Control', 'private, max-age=300');
-    if (got.url) return reply.redirect(got.url);
     return reply.type(got.asset.mime).send(got.bytes);
   });
 
