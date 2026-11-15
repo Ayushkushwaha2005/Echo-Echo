@@ -1040,18 +1040,24 @@ body { background: var(--cc-c-canvas); color: var(--cc-c-text); font-family: var
 .wk-time { width: auto; min-width: 0; padding-inline: 8px; }
 .wk-from { width: auto; }
 .wk-rows { display: grid; gap: 2px; }
-.wk-row { display: grid; grid-template-columns: 24px minmax(84px, 110px) minmax(120px, auto) 1fr; align-items: center; gap: 4px 10px;
+/* The hours take the width their two time fields need, and the day name gives
+   way instead: a fixed day column left the hours ~183px for ~200px of fields,
+   so the closing time wrapped under the opening time. */
+.wk-row { display: grid; grid-template-columns: 24px minmax(72px, 1fr) auto auto; align-items: center; gap: 4px 10px;
   padding: 2px 6px; border-radius: 10px; }
+.wk-day { min-width: 0; overflow-wrap: anywhere; }
 .wk-row.is-invalid { box-shadow: inset 0 0 0 1px var(--danger); }
 .wk-row.is-closed .wk-day { color: var(--cc-c-muted, var(--text-muted)); }
 .wk-open { display: flex; align-items: center; gap: 2px; }
 .wk-state { min-width: 44px; }
-.wk-hours { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* Opening, dash, closing always on one line; the "past midnight" note below. */
+.wk-hours { display: grid; grid-template-columns: auto auto auto; justify-content: start; align-items: center; gap: 2px 6px; }
+.wk-night { grid-column: 1 / -1; }
 .wk-hours .wk-time:disabled { opacity: .45; }
 .wk-errors:empty { display: none; }
 .wk-errors { color: var(--danger); font-size: var(--t-xs); display: grid; gap: 2px; }
 .wk-tz { margin: 0; flex: 1 1 200px; }
 @media (max-width: 560px) {
-  .wk-row { grid-template-columns: 24px 1fr auto; }
+  .wk-row { grid-template-columns: 24px minmax(0, 1fr) auto; }
   .wk-hours { grid-column: 2 / -1; }
 }
