@@ -168,3 +168,12 @@ test('3. an admin change is visible on ?fresh=1 immediately (what the live nudge
   const { weekday } = campusClock();
   assert.ok(weekday >= 1 && weekday <= 7);
 });
+
+test('3. without a live stream (production answers 204) an idle page still asks every 10 s, not every minute', () => {
+  const ms = Number((WEB.match(/const CAFE_POLL_MS = ([\d_]+);/) || [])[1]?.replace(/_/g, ''));
+  assert.ok(ms > 0 && ms <= 10_000, `CAFE_POLL_MS ${ms}`);
+  assert.match(WEB, /setInterval\(\(\) => refreshCafes\(\{ withMenu: \+\+cafeTick % 6 === 0 \}\), CAFE_POLL_MS\);/);
+  assert.doesNotMatch(WEB, /setInterval\(\(\) => refreshCafes\(\), 60_000\)/);
+  /* the open menu's item list is still compared only once a minute */
+  assert.match(WEB, /if \(withMenu && S\.route === 'menu' && S\.params\.caf\)/);
+});
