@@ -29,8 +29,11 @@ import { loadModule } from '../../packages/ui/load-module.js';
 import { cartAvailability } from '../../packages/ui/cafe-availability.js';
 import { otpField, otpState, otpSucceeded } from '../../packages/ui/otp-field.js';
 import { startSiteSync, applyToDocument, liveBanners, linkAttrs } from '../../packages/data/site-config.js';
+import { ThemeSwitch, bindThemeSwitch } from '../../packages/ui/theme-switch.js';
 
 restoreTheme();
+/* The light/dark switch in the header is the site's one theme control. */
+bindThemeSwitch();
 
 const BRAND = 'ECHO ECHO';
 const $ = (s, r = document) => r.querySelector(s);
@@ -2255,7 +2258,6 @@ function ScrProfile() {
     [I.bike, `Deliver with ${BRAND}`, partnerSub,
       p?.status === 'approved' ? 'data-act="go" data-route="partner"' : 'data-act="go" data-route="join"'],
     [I.help, 'Help & report an issue', 'Reach a real person in campus admin', 'data-act="sheet" data-sheet="report"'],
-    [I.moon, 'Appearance', 'Switch between light and dark', 'data-act="theme"'],
     [I.receipt, 'Download my data', 'A copy of what ECHO ECHO holds about you', 'data-act="exportMyData"'],
     [I.warn, 'Ask to delete my account', 'A person reviews this; some order records may have to be kept', 'data-act="askDeletion"'],
     [I.logout, 'Sign out', '', 'data-act="signout"'],
@@ -3100,7 +3102,7 @@ const SiteHeader = () => {
     <div class="site-actions">
       ${count ? `<button class="site-cartbtn" data-act="go" data-route="cart" aria-label="Cart, ${count} items">
         ${I.cart}<span class="only-lg">Cart</span><span class="count">${count}</span></button>` : ''}
-      <button class="site-icon" data-act="theme" aria-label="Toggle theme">${I.moon}</button>
+      ${ThemeSwitch({ className: 'site-theme' })}
       ${signedIn()
         ? `<button class="avatar avatar-sm only-lg" data-act="go" data-route="profile" aria-label="Your account">${esc(initials(S.me.user.name))}</button>`
         : `<button class="btn btn-secondary btn-sm" data-act="go" data-route="signin">Sign in</button>`}

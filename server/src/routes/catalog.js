@@ -11,7 +11,7 @@
    * A price change writes menu_price_history and updates menu_item, but
      never touches order_item — historical orders carry their own snapshot.
    ========================================================================== */
-import { hoursOf, statusOf } from '../services/hours.js';
+import { hoursOf, statusOf, parseWeeklyHours, legacyColumns } from '../services/hours.js';
 
 /* What a student is told about a café's hours, computed on the server. */
 const withStatus = (v, now = new Date()) => {
@@ -65,7 +65,7 @@ export default async function catalogRoutes(app) {
     const campusId = req.query?.campusId || null;
     const { rows } = await q(
       `SELECT v.id, v.revision, v.slug, v.name, v.kind, v.description, v.photo_asset,
-              v.campus_node_id, v.opens_at, v.closes_at, v.open_days, v.is_open, v.accepting, v.manual_availability,
+              v.campus_node_id, v.opens_at, v.closes_at, v.open_days, v.weekly_hours, v.timezone, v.is_open, v.accepting, v.manual_availability,
               v.delivery_enabled, v.prep_minutes, v.active, v.campus_site_id,
               cs.name AS campus_name, cs.service_status AS campus_service_status,
               ${RATING} r.vendor_id = v.id AND NOT r.hidden) AS rating
@@ -146,6 +146,23 @@ export default async function catalogRoutes(app) {
       if (typeof b.manualAvailability !== 'boolean') throw BadRequest('manualAvailability must be true or false');
       map.manual_availability = b.manualAvailability;
     }
+    /* The weekly schedule (migration 046): seven days, Monday first, each open
+       or closed with its own hours. null removes the schedule, leaving the
+       café's own Open/Closed switches in charge. The older open_days /
+       opens_at / closes_at follow it. Nothing here touches is_open,
+       accepting or the manual override. */
+    if (b.weeklyHours !== undefined) {
+      let week;
+      try { week = parseWeeklyHours(b.weeklyHours); } catch (m) { if (typeof m === 'string') throw BadRequest(m); throw m; }
+      map.weekly_hours = week === null ? null : JSON.stringify(week);
+      Object.assign(map, legacyColumns(week));
+    }
+    if (b.timezone !== undefined) {
+      const z = String(b.timezone || '');
+      try { new Intl.DateTimeFormat('en-GB', { timeZone: z }); } catch { throw BadRequest(`"${z}" is not a timezone this server recognises`); }
+      if (!z) throw BadRequest('Choose a timezone');
+      map.timezone = z;
+    }
     /* Archiving is a separate, admin-only action — an owner cannot make
        their outlet vanish from the platform's records. */
     if (b.active !== undefined) authorize(req.actor, 'vendor.archive');
@@ -209,12 +226,26 @@ export default async function catalogRoutes(app) {
       if (v !== undefined) { vals.push(v); set.push(`${k} = $${vals.length}`); }
     }
     if (!set.length) throw BadRequest('Nothing to update');
-    vals.push(req.params.id);
     const row = await tx(async (c) => {
       await setActor(c, req);
-      const cur = (await c.query(`SELECT revision FROM vendor WHERE id = $1 FOR UPDATE`, [req.params.id])).rows[0];
+      const cur = (await c.query(`SELECT revision, weekly_hours, to_char(opens_at, 'HH24:MI') AS opens, to_char(closes_at, 'HH24:MI') AS closes
+                                    FROM vendor WHERE id = $1 FOR UPDATE`, [req.params.id])).rows[0];
       if (!cur) throw NotFound('No such cafeteria');
       assertRevision(b.revision, cur.revision);
+      /* A form that still edits one pair of hours (the counter app) changes
+         that pair on every day of a weekly schedule, as it always did. The
+         same pair sent back unchanged leaves each day's own hours alone. */
+      if (b.weeklyHours === undefined && Array.isArray(cur.weekly_hours)) {
+        const o = b.opensAt ? String(b.opensAt).slice(0, 5) : null, cl = b.closesAt ? String(b.closesAt).slice(0, 5) : null;
+        const newO = o && o !== cur.opens ? o : null, newC = cl && cl !== cur.closes ? cl : null;
+        if (newO || newC) {
+          const week = cur.weekly_hours.map((e) => ({ ...e, opens: newO || e.opens, closes: newC || e.closes }));
+          if (week.some((e) => e.open && e.opens === e.closes)) throw BadRequest('Opening and closing times are the same');
+          vals.push(JSON.stringify(week)); set.push(`weekly_hours = $${vals.length}`);
+          map.weekly_hours = week;
+        }
+      }
+      vals.push(req.params.id);
       return (await c.query(`UPDATE vendor SET ${set.join(', ')} WHERE id = $${vals.length} RETURNING *`, vals)).rows[0];
     });
     /* A replaced or removed café photo is deleted from storage. */
@@ -224,7 +255,10 @@ export default async function catalogRoutes(app) {
                                  /* Availability changes are recorded with their values. */
                                  ...(['manual_availability', 'is_open', 'accepting'].some((k) => map[k] !== undefined)
                                    ? { availability: { manual: row.manual_availability, isOpen: row.is_open,
-                                                       accepting: row.accepting, effective: statusOf(row).state } } : {}) } });
+                                                       accepting: row.accepting, effective: statusOf(row).state } } : {}),
+                                 /* Schedule changes are recorded with the week that was saved. */
+                                 ...(map.weekly_hours !== undefined || map.timezone !== undefined
+                                   ? { schedule: { week: row.weekly_hours, timezone: row.timezone } } : {}) } });
     return { ...row, ...withStatus(row) };
   });
 
@@ -536,7 +570,7 @@ export default async function catalogRoutes(app) {
     const { rows } = await q(
       `SELECT i.id, i.name, i.description, i.price_paise, i.veg, i.available,
               i.tags, i.prep_minutes, v.id AS vendor_id, v.name AS vendor_name,
-              v.is_open, v.accepting, v.active AS vendor_active, v.open_days, v.opens_at, v.closes_at, v.manual_availability,
+              v.is_open, v.accepting, v.active AS vendor_active, v.open_days, v.weekly_hours, v.timezone, v.opens_at, v.closes_at, v.manual_availability,
               ${RATING} r.item_id = i.id AND NOT r.hidden) AS rating
          FROM menu_item i JOIN vendor v ON v.id = i.vendor_id
         WHERE i.active AND v.active

@@ -26,9 +26,11 @@ import { cropImage } from '../../packages/ui/image-crop.js';
 import { mountChat } from '../../packages/ui/team-chat.js';
 import { CafPhoto, DishTile, dishImage, onImageError } from '../../packages/ui/photo-tiles.js';
 import { availabilityUpdate } from '../../packages/ui/cafe-availability.js';
+import { Switch, bindSwitches } from '../../packages/ui/switch.js';
+import { ThemeSwitch, bindThemeSwitch } from '../../packages/ui/theme-switch.js';
+import { DAY_NAMES, weekFrom, hasSchedule, isOvernight, setAll, applyHours, copyDay, problems, summary } from '../../packages/ui/weekly-hours.js';
 
 const root = document.getElementById('app');
-restoreAdminTheme();
 
 const S = { route: 'overview', vendorId: null, userId: null, caseId: null, parentId: null,
             orderFilter: {}, orderPage: 1, payFilter: {}, payPage: 1 };
@@ -121,6 +123,13 @@ const ADMIN_THEME_KEY = 'echo-admin-theme';
 function restoreAdminTheme() {
   try { const t = localStorage.getItem(ADMIN_THEME_KEY); if (t) document.documentElement.setAttribute('data-theme', t); } catch { /* storage blocked */ }
 }
+/* Restored here, after ADMIN_THEME_KEY exists: called earlier it read the key
+   before its declaration, the try swallowed the error, and the saved choice
+   was never applied. Still before the first render. */
+restoreAdminTheme();
+/* The light/dark switch in the top bar; Campus Control keeps its own choice. */
+bindThemeSwitch({ storageKey: ADMIN_THEME_KEY });
+bindSwitches();
 function toggleAdminTheme() {
   const cur = document.documentElement.getAttribute('data-theme');
   const next = cur === 'dark' ? 'light' : cur === 'light' ? 'dark' : (matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark');
@@ -171,6 +180,7 @@ function render() {
               <span id="site-status"></span>
               <a class="cc-iconbtn" href="/web/" target="_blank" rel="noopener" title="Open the public website" aria-label="Open the public website">${icon('globe')}</a>
               <div class="cc-bell"><button type="button" class="cc-iconbtn" data-act="notifications" aria-label="Notifications" aria-haspopup="dialog" aria-expanded="false">${icon('bell')}<span class="cc-dot cc-count" id="notif-dot" hidden></span></button></div>
+              ${ThemeSwitch({ className: 'cc-theme' })}
               <div class="cc-profile">
                 <button type="button" class="cc-profile-btn" data-act="profileMenu" aria-haspopup="true" aria-expanded="false">
                   <span data-me-avatar data-size="38">${AvatarOf()}</span>
@@ -180,7 +190,6 @@ function render() {
                   <div class="cc-menu-head"><b data-me-name>${esc(name)}</b><span class="t-xs muted">${esc(session.me.user.studentEmail || '')}</span>
                     <span class="t-xs muted">${esc(session.roles.map((r) => ROLE_LABEL[r] || r).join(' · '))} · password and authenticator session</span></div>
                   <button type="button" class="cc-menu-item" data-route="profile">${icon('user', 17)} My Profile</button>
-                  <button type="button" class="cc-menu-item" data-act="theme">${icon('moon', 17)} Light or dark</button>
                   <button type="button" class="cc-menu-item danger" data-act="signout">${icon('out', 17)} Sign out</button>
                 </div>
               </div>
@@ -711,7 +720,7 @@ async function scrCafeterias() {
               <span class="badge ${status[1]}">${status[0]}</span>
             </div>
             <dl class="cafe-facts">
-              <div><dt>Hours</dt><dd>${raw.opens_at && raw.closes_at ? `${esc(String(raw.opens_at).slice(0, 5))}–${esc(String(raw.closes_at).slice(0, 5))}` : 'Not set'}${raw.manual_availability ? ' · ignored (manual override)' : ''}</dd></div>
+              <div><dt>Hours</dt><dd>${raw.hours?.label ? esc(raw.hours.label) : raw.opens_at && raw.closes_at ? `${esc(String(raw.opens_at).slice(0, 5))}–${esc(String(raw.closes_at).slice(0, 5))}` : 'Not set'}${raw.manual_availability ? ' · ignored (manual override)' : ''}</dd></div>
               <div><dt>Prep time</dt><dd>${raw.prep_minutes ? `${raw.prep_minutes} min` : '—'}</dd></div>
               <div><dt>Delivery</dt><dd>${raw.delivery_enabled ? 'Offered' : 'Pickup only'}</dd></div>
               <div><dt>Rating</dt><dd>${v.ratingText.empty ? 'No ratings yet' : `★ ${esc(v.ratingText.text)} (${v.ratingText.count})`}</dd></div>
@@ -2128,9 +2137,96 @@ const availabilityPayload = (d) => {
   /* Closed never touches the separate emergency pause (`accepting`). */
   return availabilityUpdate({ manual, open });
 };
-const check = (name, label, on) => `
-  <label class="row" style="gap:8px"><input type="checkbox" name="${name}" ${on ? 'checked' : ''}>
+/* An on/off setting: the shared switch (packages/ui/switch.js). */
+const check = (name, label, on) => Switch({ name, checked: !!on, label: esc(label) });
+/* An acknowledgement the administrator ticks, which is not a setting. */
+const ack = (name, label) => `
+  <label class="row" style="gap:8px"><input type="checkbox" name="${name}">
   <span class="t-sm">${esc(label)}</span></label>`;
+
+/* ---- the weekly operating schedule (Edit café) -------------------------------
+   Seven rows, each with an Open/Closed switch and its own hours. A closed day
+   keeps its hours. The week is sent only once something in it changed, so
+   opening Edit café and saving another field never touches the schedule. */
+const TZ_CHOICES = ['Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Europe/London', 'UTC'];
+const WeeklyEditor = (v) => {
+  const week = weekFrom(v);
+  const tz = v.timezone || 'Asia/Kolkata';
+  return `<fieldset class="wk" data-wk data-vendor="${esc(v.id)}" data-revision="${esc(v.revision ?? '')}" data-tz="${esc(tz)}">
+    <legend class="t-label">Weekly operating schedule</legend>
+    <p class="wk-summary" data-wk-summary aria-live="polite">${esc(hasSchedule(v) ? summary(week) : 'No weekly schedule yet')}</p>
+    ${hasSchedule(v) ? '' : '<p class="t-xs muted" style="margin:0">Until a week is saved, this café\'s own Open/Closed switches decide.</p>'}
+    <div class="wk-tools">
+      <button type="button" class="btn btn-secondary btn-sm" data-act="wkAll" data-v="1">Set all days open</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-act="wkAll" data-v="0">Set all days closed</button>
+    </div>
+    <div class="wk-bulk" role="group" aria-label="Change the selected days">
+      <span class="t-xs muted">Selected days:</span>
+      <input class="input wk-time" type="time" data-wk-bulk="opens" aria-label="Opening time for the selected days">
+      <span aria-hidden="true">–</span>
+      <input class="input wk-time" type="time" data-wk-bulk="closes" aria-label="Closing time for the selected days">
+      <button type="button" class="btn btn-secondary btn-sm" data-act="wkApply">Apply hours</button>
+      <span class="wk-copy"><label class="t-xs muted" for="wk-from-${esc(v.id)}">Copy</label>
+        <select class="input wk-from" id="wk-from-${esc(v.id)}" data-wk-from>${DAY_NAMES.map((d, i) => `<option value="${i + 1}">${d}</option>`).join('')}</select>
+        <button type="button" class="btn btn-secondary btn-sm" data-act="wkCopy">Copy to selected</button></span>
+    </div>
+    <div class="wk-rows" role="table" aria-label="Opening hours by day">
+      ${week.map((e) => `<div class="wk-row${e.open ? '' : ' is-closed'}" role="row" data-day="${e.day}">
+        <span role="cell" class="wk-pick"><input type="checkbox" data-wk-pick value="${e.day}" aria-label="Select ${DAY_NAMES[e.day - 1]}"></span>
+        <span role="cell" class="wk-day t-sm t-strong">${DAY_NAMES[e.day - 1]}</span>
+        <span role="cell" class="wk-open">${Switch({ checked: e.open, showIcons: true, ariaLabel: `${DAY_NAMES[e.day - 1]} open`, attrs: `data-wk-open data-day="${e.day}"` })}
+          <span class="t-xs wk-state" data-wk-state>${e.open ? 'Open' : 'Closed'}</span></span>
+        <span role="cell" class="wk-hours">
+          <input class="input wk-time" type="time" data-wk-opens value="${esc(e.opens || '')}" aria-label="${DAY_NAMES[e.day - 1]} opening time" ${e.open ? '' : 'disabled'}>
+          <span aria-hidden="true">–</span>
+          <input class="input wk-time" type="time" data-wk-closes value="${esc(e.closes || '')}" aria-label="${DAY_NAMES[e.day - 1]} closing time" ${e.open ? '' : 'disabled'}>
+          <span class="t-xs muted wk-night" data-wk-night ${e.open && isOvernight(e) ? '' : 'hidden'}>past midnight</span></span>
+      </div>`).join('')}
+    </div>
+    <div class="wk-errors" data-wk-errors role="alert"></div>
+    <div class="wk-foot">
+      <label class="field wk-tz"><span class="t-label">Timezone the hours are in</span>
+        <select class="input" data-wk-tz>${[...new Set([tz, ...TZ_CHOICES])].map((z) => `<option value="${esc(z)}" ${z === tz ? 'selected' : ''}>${esc(z)}${z === 'Asia/Kolkata' ? ' (IST)' : ''}</option>`).join('')}</select></label>
+      <button type="button" class="btn btn-primary btn-sm" data-act="wkSave">Save weekly schedule</button>
+      <span class="t-xs muted" data-wk-saved role="status"></span>
+    </div>
+    <input type="hidden" name="weeklyHours" value=""><input type="hidden" name="timezone" value="">
+  </fieldset>`;
+};
+const wkBox = (t) => t.closest('[data-wk]');
+const wkRead = (box) => [...box.querySelectorAll('.wk-row')].map((r) => ({
+  day: +r.dataset.day, open: r.querySelector('[data-wk-open]').checked,
+  opens: r.querySelector('[data-wk-opens]').value || null, closes: r.querySelector('[data-wk-closes]').value || null }));
+const wkPicked = (box) => [...box.querySelectorAll('[data-wk-pick]:checked')].map((i) => +i.value);
+/* Draws a week into the rows, the summary, the problems and the hidden fields. */
+function wkWrite(box, week, { dirty = true } = {}) {
+  for (const e of week) {
+    const r = box.querySelector(`.wk-row[data-day="${e.day}"]`);
+    r.querySelector('[data-wk-open]').checked = e.open;
+    r.classList.toggle('is-closed', !e.open);
+    r.querySelector('[data-wk-state]').textContent = e.open ? 'Open' : 'Closed';
+    for (const [k, sel] of [['opens', '[data-wk-opens]'], ['closes', '[data-wk-closes]']]) {
+      const i = r.querySelector(sel);
+      if (i.value !== (e[k] || '')) i.value = e[k] || '';
+      i.disabled = !e.open;
+    }
+    r.querySelector('[data-wk-night]').hidden = !(e.open && isOvernight(e));
+  }
+  const bad = problems(week);
+  box.querySelector('[data-wk-summary]').textContent = summary(week);
+  box.querySelector('[data-wk-errors]').innerHTML = bad.map((p) => `<div>${esc(p.message)}</div>`).join('');
+  for (const r of box.querySelectorAll('.wk-row')) r.classList.toggle('is-invalid', bad.some((p) => p.day === +r.dataset.day));
+  if (dirty) { box.querySelector('[name=weeklyHours]').value = JSON.stringify(week); box.querySelector('[data-wk-saved]').textContent = 'Unsaved changes'; }
+}
+document.addEventListener('change', (e) => {
+  const box = e.target.closest?.('[data-wk]');
+  if (!box) return;
+  if (e.target.matches('[data-wk-open], [data-wk-opens], [data-wk-closes]')) wkWrite(box, wkRead(box));
+  if (e.target.matches('[data-wk-tz]')) {
+    box.querySelector('[name=timezone]').value = e.target.value === box.dataset.tz ? '' : e.target.value;
+    box.querySelector('[data-wk-saved]').textContent = 'Unsaved changes';
+  }
+});
 /* A cafeteria's own sections, from the server; an item may have none. */
 const categorySelect = (cats, current) => `
   <label class="field"><span class="t-label">Category</span>
@@ -2440,7 +2536,7 @@ ${added.length ? `Grant: ${added.join(', ')}
     modal(`Edit ${v.name}`, `
       ${field('name', 'Name', v.name)}${field('kind', 'Kind', v.kind)}
       ${field('description', 'Description', v.description)}
-      <div class="formrow">${field('opensAt', 'Opens', v.opens_at, 'time')}${field('closesAt', 'Closes', v.closes_at, 'time')}</div>
+      ${WeeklyEditor(v)}
       ${field('prepMinutes', 'Prep minutes', v.prep_minutes, 'number')}
       ${field('contactPhone', 'Business contact phone', v.contact_phone)}
       ${check('contactPublic', 'Show this number to customers', v.contact_public)}
@@ -2452,7 +2548,7 @@ ${added.length ? `Grant: ${added.join(', ')}
           <label class="row" style="gap:6px"><input type="radio" name="availabilityState" value="open" ${v.is_open && v.accepting ? 'checked' : ''}><span class="t-sm">Open</span></label>
           <label class="row" style="gap:6px"><input type="radio" name="availabilityState" value="closed" ${v.is_open && v.accepting ? '' : 'checked'}><span class="t-sm">Closed</span></label>
         </div>
-        <p class="t-xs muted" style="margin:0">While the override is on, the opening hours above are ignored and this Open/Closed choice is what students see and can order from, on every day and at every hour. Turn it off to go back to the scheduled hours. Delivery and archiving are separate settings.</p>
+        <p class="t-xs muted" style="margin:0">While the override is on, the weekly schedule above is ignored and this Open/Closed choice is what students see and can order from, on every day and at every hour. Turn it off to go back to the scheduled hours. Delivery and archiving are separate settings.</p>
       </fieldset>
       ${check('deliveryEnabled', 'Offers delivery', v.delivery_enabled)}
       <label class="field"><span class="t-label">Pickup point (for walking-time estimates)</span>
@@ -2461,11 +2557,52 @@ ${added.length ? `Grant: ${added.join(', ')}
           ${nodes.map((n) => `<option value="${n.id}" ${n.id === v.campus_node_id ? 'selected' : ''}>
             ${esc(n.name)}${n.lat == null ? ' (no recorded position)' : ''}</option>`).join('')}
         </select></label>`,
-      (d) => quad.updateVendor(v.id, { ...d, revision: v.revision, opensAt: d.opensAt || null, closesAt: d.closesAt || null,
+      (d, form) => {
+        /* The week goes only if it changed, and only if the server would take it. */
+        const box = form.querySelector('[data-wk]');
+        const week = d.weeklyHours ? JSON.parse(d.weeklyHours) : undefined;
+        const bad = week ? problems(week) : [];
+        if (bad.length) throw new Error(bad[0].message);
+        delete d.weeklyHours;
+        if (!d.timezone) delete d.timezone;
+        return quad.updateVendor(v.id, { ...d, revision: +box.dataset.revision || v.revision,
+        ...(week ? { weeklyHours: week } : {}),
         prepMinutes: +d.prepMinutes, campusNodeId: d.campusNodeId || null,
         deliveryEnabled: !!d.deliveryEnabled, contactPublic: !!d.contactPublic,
-        ...availabilityPayload(d) }));
+        ...availabilityPayload(d) });
+      });
   },
+
+  /* ---- the weekly schedule's own actions (WeeklyEditor) ---- */
+  wkAll: (t) => { const box = wkBox(t); wkWrite(box, setAll(wkRead(box), t.dataset.v === '1')); },
+  wkApply: (t) => {
+    const box = wkBox(t), days = wkPicked(box);
+    const o = box.querySelector('[data-wk-bulk=opens]').value, c = box.querySelector('[data-wk-bulk=closes]').value;
+    if (!days.length) return toast('Select the days to change first', '!');
+    if (!o || !c) return toast('Set an opening and a closing time to apply', '!');
+    if (o === c) return toast('Opening and closing times are the same', '!');
+    wkWrite(box, applyHours(wkRead(box), days, o, c));
+  },
+  wkCopy: (t) => {
+    const box = wkBox(t), days = wkPicked(box);
+    if (!days.length) return toast('Select the days to copy to first', '!');
+    wkWrite(box, copyDay(wkRead(box), box.querySelector('[data-wk-from]').value, days));
+  },
+  wkSave: (t) => act(t, async () => {
+    const box = wkBox(t), week = wkRead(box), bad = problems(week);
+    if (bad.length) { wkWrite(box, week); throw new Error(bad[0].message); }
+    const tz = box.querySelector('[data-wk-tz]').value;
+    const out = await quad.updateVendor(box.dataset.vendor, { weeklyHours: week, ...(tz !== box.dataset.tz ? { timezone: tz } : {}),
+      ...(box.dataset.revision ? { revision: +box.dataset.revision } : {}) });
+    /* Saved: the rest of the form continues from the new revision. */
+    box.dataset.revision = out.revision;
+    box.dataset.tz = out.timezone || tz;
+    box.querySelector('[name=weeklyHours]').value = '';
+    box.querySelector('[name=timezone]').value = '';
+    box.querySelector('[data-wk-summary]').textContent = out.hours?.label || summary(week);
+    box.querySelector('[data-wk-saved]').textContent = 'Weekly schedule saved';
+    toast('Weekly schedule saved');
+  }),
 
   /* Open / Close on the card is an explicit administrator choice, so it puts
      the café under manual availability: the schedule can no longer undo it.
@@ -2804,7 +2941,7 @@ ${added.length ? `Grant: ${added.join(', ')}
       ${select('defaultMethod', 'Method for rows that do not say', METHOD_OPTS.filter(([v]) => v))}
       <div class="row" style="gap:8px;margin:8px 0"><button type="button" class="btn btn-secondary btn-sm" data-act="previewPoints">Preview</button></div>
       <div data-preview></div>
-      ${check('confirm', 'I collected these on site myself — confirm them now (needs passkey)', false)}
+      ${ack('confirm', 'I collected these on site myself — confirm them now (needs passkey)')}
       ${field('confirmation', 'How they were collected (required to confirm)')}`,
     async (d, form) => {
       const text = await fileOrText(form);
@@ -3393,8 +3530,8 @@ const wText = (path, label, { max = 120, area = false, hint = '' } = {}) => {
       : `<input class="input" maxlength="${max}" data-path="${path}" value="${esc(v)}" ${ro()}>`}
     ${hint ? `<span class="t-xs faint">${esc(hint)}</span>` : ''}</label>`;
 };
-const wBool = (path, label, hint = '') => `<label class="wz-switch"><input type="checkbox" data-path="${path}" ${getPath(W.config, path) ? 'checked' : ''} ${ro()}>
-  <span class="grow"><span class="t-sm t-strong">${esc(label)}</span>${hint ? `<span class="t-xs faint" style="display:block">${esc(hint)}</span>` : ''}</span></label>`;
+const wBool = (path, label, hint = '') => `<div class="wz-switch">${Switch({ checked: !!getPath(W.config, path), disabled: !canEdit(), attrs: `data-path="${path}"`,
+  label: `<span class="grow"><span class="t-sm t-strong">${esc(label)}</span>${hint ? `<span class="t-xs faint" style="display:block">${esc(hint)}</span>` : ''}</span>` })}</div>`;
 const wSelect = (path, label, options, { allowNull = false } = {}) => {
   const v = getPath(W.config, path);
   return `<label class="field"><span class="t-label">${esc(label)}</span>
@@ -3495,7 +3632,7 @@ async function wzPaintForm() {
         <li class="wz-section" draggable="${canEdit()}" data-index="${i}">
           <span class="wz-grip" aria-hidden="true">⋮⋮</span>
           <span class="grow t-sm t-strong">${esc(SECTION_LABEL[s.key] || s.key)}</span>
-          <label class="wz-mini"><input type="checkbox" data-path="home.sections.${i}.visible" ${s.visible ? 'checked' : ''} ${ro()}> Shown</label>
+          <span class="wz-mini">${Switch({ size: 'sm', checked: !!s.visible, disabled: !canEdit(), attrs: `data-path="home.sections.${i}.visible"`, label: 'Shown' })}</span>
           <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="home.sections" data-i="${i}" data-d="-1" aria-label="Move ${esc(SECTION_LABEL[s.key])} up" ${i === 0 ? 'disabled' : ''} ${ro()}>↑</button>
           <button type="button" class="btn btn-ghost btn-sm" data-act="wzMove" data-list="home.sections" data-i="${i}" data-d="1" aria-label="Move ${esc(SECTION_LABEL[s.key])} down" ${i === c.home.sections.length - 1 ? 'disabled' : ''} ${ro()}>↓</button>
         </li>`).join('')}</ol>
