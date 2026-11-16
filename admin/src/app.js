@@ -354,8 +354,10 @@ async function scrOverview() {
           <div class="between"><h2 class="t-label">Money</h2>
             <button type="button" class="btn btn-ghost btn-sm" data-route="finance">Open settlements</button></div>
           <div class="grid-kpi" style="margin-top:10px">
-            ${kpi('GMV today', rupees(f.gmvToday), `${f.ordersToday} order(s)`)}
-            ${kpi('Platform fees today', rupees(f.feesToday), 'owner earnings, gross')}
+            ${f.gmvSince ? kpi('GMV', rupees(f.gmv), `${f.gmvOrders} orders · since ${f.gmvSince}`)
+              : kpi('GMV today', rupees(f.gmv), `${f.gmvOrders} order(s)`)}
+            ${f.feesSince ? kpi('Platform fees', rupees(f.fees), `since ${f.feesSince}`)
+              : kpi('Platform fees today', rupees(f.fees), 'owner earnings, gross')}
             ${kpi('ECHO ECHO revenue', rupees(f.revenue), 'all time, net of refunds and gateway fees')}
             ${kpi('Owed to cafés', rupees(f.cafes), 'payable now')}
             ${kpi('Owed to partners', rupees(f.partners), 'earned, not yet paid')}
@@ -391,28 +393,35 @@ async function scrOverview() {
 }
 
 const KPI_ICON = { Cafeterias: 'store', 'Live orders': 'bag', 'ID reviews waiting': 'id', 'Partner applications': 'bike',
-  'GMV today': 'chart', 'Platform fees today': 'wallet', 'ECHO ECHO revenue': 'wallet', 'Owed to cafés': 'store',
+  'GMV today': 'chart', 'Platform fees today': 'wallet', GMV: 'chart', 'Platform fees': 'wallet', 'ECHO ECHO revenue': 'wallet', 'Owed to cafés': 'store',
   'Owed to partners': 'bike', 'Payouts in flight': 'card' };
 const kpi = (label, value, note) => statCard(KPI_ICON[label] || 'grid', label, value, note);
 
 /* The Overview's figures. Where the owner has recorded a historical baseline
    from the offline books (server: routes/offline-records.js), a card shows that
    baseline plus only the live activity recorded after its cutoff, so nothing
-   is counted twice; without one, the live figure exactly as before. */
-const sinceKey = (cutoff, floor = null) => (floor && floor > cutoff ? floor : cutoff);
+   is counted twice; without one, the live figure exactly as before. A figure
+   for a date range (orders, GMV, platform fees) makes its card a running
+   total "since" the range's first day instead of a "today" figure. */
+const shortDate = (ymd) => new Date(`${ymd}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 function baselineCutoffs(base) {
-  const c = base.cumulative || {}, day = base.daily || {};
-  return [c.net_revenue?.cutoff, ...['orders', 'gmv', 'platform_fees'].map((m) => day[m] && sinceKey(day[m].cutoff, startOfToday()))]
-    .filter(Boolean);
+  const c = base.cumulative || {}, p = base.period || {};
+  return [c.net_revenue?.cutoff, p.orders?.cutoff, p.gmv?.cutoff, p.platform_fees?.cutoff].filter(Boolean);
 }
 function overviewFigures(d) {
-  const c = d.base?.cumulative || {}, day = d.base?.daily || {}, since = d.since || {};
-  const today = (m, field, live) => (day[m] ? day[m].baseline + since[sinceKey(day[m].cutoff, startOfToday())][field] : live);
+  const c = d.base?.cumulative || {}, p = d.base?.period || {}, since = d.since || {};
+  const run = (r, field) => r.baseline + since[r.cutoff][field];
+  /* Orders under the GMV card: the range's orders plus captured orders after
+     its cutoff when GMV is a running total; today's orders otherwise. */
+  const gmvOrders = p.gmv ? (p.orders ? run(p.orders, 'orders') : since[p.gmv.cutoff].orders)
+    : d.money?.today.orders;
   return {
     totalOrders: c.orders ? c.orders.baseline + c.orders.live : (d.orders || []).length,
-    ordersToday: today('orders', 'orders', d.money?.today.orders),
-    gmvToday: today('gmv', 'gmvPaise', d.money?.today.gmvPaise),
-    feesToday: today('platform_fees', 'platformFeesPaise', d.money?.today.platformFeesPaise),
+    gmv: p.gmv ? run(p.gmv, 'gmvPaise') : d.money?.today.gmvPaise,
+    gmvOrders,
+    gmvSince: p.gmv ? shortDate(p.gmv.periodStart) : null,
+    fees: p.platform_fees ? run(p.platform_fees, 'platformFeesPaise') : d.money?.today.platformFeesPaise,
+    feesSince: p.platform_fees ? shortDate(p.platform_fees.periodStart) : null,
     revenue: c.net_revenue ? c.net_revenue.baseline + since[c.net_revenue.cutoff].quadNetRevenuePaise : d.money?.all.quadNetRevenuePaise,
     cafes: c.cafe_payable ? c.cafe_payable.baseline + c.cafe_payable.live : d.money?.all.cafeteriaPayablePaise,
     partners: c.partner_payable ? c.partner_payable.baseline + c.partner_payable.live : d.money?.all.deliveryPayablePaise,

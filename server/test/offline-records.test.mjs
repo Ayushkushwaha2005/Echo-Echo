@@ -145,7 +145,7 @@ test('with nothing recorded there is no baseline, so every card keeps its live f
   const o = await owner();
   const r = await o.c.get('/admin/offline-records/baseline');
   assert.equal(r.status, 200);
-  assert.deepEqual([r.body.cumulative, r.body.daily], [{}, {}]);
+  assert.deepEqual([r.body.cumulative, r.body.period], [{}, {}]);
 });
 
 test('total orders: the baseline plus only the orders placed after its cutoff', async () => {
@@ -193,11 +193,12 @@ test('revenue: the baseline plus the finance summary from the cutoff, which leav
   assert.equal(b.baseline + since.quadNetRevenuePaise, 1243000 + 400);
 });
 
-test("a day's figures apply on that day only; withdrawn records are ignored and the latest record wins", async () => {
+test('a date-range figure is a running total from its cutoff; withdrawn records are ignored and the latest record wins', async () => {
   const o = await owner();
   const { baseline } = await import('../src/routes/offline-records.js');
-  await o.c.post('/admin/offline-records', { metric: 'gmv', value: 486000, periodStart: todayIST(), periodEnd: todayIST() });
-  await o.c.post('/admin/offline-records', { metric: 'platform_fees', value: 18500, periodStart: yesterdayIST(), periodEnd: yesterdayIST() });
+  const weekAgo = new Date(Date.now() + 5.5 * 3600_000 - 6 * 86400_000).toISOString().slice(0, 10);
+  await o.c.post('/admin/offline-records', { metric: 'gmv', value: 486000, periodStart: weekAgo, periodEnd: yesterdayIST() });
+  await o.c.post('/admin/offline-records', { metric: 'platform_fees', value: 18500, periodStart: weekAgo, periodEnd: yesterdayIST() });
   const wrong = (await o.c.post('/admin/offline-records', { metric: 'orders', value: 999, periodEnd: todayIST() })).body.id;
   await o.c.post(`/admin/offline-records/${wrong}/withdraw`, { reason: 'typo' });
   await tick();
@@ -205,12 +206,13 @@ test("a day's figures apply on that day only; withdrawn records are ignored and 
   await tick();
   await o.c.post('/admin/offline-records', { metric: 'net_revenue', value: 1243000, periodEnd: todayIST() });
   const b = await baseline({ finance: true, orders: true });
-  assert.equal(b.daily.gmv.baseline, 486000);
-  assert.equal(b.daily.platform_fees, undefined, "yesterday's fees are not today's");
+  assert.deepEqual([b.period.gmv.baseline, b.period.gmv.periodStart, b.period.gmv.periodEnd], [486000, weekAgo, yesterdayIST()]);
+  assert.equal(b.period.platform_fees.baseline, 18500);
+  /* The cutoff is the end of the range's last day, India time: activity from then on is live. */
+  const endOfRange = new Date(`${todayIST()}T00:00:00+05:30`).toISOString();
+  assert.equal(b.period.gmv.cutoff, endOfRange);
   assert.equal(b.cumulative.orders, undefined, 'the withdrawn record is ignored');
   assert.equal(b.cumulative.net_revenue.baseline, 1243000);
-  const yesterday = await baseline({ finance: true, orders: true, today: yesterdayIST() });
-  assert.equal(yesterday.daily.platform_fees.baseline, 18500);
 });
 
 test('the baseline shows each administrator only what they may see', async () => {

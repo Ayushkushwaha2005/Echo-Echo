@@ -96,10 +96,12 @@ const SELECT = `
     JOIN app_user a ON a.id = r.attested_by
     LEFT JOIN app_user w ON w.id = r.withdrawn_by`;
 
-/* Figures that run "up to" a date, and figures for one day (shown on the
-   Overview's "today" cards on that day only). */
+/* Figures that run "up to" a date (total orders, revenue, amounts owed), and
+   figures for a date range (orders, GMV and platform fees from-to), which the
+   Overview shows as running totals: the range's figure plus everything after
+   its cutoff. */
 const CUMULATIVE = ['orders', 'net_revenue', 'cafe_payable', 'partner_payable'];
-const DAILY = ['orders', 'gmv', 'platform_fees'];
+const PERIOD = ['orders', 'gmv', 'platform_fees'];
 const PAYABLE_ACCOUNT = { cafe_payable: 'cafeteria_payable', partner_payable: 'delivery_payable' };
 const CUTOFF = `LEAST(r.attested_at, ((r.period_end + 1)::timestamp AT TIME ZONE 'Asia/Kolkata'))`;
 
@@ -107,14 +109,16 @@ const mayDo = (actor, cap) => { try { authorize(actor, cap); return true; } catc
 
 /** The Overview's historical baseline, with the live part the server counts.
     Exported for the tests. `finance` and `orders` say what the caller may see. */
-export async function baseline({ finance, orders, today = todayIST() }) {
+export async function baseline({ finance, orders }) {
   const visible = (m) => (m === 'orders' ? orders : finance);
   const pick = async (where, params) => (await q(
-    `SELECT DISTINCT ON (r.metric) r.id, r.metric, r.value, ${CUTOFF} AS cutoff
+    `SELECT DISTINCT ON (r.metric) r.id, r.metric, r.value, ${CUTOFF} AS cutoff,
+            to_char(r.period_start, 'YYYY-MM-DD') AS period_start, to_char(r.period_end, 'YYYY-MM-DD') AS period_end
        FROM offline_record r
       WHERE r.withdrawn_at IS NULL AND ${where}
       ORDER BY r.metric, r.attested_at DESC`, params)).rows;
-  const shape = (r) => ({ recordId: r.id, baseline: Number(r.value), cutoff: new Date(r.cutoff).toISOString() });
+  const shape = (r) => ({ recordId: r.id, baseline: Number(r.value), cutoff: new Date(r.cutoff).toISOString(),
+                          periodStart: r.period_start, periodEnd: r.period_end });
 
   const cumulative = {};
   for (const r of await pick(`r.period_start IS NULL AND r.metric = ANY($1)`, [CUMULATIVE])) {
@@ -130,13 +134,11 @@ export async function baseline({ finance, orders, today = todayIST() }) {
     }
     cumulative[r.metric] = item;
   }
-  const daily = {};
+  const period = {};
   if (finance) {
-    for (const r of await pick(`r.period_start = $1::date AND r.period_end = $1::date AND r.metric = ANY($2)`, [today, DAILY])) {
-      daily[r.metric] = shape(r);
-    }
+    for (const r of await pick(`r.period_start IS NOT NULL AND r.metric = ANY($1)`, [PERIOD])) period[r.metric] = shape(r);
   }
-  return { today, cumulative, daily,
+  return { cumulative, period,
     basis: 'Baseline: owner-attested figures from the offline books. Live: activity recorded after each cutoff.' };
 }
 

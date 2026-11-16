@@ -1,20 +1,23 @@
 /* ==========================================================================
    ECHO ECHO — RECORD THE OWNER'S HISTORICAL BASELINE (offline books)
 
-     node --env-file=.env scripts/record-offline-baseline.mjs --day 2026-11-16            # dry run
-     node --env-file=.env scripts/record-offline-baseline.mjs --day 2026-11-16 --apply    # write
+     node --env-file=.env scripts/record-offline-baseline.mjs --from 2026-11-10 --to 2026-11-16            # dry run
+     node --env-file=.env scripts/record-offline-baseline.mjs --from 2026-11-10 --to 2026-11-16 --apply    # write
 
    Records the figures the platform owner provided from ECHO ECHO's offline
    pen-and-paper books as owner-attested historical records (migration 047),
    which the Overview cards then show as their baseline:
 
-     Total orders            126       up to --as-of (default: --day)
+     Total orders            126       up to --as-of (default: --to)
      ECHO ECHO revenue       ₹12,430   up to --as-of
      Owed to cafés           ₹8,915    up to --as-of
      Owed to partners        ₹1,240    up to --as-of
-     Orders                  37        for --day
-     GMV                     ₹4,860    for --day
-     Platform fees           ₹185      for --day
+     Orders                  37        --from to --to, inclusive
+     GMV                     ₹4,860    --from to --to, inclusive
+     Platform fees           ₹185      --from to --to, inclusive
+
+   The Overview shows every figure as a running total: the figure plus all
+   activity after its cutoff (the end of the day it runs to, India time).
 
    Each row is attested by the active platform owner, with the source "Offline
    pen-and-paper business records", and gets an offline_record.attest audit row
@@ -28,11 +31,12 @@ import { DB } from '../src/config.js';
 import { parseRecord } from '../src/routes/offline-records.js';
 
 const arg = (name) => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : null; };
-const day = arg('--day');
-const asOf = arg('--as-of') || day;
+const from = arg('--from');
+const to = arg('--to');
+const asOf = arg('--as-of') || to;
 const apply = process.argv.includes('--apply');
 if (!DB.configured) { console.error('✗ DATABASE_URL is not set.'); process.exit(1); }
-if (!day) { console.error('✗ Pass --day YYYY-MM-DD: the day the 37 orders, ₹4,860 GMV and ₹185 fees are for.'); process.exit(1); }
+if (!from || !to) { console.error('✗ Pass --from and --to (YYYY-MM-DD): the dates the 37 orders, ₹4,860 GMV and ₹185 fees cover.'); process.exit(1); }
 
 const NOTE = 'Figures provided by the owner from the offline books, 16 Nov 2026';
 /* As provided by the owner. Amounts in paise (₹1 = 100 paise). */
@@ -41,9 +45,9 @@ const FIGURES = [
   { metric: 'net_revenue',     value: 12430_00,  periodEnd: asOf },
   { metric: 'cafe_payable',    value: 8915_00,   periodEnd: asOf },
   { metric: 'partner_payable', value: 1240_00,   periodEnd: asOf },
-  { metric: 'orders',          value: 37,        periodStart: day, periodEnd: day },
-  { metric: 'gmv',             value: 4860_00,   periodStart: day, periodEnd: day },
-  { metric: 'platform_fees',   value: 185_00,    periodStart: day, periodEnd: day },
+  { metric: 'orders',          value: 37,        periodStart: from, periodEnd: to },
+  { metric: 'gmv',             value: 4860_00,   periodStart: from, periodEnd: to },
+  { metric: 'platform_fees',   value: 185_00,    periodStart: from, periodEnd: to },
 ].map((f) => parseRecord({ ...f, note: NOTE }));
 
 const c = await pool.connect();
@@ -60,7 +64,7 @@ try {
       `SELECT id FROM offline_record WHERE withdrawn_at IS NULL AND metric = $1
           AND period_start IS NOT DISTINCT FROM $2::date AND period_end = $3::date`,
       [f.metric, f.periodStart, f.periodEnd])).rows[0];
-    const what = `${f.metric.padEnd(16)} ${String(f.value).padStart(9)}  ${f.periodStart ? `for ${f.periodEnd}` : `up to ${f.periodEnd}`}`;
+    const what = `${f.metric.padEnd(16)} ${String(f.value).padStart(9)}  ${f.periodStart ? `${f.periodStart} to ${f.periodEnd}` : `up to ${f.periodEnd}`}`;
     if (exists) { console.log(`  skip   ${what}  (already recorded: ${exists.id})`); continue; }
     if (!apply) { console.log(`  would  ${what}`); continue; }
     const row = (await c.query(
