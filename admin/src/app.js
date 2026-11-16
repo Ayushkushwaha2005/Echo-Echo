@@ -842,8 +842,26 @@ async function scrUsers() {
 async function paintUsers(term) {
   await panel(view(), () => quad.users(term), (d) => {
     if (!d.users.length) return EmptyState('No users found.', '');
-    return table(['Name', 'Phone / student email', 'Roles', 'Verification', 'Status', ''],
-      d.users.map((u) => [
+    /* V5 layout: the same list, shown in two sections. An account holding any
+       staff-console role is listed once, under privileged accounts, with all
+       its roles; everyone else under students. Rows and actions are unchanged. */
+    const privileged = (u) => (u.roles || []).some((r) => PRIVILEGED_ROLES.includes(r.role));
+    const section = (title, sub, list) => (list.length ? `
+      <section class="card card-pad">
+        <h2 class="t-label">${esc(title)} <span class="muted">${list.length}</span></h2>
+        <p class="t-xs muted" style="margin:2px 0 12px">${esc(sub)}</p>
+        ${userTable(list)}
+      </section>` : '');
+    return section('Admin & privileged accounts', 'Owner, administrators, support and café staff. Each account appears once, with all its roles.',
+      d.users.filter(privileged))
+      + section('Students', 'Student accounts, including delivery partners.', d.users.filter((u) => !privileged(u)));
+  }, { label: 'Loading users' });
+}
+
+const PRIVILEGED_ROLES = ['platform_owner', ...ENROLLABLE];
+function userTable(users) {
+  return table(['Name', 'Phone / student email', 'Roles', 'Verification', 'Status', ''],
+      users.map((u) => [
         esc(u.name || '—'), esc(u.phone || u.student_email || '—'),
         (u.roles || []).map((r) => `<span class="chip chip-soft">${esc(r.role)}${
           r.vendorName ? ` · ${esc(r.vendorName)}` : ''}</span>`).join(' ') || '—',
@@ -858,7 +876,6 @@ async function paintUsers(term) {
                  data-v="${u.status === 'active' ? 'suspended' : 'active'}">
            ${u.status === 'active' ? 'Suspend' : 'Restore'}</button>`,
       ]));
-  }, { label: 'Loading users' });
 }
 
 const METHOD_LABEL = {

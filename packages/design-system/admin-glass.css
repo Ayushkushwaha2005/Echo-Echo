@@ -1,0 +1,358 @@
+/* ==========================================================================
+   ECHO ECHO — CAMPUS CONTROL · V5 LIQUID GLASS (approved 16 Nov 2026)
+
+   Loaded LAST by admin/index.html only, so the student website and the café
+   counter never see it. It changes presentation only: no markup the app's
+   handlers depend on is touched.
+
+   Every value is copied from the approved prototype (Liquid Glass Demo,
+   v5/src.html): V5 light and the ORIGINAL V5 dark. The design: V1's ambient
+   rose / lilac / coral light plus soft bands in the same colours behind the
+   interface (markup in admin/index.html), and clear, thick glass on top of
+   it: blurred and gently bent by the #lg-refract SVG filter, with a frosted
+   inner glow along the edges instead of a border. Three strengths: clear
+   (sidebar, figure cards), mid (toolbar, controls) and reading (anything
+   holding a table or a form).
+
+   The admin token layer in admin.css (--cc-c-*) is re-pointed to the V5
+   palette, so every component that already reads those tokens follows the
+   new design in both themes without its own rule.
+   ========================================================================== */
+:root {
+  /* V5 — light */
+  --v5-bg: #F5EFF0;
+  --v5-amb-1: rgba(234,155,171,.62); --v5-amb-2: rgba(240,138,93,.34);
+  --v5-amb-3: rgba(170,160,226,.40); --v5-amb-4: rgba(255,255,255,.9);
+  --v5-line: rgba(110,60,75,.12); --v5-row: rgba(110,60,75,.08); --v5-hover: rgba(255,255,255,.55);
+  --v5-text: #1A1416; --v5-text-2: #3D3134; --v5-muted: #6A585D; --v5-faint: #8C7A7E;
+  --v5-accent: #C8425F; --v5-accent-2: #DC6F87; --v5-accent-text: #A8304D;
+  --v5-accent-tint: rgba(200,66,95,.12); --v5-accent-ring: rgba(200,66,95,.30); --v5-on-accent: #FFF7F8;
+  --v5-neutral-bg: rgba(110,60,75,.08);
+  --v5-g-clear: rgba(255,255,255,.24); --v5-g-mid: rgba(255,255,255,.36);
+  --v5-g-read: rgba(255,251,251,.52);  --v5-g-well: rgba(255,255,255,.26);
+  --v5-g-sheen: rgba(255,255,255,.34); --v5-g-rim: rgba(255,255,255,.62);
+  --v5-g-rim-soft: rgba(255,255,255,.30); --v5-g-glow: rgba(255,255,255,.34);
+  --v5-g-shade: rgba(110,50,70,.10);
+  --v5-g-shadow: 0 2px 6px rgba(110,50,70,.05), 0 16px 40px -12px rgba(110,50,70,.18);
+  --v5-pop: rgba(255,251,251,.88);   /* menus and dialogs: glass dense enough to read over anything */
+  --v5-rib-rose: rgba(222,116,142,.26); --v5-rib-coral: rgba(238,150,108,.24); --v5-rib-lilac: rgba(160,152,222,.24);
+  --v5-rib-hi: rgba(255,255,255,.8); --v5-rib-lo: rgba(150,60,90,.10);
+
+  /* the admin token layer (admin.css), re-pointed */
+  --cc-c-canvas: #F5EFF0; --cc-c-frame: transparent; --cc-c-panel: transparent;
+  --cc-c-card: var(--v5-g-read); --cc-c-card-2: var(--v5-g-well); --cc-c-raised: var(--v5-hover);
+  --cc-c-border: rgba(110,60,75,.12); --cc-c-border-strong: rgba(110,60,75,.18);
+  --cc-c-text: #1A1416; --cc-c-text-2: #3D3134; --cc-c-muted: #6A585D;
+  --cc-c-faint: #75646A;   /* V5's #8C7A7E darkened just enough for 4.5:1 body-text contrast on light glass */
+  --cc-c-active-bg: rgba(200,66,95,.12); --cc-c-active-text: #A8304D;
+  --cc-c-marker: #C8425F; --cc-c-danger: #A7352A; --cc-c-danger-bg: rgba(176,58,46,.12);
+  --cc-c-ok: #23704C; --cc-c-ok-bg: rgba(46,125,87,.13);
+  --cc-c-warn: #84600A; --cc-c-warn-bg: rgba(168,118,10,.15);
+  --cc-c-ink: #3D3134; --cc-c-ink-bg: rgba(110,60,75,.08);
+  --cc-c-btn: #C8425F; --cc-c-btn-hover: #B83A56; --cc-c-btn-text: #FFF7F8;
+  --cc-c-input: var(--v5-g-well); --cc-c-focus: rgba(200,66,95,.30);
+  --cc-c-shadow: var(--v5-g-shadow); --cc-c-row-hover: none;
+  --cc-c-pinkish: rgba(200,66,95,.12); --cc-c-bluish: rgba(110,60,75,.08); --cc-c-lavish: rgba(110,60,75,.08);
+  --cc-c-line: #C8425F; --cc-c-blob-a: transparent; --cc-c-blob-b: transparent;
+  --cc-c-scrim: rgba(26,20,22,.40);
+
+  /* V5 type: Manrope for the interface, Bricolage Grotesque for titles and figures */
+  --font-ui: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Bricolage Grotesque", "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --v5-bg: #150F13;
+  --v5-amb-1: rgba(196,66,96,.40); --v5-amb-2: rgba(222,112,66,.19); --v5-amb-3: rgba(112,88,176,.20); --v5-amb-4: rgba(255,255,255,.03);
+  --v5-line: rgba(255,255,255,.085); --v5-row: rgba(255,255,255,.065); --v5-hover: rgba(255,255,255,.05);
+  --v5-text: #EEE6E8; --v5-text-2: #DACED1; --v5-muted: #B2A3A7; --v5-faint: #8E8084;
+  --v5-accent: #D84F6D; --v5-accent-2: #EC7C95; --v5-accent-text: #F494AA;
+  --v5-accent-tint: rgba(236,124,149,.16); --v5-accent-ring: rgba(236,124,149,.38); --v5-on-accent: #FFF7F8;
+  --v5-neutral-bg: rgba(255,255,255,.07);
+  --v5-g-clear: rgba(255,232,240,.055); --v5-g-mid: rgba(255,232,240,.08); --v5-g-read: rgba(42,30,37,.50); --v5-g-well: rgba(10,4,8,.20);
+  --v5-g-sheen: rgba(255,232,240,.07); --v5-g-rim: rgba(255,226,236,.20); --v5-g-rim-soft: rgba(255,226,236,.08); --v5-g-glow: rgba(255,226,236,.07);
+  --v5-g-shade: rgba(0,0,0,.25); --v5-g-shadow: 0 2px 6px rgba(0,0,0,.20), 0 18px 44px -14px rgba(0,0,0,.45);
+  --v5-pop: rgba(36,26,32,.90);
+  --v5-rib-rose: rgba(180,62,94,.26); --v5-rib-coral: rgba(200,104,72,.16); --v5-rib-lilac: rgba(104,84,160,.15);
+  --v5-rib-hi: rgba(255,196,214,.09); --v5-rib-lo: rgba(0,0,0,.30);
+  --cc-c-canvas: #150F13;
+  --cc-c-border: rgba(255,255,255,.085); --cc-c-border-strong: rgba(255,255,255,.13);
+  --cc-c-text: #EEE6E8; --cc-c-text-2: #DACED1; --cc-c-muted: #B2A3A7; --cc-c-faint: #A09196;
+  --cc-c-active-bg: rgba(236,124,149,.16); --cc-c-active-text: #F494AA;
+  --cc-c-marker: #D84F6D; --cc-c-danger: #EBA096; --cc-c-danger-bg: rgba(235,160,150,.13);
+  --cc-c-ok: #8DCBA8; --cc-c-ok-bg: rgba(141,203,168,.13);
+  --cc-c-warn: #DFC07F; --cc-c-warn-bg: rgba(223,192,127,.13);
+  --cc-c-ink: #DACED1; --cc-c-ink-bg: rgba(255,255,255,.07);
+  --cc-c-btn: #D84F6D; --cc-c-btn-hover: #E0627E; --cc-c-btn-text: #FFF7F8;
+  --cc-c-focus: rgba(236,124,149,.38);
+  --cc-c-pinkish: rgba(236,124,149,.16); --cc-c-bluish: rgba(255,255,255,.07); --cc-c-lavish: rgba(255,255,255,.07);
+  --cc-c-line: #D84F6D; --cc-c-scrim: rgba(0,0,0,.55);
+  color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --v5-bg: #150F13;
+  --v5-amb-1: rgba(196,66,96,.40); --v5-amb-2: rgba(222,112,66,.19); --v5-amb-3: rgba(112,88,176,.20); --v5-amb-4: rgba(255,255,255,.03);
+  --v5-line: rgba(255,255,255,.085); --v5-row: rgba(255,255,255,.065); --v5-hover: rgba(255,255,255,.05);
+  --v5-text: #EEE6E8; --v5-text-2: #DACED1; --v5-muted: #B2A3A7; --v5-faint: #8E8084;
+  --v5-accent: #D84F6D; --v5-accent-2: #EC7C95; --v5-accent-text: #F494AA;
+  --v5-accent-tint: rgba(236,124,149,.16); --v5-accent-ring: rgba(236,124,149,.38); --v5-on-accent: #FFF7F8;
+  --v5-neutral-bg: rgba(255,255,255,.07);
+  --v5-g-clear: rgba(255,232,240,.055); --v5-g-mid: rgba(255,232,240,.08); --v5-g-read: rgba(42,30,37,.50); --v5-g-well: rgba(10,4,8,.20);
+  --v5-g-sheen: rgba(255,232,240,.07); --v5-g-rim: rgba(255,226,236,.20); --v5-g-rim-soft: rgba(255,226,236,.08); --v5-g-glow: rgba(255,226,236,.07);
+  --v5-g-shade: rgba(0,0,0,.25); --v5-g-shadow: 0 2px 6px rgba(0,0,0,.20), 0 18px 44px -14px rgba(0,0,0,.45);
+  --v5-pop: rgba(36,26,32,.90);
+  --v5-rib-rose: rgba(180,62,94,.26); --v5-rib-coral: rgba(200,104,72,.16); --v5-rib-lilac: rgba(104,84,160,.15);
+  --v5-rib-hi: rgba(255,196,214,.09); --v5-rib-lo: rgba(0,0,0,.30);
+  --cc-c-canvas: #150F13;
+  --cc-c-border: rgba(255,255,255,.085); --cc-c-border-strong: rgba(255,255,255,.13);
+  --cc-c-text: #EEE6E8; --cc-c-text-2: #DACED1; --cc-c-muted: #B2A3A7; --cc-c-faint: #A09196;
+  --cc-c-active-bg: rgba(236,124,149,.16); --cc-c-active-text: #F494AA;
+  --cc-c-marker: #D84F6D; --cc-c-danger: #EBA096; --cc-c-danger-bg: rgba(235,160,150,.13);
+  --cc-c-ok: #8DCBA8; --cc-c-ok-bg: rgba(141,203,168,.13);
+  --cc-c-warn: #DFC07F; --cc-c-warn-bg: rgba(223,192,127,.13);
+  --cc-c-ink: #DACED1; --cc-c-ink-bg: rgba(255,255,255,.07);
+  --cc-c-btn: #D84F6D; --cc-c-btn-hover: #E0627E; --cc-c-btn-text: #FFF7F8;
+  --cc-c-focus: rgba(236,124,149,.38);
+  --cc-c-pinkish: rgba(236,124,149,.16); --cc-c-bluish: rgba(255,255,255,.07); --cc-c-lavish: rgba(255,255,255,.07);
+  --cc-c-line: #D84F6D; --cc-c-scrim: rgba(0,0,0,.55);
+  color-scheme: dark;
+}
+
+/* ---------- the scene behind the glass ------------------------------------- */
+body { background: var(--v5-bg); color: var(--v5-text); font-family: var(--font-ui); font-weight: 480; line-height: 1.55;
+  -webkit-font-smoothing: antialiased; }
+body::after { content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
+  background:
+    radial-gradient(42vw 38vw at 6% 4%, var(--v5-amb-1), transparent 70%),
+    radial-gradient(38vw 34vw at 96% 12%, var(--v5-amb-3), transparent 70%),
+    radial-gradient(46vw 40vw at 70% 104%, var(--v5-amb-2), transparent 70%),
+    radial-gradient(30vw 26vw at 30% 70%, var(--v5-amb-4), transparent 70%); }
+.v5-scene { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+.v5-scene svg { width: 100%; height: 100%; display: block; }
+.v5-filters { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+/* ---------- the material ---------------------------------------------------- */
+.cc-rail, .cc .card, .cc-stat, .oh-stat, .oh-graph, .od-card, .cafe-card, .wz-edit, .wz-preview,
+.cc .filterbar, .cc-view .stack > .item, .cc-view > .dtable-wrap, .cc-view > .oh-table-wrap {
+  background: linear-gradient(180deg, var(--v5-g-sheen) 0%, transparent 34%), var(--v5-g-clear);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: url(#lg-refract) blur(16px) saturate(150%);
+  border-color: transparent;
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), inset 0 1px 0 var(--v5-g-rim), inset 0 0 22px var(--v5-g-glow), var(--v5-g-shadow);
+}
+/* Reading surfaces: anything holding a table or a form gets denser glass. */
+.cc .card:has(table, form, .input, .stack > .item), .pf-card, .od-card, .oh-graph, .wz-edit, .wz-preview, .cc .filterbar,
+.cc-view > .dtable-wrap, .cc-view > .oh-table-wrap {
+  background: linear-gradient(180deg, var(--v5-g-sheen) 0%, transparent 30%), var(--v5-g-read);
+}
+.cc-view .stack > .item { background: linear-gradient(180deg, var(--v5-g-sheen) 0%, transparent 40%), var(--v5-g-mid); }
+
+/* ---------- frame, sidebar, toolbar ------------------------------------------ */
+.cc { background: transparent; padding: 14px; }
+.cc:not(.cc-collapsed) { --cc-rail-w: 268px; }
+.cc-frame { background: transparent; border: 0; box-shadow: none; border-radius: 0; gap: 18px; min-height: calc(100dvh - 28px); }
+.cc-rail { border-right: 0; border-radius: 30px; top: 14px; height: calc(100dvh - 28px); padding: 18px 12px 14px; gap: 14px; }
+.cc-brand { padding: 0 6px 4px; }
+.cc-brand-name { font-family: var(--font-display); font-weight: 800; font-size: 15px; letter-spacing: .04em; color: var(--v5-text); }
+.cc-navlabel { font: 650 10.5px/1 var(--font-ui); letter-spacing: .09em; text-transform: uppercase; color: var(--v5-faint); padding: 10px 10px 7px; }
+.cc-nav { gap: 6px; }
+.cc-navbtn { padding: 7.5px 10px; border-radius: 12px; font-size: 13.5px; font-weight: 600; color: var(--v5-text-2);
+  border: 1px solid transparent; transition: background .2s ease, color .2s ease, box-shadow .2s ease; }
+.cc-navbtn svg { color: var(--v5-muted); }
+.cc-navbtn:hover { background: var(--v5-hover); color: var(--v5-text-2); }
+.cc-navbtn:hover svg { color: var(--v5-muted); }
+/* The selected page: a small glass pill tinted with the brand rose. */
+.cc-navbtn[aria-current="page"] { color: var(--v5-accent-text);
+  background: linear-gradient(180deg, var(--v5-g-sheen), transparent 70%), var(--v5-accent-tint);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim), inset 0 0 12px var(--v5-g-glow), 0 4px 14px -8px var(--v5-g-shade); }
+.cc-navbtn[aria-current="page"] svg { color: var(--v5-accent-text); }
+.cc-navbtn[aria-current="page"]::before { display: none; }
+.cc-rail-foot { border-top-color: var(--v5-row); }
+
+.cc-main { padding: 0 4px 24px 0; gap: 22px; }
+/* The toolbar's glass sits on a layer behind it, so the toolbar itself does not
+   become the containing block of the notifications panel (fixed on phones). */
+.cc-top { position: sticky; top: 14px; z-index: 20; isolation: isolate; border-radius: 24px; padding: 9px 10px; gap: 14px; }
+.cc-top::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(180deg, var(--v5-g-sheen) 0%, transparent 40%), var(--v5-g-mid);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: url(#lg-refract) blur(16px) saturate(150%);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), inset 0 1px 0 var(--v5-g-rim), inset 0 0 22px var(--v5-g-glow), var(--v5-g-shadow); }
+.cc-search { flex: 0 1 460px; height: 42px; border: 0; border-radius: 14px; padding: 0 14px; color: var(--v5-muted);
+  background: var(--v5-g-well); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), inset 0 1px 3px var(--v5-g-shade); }
+.cc-search:focus-within { box-shadow: inset 0 0 0 1px var(--v5-accent-ring), 0 0 0 4px var(--v5-accent-tint); }
+.cc-search-in::placeholder { color: var(--v5-faint); }
+.cc-iconbtn, .oh-dots { border-radius: 13px; color: var(--v5-text-2);
+  background: linear-gradient(180deg, var(--v5-g-sheen), transparent 70%), var(--v5-g-mid);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), inset 0 1px 0 var(--v5-g-rim), inset 0 0 8px var(--v5-g-glow); }
+.cc-iconbtn:hover, .oh-dots:hover { background: var(--v5-hover); }
+.cc-dot { background: var(--v5-accent); }
+.cc-live { font-size: 12px; font-weight: 700; color: var(--cc-c-ok); }
+.cc-sitechip { border: 0; color: var(--v5-text-2); background: linear-gradient(180deg, var(--v5-g-sheen), transparent 70%), var(--v5-g-mid);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft); }
+.cc-theme { --cts-scale: .6; }
+.cc-profile-btn { border-radius: 16px; padding: 4px 12px 4px 4px; }
+.cc-profile-btn:hover { background: var(--v5-hover); }
+.cc .cc-profile-name { font-weight: 700; font-size: 13.5px; color: var(--v5-text); }
+.cc-avatar, .pf-avatar .cc-avatar { border-radius: 50%; color: var(--v5-on-accent); font-family: var(--font-display); font-weight: 800; letter-spacing: .03em;
+  background: radial-gradient(circle at 30% 25%, var(--v5-accent-2), var(--v5-accent) 70%);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.25), inset 0 1px 1px rgba(255,255,255,.4), 0 2px 8px -4px var(--v5-accent-ring); }
+.pf-avatar { border-radius: 30px; }
+.pf-avatar .cc-avatar { border-radius: 30px; }
+
+/* Menus and pop-overs: dense glass so they read over anything. */
+.cc-menu, .cc-notifs { background: var(--v5-pop); border: 0; border-radius: 16px;
+  -webkit-backdrop-filter: blur(24px) saturate(150%); backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), inset 0 1px 0 var(--v5-g-rim), var(--v5-g-shadow); }
+.cc-notifs-head { background: transparent; }
+.cc-menu-head { border-bottom-color: var(--v5-row); }
+.cc-menu-item { border-radius: 10px; }
+
+/* ---------- page head -------------------------------------------------------- */
+.cc-panel { background: transparent; border-radius: 0; padding: 6px 0 0; }
+.cc-pagehead { padding: 0 6px; margin-bottom: 22px; }
+/* The breadcrumb repeats the sidebar; V5 shows the title alone. Kept for screen readers. */
+.cc-crumbs { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.cc-title { font-family: var(--font-display); font-size: 32px; font-weight: 700; line-height: 1.1; letter-spacing: -.026em; color: var(--v5-text); }
+.cc-sub { margin-top: 6px; color: var(--v5-muted); font-size: 14px; }
+/* Page actions on one aligned row, as in V5. */
+.cc-head-actions { align-items: center; justify-content: flex-end; }
+.cc-head-actions > .input { width: 240px; height: 38px; min-height: 38px; padding-block: 0; }
+.cc-head-actions > .btn { min-height: 38px; }
+.cc-view > * + * { margin-top: 18px; }
+
+/* ---------- cards and figures -------------------------------------------------- */
+.cc .card { border-radius: 24px; }
+.cc .card-pad { padding: 20px 22px; }
+.cc .card > h2.t-label, .cc .card .between > h2.t-label, .cc-h, .pf-h, .od-h, .wz-h, .oh-graph-head h2, .cafe-name {
+  font-family: var(--font-display); font-size: 17px; font-weight: 700; line-height: 1.25; letter-spacing: -.015em; color: var(--v5-text);
+  text-transform: none; }
+.cc .grid-kpi { gap: 14px; }
+.cc-stat { border-radius: 24px; padding: 18px 20px; gap: 0; align-items: flex-start; }
+.cc-stat-icon { display: none; }
+.cc-stat-text { gap: 4px; }
+.cc-stat-label { font: 650 10.5px/1.2 var(--font-ui); letter-spacing: .07em; text-transform: uppercase; color: var(--v5-muted); margin-bottom: 6px; }
+.cc-stat-value { font-family: var(--font-display); font-size: 35px; font-weight: 650; line-height: 1.04; letter-spacing: -.03em; color: var(--v5-text); }
+.cc-stat-note { font-size: 12.5px; color: var(--v5-muted); }
+/* Figures inside a card (the Money tiles): clear glass set into the panel. */
+.cc .card .grid-kpi .cc-stat { background: var(--v5-g-well); border-radius: 14px; padding: 14px 16px;
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), inset 0 1px 2px var(--v5-g-shade); }
+.cc .card .grid-kpi .cc-stat-value { font-size: 23px; font-weight: 650; letter-spacing: -.02em; margin-top: 2px; }
+.cc .card .grid-kpi .cc-stat-label { margin-bottom: 4px; }
+.oh-stat, .oh-graph, .od-card, .cafe-card, .wz-edit, .wz-preview { border-radius: 24px; }
+.oh-stat-value { font-family: var(--font-display); font-weight: 650; letter-spacing: -.03em; }
+.cc .filterbar { border-radius: 18px; }
+.rowmuted { background: var(--cc-c-warn-bg); border-radius: 14px; padding: 12px 14px; box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft); }
+.rowmuted + .rowmuted { margin-top: 8px; }
+
+/* ---------- tables: hairline rows on reading glass ------------------------------ */
+.cc .dtable, .oh-table { border-collapse: separate; border-spacing: 0; margin-top: 0; font-size: 13.5px; }
+.cc .dtable th, .oh-table th, .cc .card .dtable th {
+  background: transparent; border: 0; border-bottom: 1px solid var(--v5-row); border-radius: 0;
+  font: 650 10.5px/1 var(--font-ui); letter-spacing: .07em; text-transform: uppercase; color: var(--v5-faint); padding: 10px 12px; white-space: nowrap; }
+.cc .dtable th:first-child, .cc .dtable th:last-child, .oh-table th:first-child, .oh-table th:last-child { border-left: 0; border-right: 0; border-radius: 0; }
+.cc .dtable td, .oh-table td, .cc .card .dtable td {
+  background: transparent; border: 0; border-bottom: 1px solid var(--v5-row); padding: 12px; line-height: 1.4; }
+.cc .dtable td:first-child, .oh-table td:first-child { border-left: 0; border-radius: 12px 0 0 12px; }
+.cc .dtable td:last-child, .oh-table td:last-child { border-right: 0; border-radius: 0 12px 12px 0; }
+.cc .dtable tbody tr:last-child td, .oh-table tbody tr:last-child td { border-bottom: 0; }
+.cc .dtable tbody tr:hover td, .oh-table tbody tr:hover td { background: var(--v5-g-clear); box-shadow: none; }
+.cc-view > .dtable-wrap, .cc-view > .oh-table-wrap { border-radius: 24px; padding: 8px 10px; }
+
+/* ---------- controls ------------------------------------------------------------ */
+.cc .btn, .modal .btn { border-radius: 12px; font-weight: 700; font-size: 13px;
+  transition: transform .15s ease, background .2s ease, box-shadow .2s ease; }
+.cc .btn-sm, .modal .btn-sm { border-radius: 10px; font-size: 12.5px; }
+.cc .btn-primary, .modal .btn-primary { color: var(--v5-on-accent); border-color: transparent;
+  background: linear-gradient(180deg, rgba(255,255,255,.28) 0%, rgba(255,255,255,0) 52%), linear-gradient(180deg, var(--v5-accent-2), var(--v5-accent));
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.22), inset 0 1px 0 rgba(255,255,255,.45), inset 0 0 10px rgba(255,255,255,.14), 0 4px 12px -6px var(--v5-accent-ring); }
+.cc .btn-primary:hover, .modal .btn-primary:hover { border-color: transparent;
+  background: linear-gradient(180deg, rgba(255,255,255,.32) 0%, rgba(255,255,255,0) 52%), linear-gradient(180deg, var(--v5-accent-2), var(--v5-accent)); }
+.cc .btn-secondary, .modal .btn-secondary { color: var(--v5-text); border-color: transparent;
+  background: linear-gradient(180deg, var(--v5-g-sheen), transparent 70%), var(--v5-g-mid);
+  -webkit-backdrop-filter: blur(10px) saturate(140%); backdrop-filter: blur(10px) saturate(140%);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), inset 0 1px 0 var(--v5-g-rim), inset 0 0 8px var(--v5-g-glow); }
+.cc .btn-secondary:hover, .modal .btn-secondary:hover { border-color: transparent; background: var(--v5-hover); }
+.cc .btn-ghost, .modal .btn-ghost { color: var(--v5-text-2); }
+.cc .btn-ghost:hover, .modal .btn-ghost:hover { background: var(--v5-g-clear); box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft); }
+
+.cc .input, .modal .input, .cc select.input, .cc textarea.input, .oh-date {
+  background-color: var(--v5-g-well); border-color: transparent; border-radius: 12px; color: var(--v5-text);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), inset 0 1px 3px var(--v5-g-shade); }
+.cc .input:focus, .modal .input:focus, .oh-date:focus-within { border-color: transparent;
+  box-shadow: inset 0 0 0 1px var(--v5-accent-ring), 0 0 0 4px var(--v5-accent-tint); }
+.cc .input::placeholder, .modal .input::placeholder { color: var(--v5-faint); }
+/* V5's select arrow. */
+.cc select.input, .modal select.input { padding-right: 34px; font-weight: 650;
+  background-image: linear-gradient(45deg, transparent 50%, var(--v5-muted) 50%), linear-gradient(135deg, var(--v5-muted) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
+.pw-toggle { border-color: transparent; background: var(--v5-g-mid); box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft); }
+
+.cc .badge, .modal .badge { border-radius: 999px; padding: 3px 9px; font-size: 11.5px; font-weight: 650; }
+.cc .badge-ok::before, .cc .badge-open::before, .cc .badge-warn::before, .cc .badge-danger::before, .cc .badge-bad::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .85; flex: none; }
+.cc .chip { border-radius: 8px; border-color: transparent; color: var(--v5-text-2);
+  background: linear-gradient(180deg, var(--v5-g-sheen), transparent 80%), var(--v5-g-mid);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), inset 0 1px 0 var(--v5-g-rim); }
+/* Role chips inside tables: the compact V5 size. */
+.cc .dtable .chip { padding: 3px 9px; border-radius: 7px; font-size: 11.5px; font-weight: 650; }
+.cc .chip-soft { background: linear-gradient(180deg, var(--v5-g-sheen), transparent 80%), var(--v5-g-mid); color: var(--v5-text-2); }
+.cc .chip[aria-pressed="true"], .cc .chiprow .chip[aria-pressed="true"] { color: var(--v5-accent-text); border-radius: 8px;
+  background: linear-gradient(180deg, var(--v5-g-sheen), transparent 70%), var(--v5-accent-tint);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim), inset 0 0 10px var(--v5-g-glow); }
+.seg { border: 0; border-radius: 12px; box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft); }
+.seg-btn { background: var(--v5-g-mid); color: var(--v5-text-2); }
+.seg-btn[aria-pressed="true"] { color: var(--v5-accent-text); background: var(--v5-accent-tint); }
+.oh-tab[aria-current="page"], .wz-tab[aria-current] { color: var(--v5-accent-text); }
+.oh-tab[aria-current="page"]::after { background: var(--v5-accent); }
+.wz-tab[aria-current] { background: var(--v5-accent-tint); box-shadow: inset 0 0 0 1px var(--v5-g-rim); }
+
+/* ---------- Menu Management rows --------------------------------------------- */
+.cc-view .stack > .item { border-bottom: 0; border-radius: 22px; padding: 12px 14px 12px 12px; align-items: center; }
+.cc-view .stack > .item + .item { margin-top: 10px; }
+.cc-view .stack > .item b { font-size: 15px; font-weight: 650; }
+.cc .item-thumb { border-radius: 15px; box-shadow: inset 0 1px 1px rgba(255,255,255,.35), 0 6px 16px -8px rgba(0,0,0,.35); }
+
+/* ---------- My Profile ---------------------------------------------------------- */
+.pf { gap: 18px; }
+.pf-card { border-color: transparent; border-radius: 24px; }
+.pf-name { font-family: var(--font-display); font-size: 28px; font-weight: 700; letter-spacing: -.02em; }
+.pf-facts { gap: 10px; }
+.pf-facts div { padding: 12px 14px; border-radius: 14px; background: var(--v5-g-well);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), inset 0 1px 2px var(--v5-g-shade); }
+.pf-facts dt { font: 650 10.5px/1.2 var(--font-ui); letter-spacing: .07em; text-transform: uppercase; color: var(--v5-faint); margin-bottom: 4px; }
+.pf-facts dd { font-weight: 600; }
+.cc .t-label, .modal .t-label { font-weight: 650; }
+
+/* ---------- dialogs, drawer, toasts ------------------------------------------------ */
+.modal { background: var(--v5-pop); border: 0; border-radius: 24px;
+  -webkit-backdrop-filter: blur(28px) saturate(150%); backdrop-filter: blur(28px) saturate(150%);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), inset 0 1px 0 var(--v5-g-rim), var(--v5-g-shadow); }
+.modal-foot { background: transparent; border-top-color: var(--v5-row); }
+.modalwrap.drawerwrap .modal { border-radius: 24px 0 0 24px; }
+.modalwrap .scrim-fixed { -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+.toast { background: var(--v5-pop); color: var(--v5-text); border-radius: 14px;
+  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  box-shadow: inset 0 0 0 1px var(--v5-g-rim-soft), var(--v5-g-shadow); }
+
+/* ---------- smaller screens: keep the existing layout changes, on glass ---------- */
+@media (max-width: 1023px) {
+  .cc { padding: 10px; background: transparent; }
+  .cc-frame { gap: 12px; }
+  .cc-rail { position: relative; top: 0; height: auto; border-radius: 20px; padding: 8px 10px; }
+  .cc-navbtn[aria-current="page"]::before { display: none; }
+  .cc-main { padding: 0 0 20px; }
+  .cc-top { top: 8px; }
+  .cc-panel { padding: 4px 0 0; }
+}
+@media (max-width: 640px) {
+  .cc-title, .pf-name { font-size: 26px; }
+  .cc-stat-value { font-size: 28px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-navbtn, .cc .btn, .modal .btn { transition: none; }
+}
