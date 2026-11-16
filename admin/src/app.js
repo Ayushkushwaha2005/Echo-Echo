@@ -309,7 +309,7 @@ async function scrOverview() {
      behind it; the rest show as not available to them rather than failing. */
   const when_ = (ok, fn) => (ok ? fn() : Promise.resolve(null));
   await panel(view(), async () => {
-    const [vendors, orders, cases, partners, flags, money, rel] = await Promise.all([
+    const [vendors, orders, cases, partners, flags, money, rel, base] = await Promise.all([
       when_(session.can('cafeterias.manage'), async () => (await quad.vendors({ includeArchived: 'true' })).vendors)
         .then((v) => v ?? (session.can('cafeterias.view') ? quad.vendors().then((x) => x.vendors) : null)),
       when_(session.can('orders.view'), async () => (await quad.orders({ scope: 'all' })).orders),
@@ -321,9 +321,19 @@ async function scrOverview() {
       /* A reliability failure must not blank the overview: it is shown as
          unavailable instead. */
       when_(session.can('platform.view'), () => quad.reliability().catch(() => null)),
+      /* The owner's historical baseline from the offline books, if one is recorded. */
+      when_(session.can('finance.view') || session.can('orders.view'), () => quad.offlineBaseline().catch(() => null)),
     ]);
-    return { vendors, orders, cases, partners, flags, money, rel };
+    /* Live revenue, GMV and fees after each baseline's cutoff, from the same
+       finance summary the cards already use. */
+    const since = {};
+    if (base && money) {
+      const keys = new Set(baselineCutoffs(base));
+      await Promise.all([...keys].map(async (k) => { since[k] = await quad.financeSummary({ from: k }); }));
+    }
+    return { vendors, orders, cases, partners, flags, money, rel, base, since };
   }, (d) => {
+    const f = overviewFigures(d);
     const live = (d.orders || []).filter((o) =>
       ['confirmed', 'preparing', 'ready', 'assigned', 'picked_up'].includes(o.state));
     const missing = d.flags ? Object.entries(d.flags.providers)
@@ -334,7 +344,7 @@ async function scrOverview() {
       <div class="grid-kpi">
         ${d.vendors ? kpi('Cafeterias', d.vendors.filter((v) => v.active).length,
               `${d.vendors.filter((v) => v.active && v.open_now).length} open now`) : kpi('Cafeterias', '—', na)}
-        ${session.can('orders.view') ? kpi('Live orders', live.length, `${d.orders.length} total`) : kpi('Live orders', '—', na)}
+        ${session.can('orders.view') ? kpi('Live orders', live.length, `${f.totalOrders} total`) : kpi('Live orders', '—', na)}
         ${d.cases ? kpi('ID reviews waiting', d.cases.length,
               d.cases.length ? 'within a 24-hour SLA' : 'nothing waiting') : kpi('ID reviews waiting', '—', na)}
         ${d.partners ? kpi('Partner applications', d.partners.length, '') : kpi('Partner applications', '—', na)}
@@ -344,11 +354,13 @@ async function scrOverview() {
           <div class="between"><h2 class="t-label">Money</h2>
             <button type="button" class="btn btn-ghost btn-sm" data-route="finance">Open settlements</button></div>
           <div class="grid-kpi" style="margin-top:10px">
-            ${kpi('GMV today', rupees(d.money.today.gmvPaise), `${d.money.today.orders} order(s)`)}
-            ${kpi('Platform fees today', rupees(d.money.today.platformFeesPaise), 'owner earnings, gross')}
-            ${kpi('ECHO ECHO revenue', rupees(d.money.all.quadNetRevenuePaise), 'all time, net of refunds and gateway fees')}
-            ${kpi('Owed to cafés', rupees(d.money.all.cafeteriaPayablePaise), 'payable now')}
-            ${kpi('Owed to partners', rupees(d.money.all.deliveryPayablePaise), 'earned, not yet paid')}
+            ${f.gmvSince ? kpi('GMV', rupees(f.gmv), `${f.gmvOrders} orders · since ${f.gmvSince}`)
+              : kpi('GMV today', rupees(f.gmv), `${f.gmvOrders} order(s)`)}
+            ${f.feesSince ? kpi('Platform fees', rupees(f.fees), `since ${f.feesSince}`)
+              : kpi('Platform fees today', rupees(f.fees), 'owner earnings, gross')}
+            ${kpi('ECHO ECHO revenue', rupees(f.revenue), 'all time, net of refunds and gateway fees')}
+            ${kpi('Owed to cafés', rupees(f.cafes), 'payable now')}
+            ${kpi('Owed to partners', rupees(f.partners), 'earned, not yet paid')}
             ${kpi('Payouts in flight', d.money.all.payoutsInFlight.count, rupees(d.money.all.payoutsInFlight.amountPaise))}
           </div>
         </section>` : ''}
@@ -381,9 +393,40 @@ async function scrOverview() {
 }
 
 const KPI_ICON = { Cafeterias: 'store', 'Live orders': 'bag', 'ID reviews waiting': 'id', 'Partner applications': 'bike',
-  'GMV today': 'chart', 'Platform fees today': 'wallet', 'ECHO ECHO revenue': 'wallet', 'Owed to cafés': 'store',
+  'GMV today': 'chart', 'Platform fees today': 'wallet', GMV: 'chart', 'Platform fees': 'wallet', 'ECHO ECHO revenue': 'wallet', 'Owed to cafés': 'store',
   'Owed to partners': 'bike', 'Payouts in flight': 'card' };
 const kpi = (label, value, note) => statCard(KPI_ICON[label] || 'grid', label, value, note);
+
+/* The Overview's figures. Where the owner has recorded a historical baseline
+   from the offline books (server: routes/offline-records.js), a card shows that
+   baseline plus only the live activity recorded after its cutoff, so nothing
+   is counted twice; without one, the live figure exactly as before. A figure
+   for a date range (orders, GMV, platform fees) makes its card a running
+   total "since" the range's first day instead of a "today" figure. */
+const shortDate = (ymd) => new Date(`${ymd}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+function baselineCutoffs(base) {
+  const c = base.cumulative || {}, p = base.period || {};
+  return [c.net_revenue?.cutoff, p.orders?.cutoff, p.gmv?.cutoff, p.platform_fees?.cutoff].filter(Boolean);
+}
+function overviewFigures(d) {
+  const c = d.base?.cumulative || {}, p = d.base?.period || {}, since = d.since || {};
+  const run = (r, field) => r.baseline + since[r.cutoff][field];
+  /* Orders under the GMV card: the range's orders plus captured orders after
+     its cutoff when GMV is a running total; today's orders otherwise. */
+  const gmvOrders = p.gmv ? (p.orders ? run(p.orders, 'orders') : since[p.gmv.cutoff].orders)
+    : d.money?.today.orders;
+  return {
+    totalOrders: c.orders ? c.orders.baseline + c.orders.live : (d.orders || []).length,
+    gmv: p.gmv ? run(p.gmv, 'gmvPaise') : d.money?.today.gmvPaise,
+    gmvOrders,
+    gmvSince: p.gmv ? shortDate(p.gmv.periodStart) : null,
+    fees: p.platform_fees ? run(p.platform_fees, 'platformFeesPaise') : d.money?.today.platformFeesPaise,
+    feesSince: p.platform_fees ? shortDate(p.platform_fees.periodStart) : null,
+    revenue: c.net_revenue ? c.net_revenue.baseline + since[c.net_revenue.cutoff].quadNetRevenuePaise : d.money?.all.quadNetRevenuePaise,
+    cafes: c.cafe_payable ? c.cafe_payable.baseline + c.cafe_payable.live : d.money?.all.cafeteriaPayablePaise,
+    partners: c.partner_payable ? c.partner_payable.baseline + c.partner_payable.live : d.money?.all.deliveryPayablePaise,
+  };
+}
 
 const table = (cols, rows) => `
   <div class="dtable-wrap"><table class="dtable">

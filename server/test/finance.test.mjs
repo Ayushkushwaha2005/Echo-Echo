@@ -921,3 +921,51 @@ test('an adjustment is a ledger transaction with a reason, not an edit', async (
   assert.equal(again.body.duplicate, true);
   assert.equal(await balanceOf('cafeteria_payable', s.vendor.id), 9300);
 });
+
+/* ======================================================================
+   The Overview's historical baseline grows only by real activity
+   ======================================================================
+   The owner's figures from the offline books (migration 047) are a
+   baseline the Overview cards add live activity to. A real order, paid
+   through the gateway webhook and delivered with the handoff code, must
+   move every card by exactly its own amounts, and the books themselves
+   (ledger balances, finance summary) must not see the baseline at all. */
+test('the dashboard baseline grows by exactly one real paid and delivered order, and the ledger never sees it', async () => {
+  const { baseline } = await import('../src/routes/offline-records.js');
+  const day = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10);
+  const weekStart = new Date(Date.now() + 5.5 * 3600_000 - 6 * 86400_000).toISOString().slice(0, 10);
+  const owner = await makeUser(pool, { phone: '+919000000000', name: 'Owner', roles: ['platform_owner'] });
+  const rec = (metric, value, start = null) => pool.query(
+    `INSERT INTO offline_record (metric, value, period_start, period_end, source, attested_by)
+     VALUES ($1,$2,$3,$4,'Offline pen-and-paper business records',$5)`, [metric, value, start, day, owner.id]);
+  await rec('orders', 126); await rec('net_revenue', 1243000); await rec('cafe_payable', 891500); await rec('partner_payable', 124000);
+  await rec('orders', 37, weekStart); await rec('gmv', 486000, weekStart); await rec('platform_fees', 18500, weekStart);
+  await new Promise((r) => setTimeout(r, 25));
+
+  const s = await scene();                       // 100.00 food + 5.00 fee + 10.00 delivery = 115.00
+  await pay(s);
+  const partner = await makeUser(pool, { phone: '+919000077777', name: 'Partner', roles: ['delivery_partner'] });
+  await completeDelivery(s, partner);
+
+  const b = await baseline({ finance: true, orders: true });
+  const adm = await as(s.admin);
+  const all = (await adm.get('/admin/finance/summary')).body;
+  const since = (await adm.get(`/admin/finance/summary?from=${encodeURIComponent(b.cumulative.net_revenue.cutoff)}`)).body;
+  const sinceRange = (await adm.get(`/admin/finance/summary?from=${encodeURIComponent(b.period.gmv.cutoff)}`)).body;
+
+  /* Each card: baseline + exactly this order. */
+  assert.equal(b.cumulative.orders.baseline + b.cumulative.orders.live, 127);
+  assert.equal(b.period.orders.baseline + sinceRange.orders, 38);
+  assert.equal(b.period.gmv.baseline + sinceRange.gmvPaise, 486000 + 11500);
+  assert.equal(b.period.platform_fees.baseline + sinceRange.platformFeesPaise, 18500 + 500);
+  assert.equal(b.cumulative.cafe_payable.baseline + b.cumulative.cafe_payable.live, 891500 + 9800);
+  assert.equal(b.cumulative.partner_payable.baseline + b.cumulative.partner_payable.live, 124000 + 1000);
+  assert.equal(b.cumulative.net_revenue.baseline + since.quadNetRevenuePaise, 1243000 + all.quadNetRevenuePaise);
+
+  /* The books are exactly what they were without any baseline. */
+  assert.equal(all.cafeteriaPayablePaise, 9800);
+  assert.equal(all.deliveryPayablePaise, 1000);
+  assert.equal(all.orders, 1);
+  assert.equal(all.gmvPaise, 11500);
+  assert.equal(await balanceOf('cafeteria_payable', s.vendor.id), 9800);
+});

@@ -30,6 +30,7 @@ import supportRoutes from './routes/support.js';
 import assetRoutes from './routes/assets.js';
 import enrolmentRoutes from './routes/enrolment.js';
 import financeRoutes from './routes/finance.js';
+import offlineRecordRoutes from './routes/offline-records.js';
 import walletRoutes from './routes/wallet.js';
 import profileRoutes from './routes/profile.js';
 import trustRoutes from './routes/trust.js';
@@ -400,6 +401,7 @@ export function build() {
     await app.register(assetRoutes);
     await app.register(enrolmentRoutes);
     await app.register(financeRoutes);
+    await app.register(offlineRecordRoutes);
     await app.register(walletRoutes);
     await app.register(profileRoutes);
     await app.register(trustRoutes);

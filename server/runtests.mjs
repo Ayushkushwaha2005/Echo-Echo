@@ -55,6 +55,7 @@ const FILES = [
   ['api', 'test/api.test.mjs'],
   ['api', 'test/menu.test.mjs'],
   ['api', 'test/admin-ops.test.mjs'],
+  ['api', 'test/offline-records.test.mjs'],
   ['e2e', 'test/e2e.test.mjs'],
   ['e2e', 'test/ordering-rules.test.mjs'],
   ['e2e', 'test/boundary-confirm.test.mjs'],
