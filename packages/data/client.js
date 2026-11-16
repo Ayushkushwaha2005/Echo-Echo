@@ -462,10 +462,9 @@ export const quad = {
      for a cafeteria that is not the caller's, and `earnings` reads the
      session's own id — there is no parameter that widens either. */
   financeSummary: (opts) => get('/admin/finance/summary' + qs(opts)),
-  /* Owner-attested figures from the offline books: never part of the ledger. */
-  offlineRecords: () => get('/admin/offline-records'),
-  attestOfflineRecord: (body) => post('/admin/offline-records', body),
-  withdrawOfflineRecord: (id, reason) => post(`/admin/offline-records/${id}/withdraw`, { reason }),
+  /* The Overview's historical baseline (owner-attested figures from the
+     offline books) and the live activity counted after each cutoff. */
+  offlineBaseline: () => get('/admin/offline-records/baseline'),
   financeCafeterias: () => get('/admin/finance/cafeterias'),
   financePartners: () => get('/admin/finance/partners'),
   settlementCentre: () => get('/admin/finance/settlement-centre'),

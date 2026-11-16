@@ -122,3 +122,104 @@ test('a mistake is withdrawn with a reason, never edited or deleted: the databas
   const list = (await o.c.get('/admin/offline-records')).body.records;
   assert.deepEqual(list.map((r) => [r.value, !!r.withdrawn]), [[120, false], [126, true]]);
 });
+
+/* ---------- the Overview baseline: historical figure + live activity after its cutoff ---------- */
+const todayIST = () => new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10);
+const yesterdayIST = () => new Date(Date.now() + 5.5 * 3600_000 - 86400_000).toISOString().slice(0, 10);
+const tick = () => new Promise((r) => setTimeout(r, 25));
+async function placeOrder(vendor, code, { minutesAgo = 0 } = {}) {
+  const customer = await makeUser(pool, { phone: phone(), name: 'Customer ' + code });
+  await pool.query(
+    `INSERT INTO food_order (code, customer_id, vendor_id, fulfilment, state, subtotal_paise, total_paise, created_at)
+     VALUES ($1,$2,$3,'pickup','confirmed',10000,11000, now() - make_interval(mins => $4))`,
+    [code, customer.id, vendor.id, minutesAgo]);
+}
+async function adjust(vendorId, amountPaise, ref, actorId) {
+  const { postAdjustment } = await import('../src/services/ledger.js');
+  const c = await pool.connect();
+  try { await c.query('BEGIN'); await postAdjustment(c, { vendorId, amountPaise, reason: ref, actorId, ref }); await c.query('COMMIT'); }
+  finally { c.release(); }
+}
+
+test('with nothing recorded there is no baseline, so every card keeps its live figure', async () => {
+  const o = await owner();
+  const r = await o.c.get('/admin/offline-records/baseline');
+  assert.equal(r.status, 200);
+  assert.deepEqual([r.body.cumulative, r.body.daily], [{}, {}]);
+});
+
+test('total orders: the baseline plus only the orders placed after its cutoff', async () => {
+  const { makeVendor } = await import('./helpers/db.mjs');
+  const o = await owner();
+  const v = await makeVendor(pool, { name: 'Chai Garam', slug: 'chai-garam' });
+  await placeOrder(v, 'EE-B1', { minutesAgo: 5 });              // in the books already
+  await o.c.post('/admin/offline-records', { metric: 'orders', value: 126, periodEnd: todayIST() });
+  await tick();
+  await placeOrder(v, 'EE-L1'); await placeOrder(v, 'EE-L2');   // live, after the cutoff
+  const b = (await o.c.get('/admin/offline-records/baseline')).body.cumulative.orders;
+  assert.equal(b.baseline, 126);
+  assert.equal(b.live, 2, 'the order before the cutoff is not counted again');
+});
+
+test('owed to cafés: the baseline plus only ledger movement after the cutoff; the real balance is untouched', async () => {
+  const { makeVendor } = await import('./helpers/db.mjs');
+  const o = await owner();
+  const v = await makeVendor(pool, { name: 'Tulips', slug: 'tulips' });
+  await adjust(v.id, 5000, 'before-cutoff', o.u.id);
+  await tick();
+  await o.c.post('/admin/offline-records', { metric: 'cafe_payable', value: 891500, periodEnd: todayIST() });
+  await tick();
+  await adjust(v.id, 2500, 'after-cutoff', o.u.id);
+  const b = (await o.c.get('/admin/offline-records/baseline')).body.cumulative.cafe_payable;
+  assert.deepEqual([b.baseline, b.live], [891500, 2500]);
+  const summary = (await o.c.get('/admin/finance/summary')).body;
+  assert.equal(summary.cafeteriaPayablePaise, 7500, 'the ledger still holds only the real postings');
+});
+
+test('revenue: the baseline plus the finance summary from the cutoff, which leaves out what came before', async () => {
+  const { makeVendor } = await import('./helpers/db.mjs');
+  const o = await owner();
+  const v = await makeVendor(pool, { name: 'Chai Garam', slug: 'chai-garam-2' });
+  await adjust(v.id, 1000, 'rev-before', o.u.id);
+  await tick();
+  await o.c.post('/admin/offline-records', { metric: 'net_revenue', value: 1243000, periodEnd: todayIST() });
+  await tick();
+  await adjust(v.id, 400, 'rev-after', o.u.id);
+  const b = (await o.c.get('/admin/offline-records/baseline')).body.cumulative.net_revenue;
+  const since = (await o.c.get(`/admin/finance/summary?from=${encodeURIComponent(b.cutoff)}`)).body;
+  const all = (await o.c.get('/admin/finance/summary')).body;
+  assert.equal(since.adjustmentsPaise, 400, 'only the posting after the cutoff');
+  assert.equal(all.adjustmentsPaise, 1400, 'the all-time figure is unchanged');
+  assert.equal(b.baseline + since.quadNetRevenuePaise, 1243000 + 400);
+});
+
+test("a day's figures apply on that day only; withdrawn records are ignored and the latest record wins", async () => {
+  const o = await owner();
+  const { baseline } = await import('../src/routes/offline-records.js');
+  await o.c.post('/admin/offline-records', { metric: 'gmv', value: 486000, periodStart: todayIST(), periodEnd: todayIST() });
+  await o.c.post('/admin/offline-records', { metric: 'platform_fees', value: 18500, periodStart: yesterdayIST(), periodEnd: yesterdayIST() });
+  const wrong = (await o.c.post('/admin/offline-records', { metric: 'orders', value: 999, periodEnd: todayIST() })).body.id;
+  await o.c.post(`/admin/offline-records/${wrong}/withdraw`, { reason: 'typo' });
+  await tick();
+  await o.c.post('/admin/offline-records', { metric: 'net_revenue', value: 100, periodEnd: todayIST() });
+  await tick();
+  await o.c.post('/admin/offline-records', { metric: 'net_revenue', value: 1243000, periodEnd: todayIST() });
+  const b = await baseline({ finance: true, orders: true });
+  assert.equal(b.daily.gmv.baseline, 486000);
+  assert.equal(b.daily.platform_fees, undefined, "yesterday's fees are not today's");
+  assert.equal(b.cumulative.orders, undefined, 'the withdrawn record is ignored');
+  assert.equal(b.cumulative.net_revenue.baseline, 1243000);
+  const yesterday = await baseline({ finance: true, orders: true, today: yesterdayIST() });
+  assert.equal(yesterday.daily.platform_fees.baseline, 18500);
+});
+
+test('the baseline shows each administrator only what they may see', async () => {
+  const o = await owner();
+  await o.c.post('/admin/offline-records', ORDERS);
+  await o.c.post('/admin/offline-records', { metric: 'net_revenue', value: 1243000, periodEnd: '2026-11-15' });
+  const ordersOnly = (await (await admin(['orders.view'])).c.get('/admin/offline-records/baseline')).body;
+  assert.deepEqual(Object.keys(ordersOnly.cumulative), ['orders']);
+  const financeOnly = (await (await admin(['finance.view'])).c.get('/admin/offline-records/baseline')).body;
+  assert.deepEqual(Object.keys(financeOnly.cumulative), ['net_revenue']);
+  assert.equal((await (await admin(['students.view'])).c.get('/admin/offline-records/baseline')).status, 403);
+});

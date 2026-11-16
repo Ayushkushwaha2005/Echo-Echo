@@ -11,9 +11,12 @@
    this table. A payable recorded here is a claim to be reconciled, not a
    balance anything can pay out.
 
-   Figures are listed one by one with their periods and never summed: two
-   records can overlap (all orders to 15 Nov, and the orders of 15 Nov), and
-   adding them would count the same business twice.
+   The Overview cards show a baseline plus live activity (GET .../baseline):
+   the latest current record of each figure, and only the activity recorded
+   after that record's cutoff, so nothing is counted twice. The cutoff is
+   the end of the day the figure runs to (India time), or the moment it was
+   recorded if that is earlier: the books cannot hold what happened after
+   they were written up. Records are never added to one another.
 
    Recording and withdrawing are the owner's alone (records.attest, which is
    owner-only), need a recent sign-in confirmation, run atomically with their
@@ -93,7 +96,60 @@ const SELECT = `
     JOIN app_user a ON a.id = r.attested_by
     LEFT JOIN app_user w ON w.id = r.withdrawn_by`;
 
+/* Figures that run "up to" a date, and figures for one day (shown on the
+   Overview's "today" cards on that day only). */
+const CUMULATIVE = ['orders', 'net_revenue', 'cafe_payable', 'partner_payable'];
+const DAILY = ['orders', 'gmv', 'platform_fees'];
+const PAYABLE_ACCOUNT = { cafe_payable: 'cafeteria_payable', partner_payable: 'delivery_payable' };
+const CUTOFF = `LEAST(r.attested_at, ((r.period_end + 1)::timestamp AT TIME ZONE 'Asia/Kolkata'))`;
+
+const mayDo = (actor, cap) => { try { authorize(actor, cap); return true; } catch { return false; } };
+
+/** The Overview's historical baseline, with the live part the server counts.
+    Exported for the tests. `finance` and `orders` say what the caller may see. */
+export async function baseline({ finance, orders, today = todayIST() }) {
+  const visible = (m) => (m === 'orders' ? orders : finance);
+  const pick = async (where, params) => (await q(
+    `SELECT DISTINCT ON (r.metric) r.id, r.metric, r.value, ${CUTOFF} AS cutoff
+       FROM offline_record r
+      WHERE r.withdrawn_at IS NULL AND ${where}
+      ORDER BY r.metric, r.attested_at DESC`, params)).rows;
+  const shape = (r) => ({ recordId: r.id, baseline: Number(r.value), cutoff: new Date(r.cutoff).toISOString() });
+
+  const cumulative = {};
+  for (const r of await pick(`r.period_start IS NULL AND r.metric = ANY($1)`, [CUMULATIVE])) {
+    if (!visible(r.metric)) continue;
+    const item = shape(r);
+    if (r.metric === 'orders') {
+      item.live = (await one(`SELECT count(*)::int AS n FROM food_order WHERE created_at > $1`, [r.cutoff])).n;
+    } else if (PAYABLE_ACCOUNT[r.metric]) {
+      item.live = Number((await one(
+        `SELECT COALESCE(sum(CASE WHEN a.normal = 'credit' THEN -e.amount_paise ELSE e.amount_paise END), 0)::bigint AS p
+           FROM ledger_entry e JOIN ledger_account a ON a.id = e.account_id
+          WHERE a.kind = $1 AND e.created_at > $2`, [PAYABLE_ACCOUNT[r.metric], r.cutoff])).p);
+    }
+    cumulative[r.metric] = item;
+  }
+  const daily = {};
+  if (finance) {
+    for (const r of await pick(`r.period_start = $1::date AND r.period_end = $1::date AND r.metric = ANY($2)`, [today, DAILY])) {
+      daily[r.metric] = shape(r);
+    }
+  }
+  return { today, cumulative, daily,
+    basis: 'Baseline: owner-attested figures from the offline books. Live: activity recorded after each cutoff.' };
+}
+
 export default async function offlineRecordRoutes(app) {
+  /* What the Overview cards add their live figures to. Revenue, GMV and fees
+     since a cutoff come from the existing finance summary (?from=cutoff). */
+  app.get('/admin/offline-records/baseline', async (req) => {
+    const finance = mayDo(req.actor, 'finance.read_all');
+    const orders = mayDo(req.actor, 'order.read_all');
+    if (!finance && !orders) authorize(req.actor, 'finance.read_all');
+    return baseline({ finance, orders });
+  });
+
   app.get('/admin/offline-records', async (req) => {
     authorize(req.actor, 'finance.read_all');
     const { rows } = await q(`${SELECT} ORDER BY (r.withdrawn_at IS NOT NULL), r.period_end DESC, r.attested_at DESC`);
