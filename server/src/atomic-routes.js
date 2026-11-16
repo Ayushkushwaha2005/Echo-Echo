@@ -25,6 +25,7 @@ export const ATOMIC_ROUTES = new Set([
   'POST /admin/campuses/:id/points/import', 'POST /admin/campuses/:id/points/confirm', 'POST /admin/campuses/:id/boundaries/import',
   'PATCH /admin/me', 'POST /admin/me/photo', 'DELETE /admin/me/photo', 'POST /admin/me/sessions/revoke',
   'POST /support/cases/:id/state', 'POST /admin/reviews/:id/hide',
+  'POST /admin/offline-records', 'POST /admin/offline-records/:id/withdraw',
 ]);
 
 export function installAtomicRoutes(app) {

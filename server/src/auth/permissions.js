@@ -96,6 +96,9 @@ export const PERMISSIONS = {
   /* ---- finance ---- */
   'finance.view':   { group: 'Payments', label: 'View payments, the books and reconciliation', caps: ['finance.read_all'] },
   'finance.manage': { group: 'Settlements', label: 'Change pricing, run payouts and adjust balances', caps: ['pricing.manage', 'payout.manage', 'finance.adjust'] },
+  /* The owner's own attestation of figures from the offline (paper) books.
+     Reading them needs finance.view; recording or withdrawing one is the owner's alone. */
+  'records.attest': { group: 'Payments', label: 'Record or withdraw owner-attested figures from the offline books', caps: ['offline_record.attest'], ownerOnly: true },
 
   /* ---- administrator access ---- */
   'admins.view':             { group: 'Access management', label: 'See administrators, their permissions and activity', caps: ['admin.read'] },

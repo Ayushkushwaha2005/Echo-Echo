@@ -309,7 +309,7 @@ async function scrOverview() {
      behind it; the rest show as not available to them rather than failing. */
   const when_ = (ok, fn) => (ok ? fn() : Promise.resolve(null));
   await panel(view(), async () => {
-    const [vendors, orders, cases, partners, flags, money, rel] = await Promise.all([
+    const [vendors, orders, cases, partners, flags, money, rel, offline] = await Promise.all([
       when_(session.can('cafeterias.manage'), async () => (await quad.vendors({ includeArchived: 'true' })).vendors)
         .then((v) => v ?? (session.can('cafeterias.view') ? quad.vendors().then((x) => x.vendors) : null)),
       when_(session.can('orders.view'), async () => (await quad.orders({ scope: 'all' })).orders),
@@ -321,8 +321,10 @@ async function scrOverview() {
       /* A reliability failure must not blank the overview: it is shown as
          unavailable instead. */
       when_(session.can('platform.view'), () => quad.reliability().catch(() => null)),
+      /* The owner-attested offline figures: optional, so a failure hides the section only. */
+      when_(session.can('finance.view'), () => quad.offlineRecords().catch(() => null)),
     ]);
-    return { vendors, orders, cases, partners, flags, money, rel };
+    return { vendors, orders, cases, partners, flags, money, rel, offline };
   }, (d) => {
     const live = (d.orders || []).filter((o) =>
       ['confirmed', 'preparing', 'ready', 'assigned', 'picked_up'].includes(o.state));
@@ -352,6 +354,7 @@ async function scrOverview() {
             ${kpi('Payouts in flight', d.money.all.payoutsInFlight.count, rupees(d.money.all.payoutsInFlight.amountPaise))}
           </div>
         </section>` : ''}
+      ${d.offline ? offlineRecordsSection(d.offline) : ''}
       ${d.rel && (!d.rel.ok || d.rel.summary.warnings) ? `
         <section class="card card-pad" style="margin-top:18px">
           <div class="between"><h2 class="t-label">Alerts</h2>
@@ -384,6 +387,41 @@ const KPI_ICON = { Cafeterias: 'store', 'Live orders': 'bag', 'ID reviews waitin
   'GMV today': 'chart', 'Platform fees today': 'wallet', 'ECHO ECHO revenue': 'wallet', 'Owed to cafés': 'store',
   'Owed to partners': 'bike', 'Payouts in flight': 'card' };
 const kpi = (label, value, note) => statCard(KPI_ICON[label] || 'grid', label, value, note);
+
+/* Owner-attested figures from the offline (paper) books: shown apart from the
+   live Money figures, each with its period and source, and never added up,
+   because two records can cover the same business. */
+const OFFLINE_METRICS = [['orders', 'Orders'], ['gmv', 'Gross order value (GMV)'], ['platform_fees', 'Platform fees'],
+  ['net_revenue', 'ECHO ECHO revenue'], ['cafe_payable', 'Owed to cafés'], ['partner_payable', 'Owed to delivery partners']];
+const offlineValue = (r) => (r.unit === 'paise' ? rupees(r.value) : Number(r.value).toLocaleString('en-IN'));
+const offlinePeriod = (r) => (!r.periodStart ? `Up to ${fmtDate(r.periodEnd)}`
+  : r.periodStart === r.periodEnd ? fmtDate(r.periodEnd) : `${fmtDate(r.periodStart)} – ${fmtDate(r.periodEnd)}`);
+function offlineRecordsSection(d) {
+  const owner = session.isOwner;
+  const current = d.records.filter((r) => !r.withdrawn);
+  const withdrawn = d.records.filter((r) => r.withdrawn);
+  return `
+    <section class="card card-pad" style="margin-top:18px">
+      <div class="between"><h2 class="t-label">Offline records</h2>
+        ${owner ? '<button type="button" class="btn btn-secondary btn-sm" data-act="attestOffline">Record a figure from the books</button>' : ''}</div>
+      <p class="t-xs muted" style="margin:2px 0 12px">${esc(d.basis)} Each figure is listed with its own period and is not added to any other.</p>
+      ${current.length ? table(['Figure', 'Value', 'Period', 'Café / partner', 'Source', 'Recorded by', ''],
+        current.map((r) => [
+          esc(r.label),
+          `<b>${esc(offlineValue(r))}</b>${['cafe_payable', 'partner_payable'].includes(r.metric) ? ' <span class="badge badge-warn">not reconciled</span>' : ''}`,
+          esc(offlinePeriod(r)),
+          esc(r.counterparty || '—'),
+          `${esc(r.source)}${r.sourceReference ? `<div class="t-xs muted">${esc(r.sourceReference)}</div>` : ''}${r.note ? `<div class="t-xs muted">${esc(r.note)}</div>` : ''}`,
+          `${esc(r.attestedBy)}<div class="t-xs muted">${esc(fmtDateTime(r.attestedAt))}</div>`,
+          owner ? `<button type="button" class="btn btn-ghost btn-sm" data-act="withdrawOffline" data-id="${esc(r.id)}">Withdraw</button>` : '',
+        ]))
+        : '<p class="t-sm muted">No figures from the offline books have been recorded.</p>'}
+      ${withdrawn.length ? `<details style="margin-top:12px"><summary class="t-sm muted">Withdrawn records (${withdrawn.length})</summary>
+        ${table(['Figure', 'Value', 'Period', 'Withdrawn by', 'Reason'], withdrawn.map((r) => [
+          esc(r.label), esc(offlineValue(r)), esc(offlinePeriod(r)),
+          `${esc(r.withdrawn.by)}<div class="t-xs muted">${esc(fmtDateTime(r.withdrawn.at))}</div>`, esc(r.withdrawn.reason)]))}</details>` : ''}
+    </section>`;
+}
 
 const table = (cols, rows) => `
   <div class="dtable-wrap"><table class="dtable">
@@ -2386,6 +2424,30 @@ const ACTIONS = {
     (d) => quad.resolveReviewReport(t.dataset.id, d.resolution)),
   hideReview: (t) => modal('Hide review', `${textarea('reason', 'Reason')}<p class="t-xs faint">Hidden reviews stop counting towards ratings. The text is kept, unedited, for the record.</p>`,
     (d) => quad.hideReview(t.dataset.id, true, d.reason)),
+
+  /* ---- owner-attested figures from the offline books ---- */
+  attestOffline: () => modal('Record a figure from the offline books', `
+      ${select('metric', 'Figure', OFFLINE_METRICS)}
+      ${field('value', 'Value (₹ for amounts, a count for orders)', '', 'number')}
+      <div class="formrow">${field('periodStart', 'From (optional)', '', 'date')}${field('periodEnd', 'Up to and including', '', 'date')}</div>
+      ${field('counterparty', 'Café or delivery partner (for an amount owed, optional)')}
+      ${field('source', 'Source', 'Offline pen-and-paper business records')}
+      ${field('sourceReference', 'Where in the books (book, page; optional)')}
+      ${textarea('note', 'Note (optional)')}
+      <label class="perm-row"><input type="checkbox" name="confirm" required>
+        <span>I confirm this figure is copied from ECHO ECHO's offline books. It is recorded as my attestation, is not added to the ledger, and pays no one.</span></label>`,
+    (d) => {
+      const raw = Number(d.value);
+      const value = d.metric === 'orders' ? raw : Math.round(raw * 100);
+      return quad.attestOfflineRecord({
+        metric: d.metric, value, periodStart: d.periodStart || null, periodEnd: d.periodEnd,
+        counterparty: d.counterparty, source: d.source, sourceReference: d.sourceReference, note: d.note,
+      });
+    }, 'Each record keeps its source, its period and who recorded it. A figure cannot be edited later: withdraw it and record a corrected one.',
+    { submitLabel: 'Record figure' }),
+  withdrawOffline: (t) => modal('Withdraw this record', `${textarea('reason', 'Why is it withdrawn?')}
+      <p class="t-xs faint">The record stays visible as withdrawn, with your name, the time and this reason.</p>`,
+    (d) => quad.withdrawOfflineRecord(t.dataset.id, d.reason), '', { submitLabel: 'Withdraw record' }),
 
   /* ---- administrators ---- */
   newAdminInvite: async (t) => {

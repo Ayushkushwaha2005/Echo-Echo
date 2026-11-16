@@ -366,7 +366,7 @@ export async function truncateAll(pool) {
 
 async function truncateOnce(pool) {
   await pool.query(`
-    TRUNCATE audit_log, notification, support_message, support_case,
+    TRUNCATE offline_record, audit_log, notification, support_message, support_case,
              refund_allocation, refund,
              ledger_entry, ledger_txn, ledger_account,
              payout, payout_batch, payout_destination,
