@@ -154,6 +154,10 @@ body::after { content: ""; position: fixed; inset: 0; z-index: -2; pointer-event
 .cc-frame { background: transparent; border: 0; box-shadow: none; border-radius: 0; gap: 18px; min-height: calc(100dvh - 28px); }
 .cc-rail { border-right: 0; border-radius: 30px; top: 14px; height: calc(100dvh - 28px); padding: 18px 12px 14px; gap: 14px; }
 .cc-brand { padding: 0 6px 4px; }
+/* The whole logo, never squeezed: the rail is a flex column, and with the collapsed
+   rail's overflow: hidden the brand row could shrink to nothing on a short window. */
+.cc-brand { flex: none; }
+.cc-collapsed .cc-brand { justify-content: center; }
 .cc-brand-name { font-family: var(--font-display); font-weight: 800; font-size: 15px; letter-spacing: .04em; color: var(--v5-text); }
 .cc-navlabel { font: 650 10.5px/1 var(--font-ui); letter-spacing: .09em; text-transform: uppercase; color: var(--v5-faint); padding: 10px 10px 7px; }
 .cc-nav { gap: 6px; }

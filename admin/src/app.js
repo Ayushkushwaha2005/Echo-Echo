@@ -16,7 +16,7 @@ import {
   vendorVM, EmptyState, NotConfigured, Loading, ErrorState, signOut, when, ORDER_LABEL, adminReauth, quietly,
 } from '../../packages/ui/runtime.js';
 import { esc, toggleTheme, restoreTheme, Mark } from '../../packages/ui/kit.js';
-import { lockup, mark } from '../../brand/logo.js';
+import { lockup, logo } from '../../brand/logo.js';
 import { API_BASE, ApiError } from '../../packages/data/client.js';
 import { ORDER_TABS, TAB_STATE, orderActions, avatarFor, chartGeometry } from '../../packages/ui/order-view.js';
 import { qrSvg, groupKey } from '../../packages/ui/admin-enrol.js';
@@ -154,7 +154,7 @@ function render() {
       <div class="cc-frame">
         <aside class="cc-rail" aria-label="Campus Control">
           <div class="cc-brand">
-            ${mark({ size: 34 })}
+            ${logo({ size: 40, alt: '', className: 'brand-logo brand-logo-nav', eager: true })}
             <span class="cc-brand-name">ECHO ECHO ADMIN</span>
           </div>
           <nav class="cc-nav" aria-label="Pages">
