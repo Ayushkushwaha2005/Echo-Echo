@@ -309,13 +309,12 @@ async function scrOverview() {
      behind it; the rest show as not available to them rather than failing. */
   const when_ = (ok, fn) => (ok ? fn() : Promise.resolve(null));
   await panel(view(), async () => {
-    const [vendors, orders, cases, partners, flags, money, rel, base] = await Promise.all([
+    const [vendors, orders, cases, partners, money, rel, base] = await Promise.all([
       when_(session.can('cafeterias.manage'), async () => (await quad.vendors({ includeArchived: 'true' })).vendors)
         .then((v) => v ?? (session.can('cafeterias.view') ? quad.vendors().then((x) => x.vendors) : null)),
       when_(session.can('orders.view'), async () => (await quad.orders({ scope: 'all' })).orders),
       when_(session.can('students.view'), async () => (await quad.verificationQueue('pending')).cases),
       when_(session.can('partners.view'), async () => (await quad.partners('pending')).partners),
-      when_(session.can('platform.view'), () => quad.flags()),
       when_(session.can('finance.view'), () => Promise.all([quad.financeSummary({ from: startOfToday() }), quad.financeSummary()])
         .then(([today, all]) => ({ today, all }))),
       /* A reliability failure must not blank the overview: it is shown as
@@ -331,13 +330,11 @@ async function scrOverview() {
       const keys = new Set(baselineCutoffs(base));
       await Promise.all([...keys].map(async (k) => { since[k] = await quad.financeSummary({ from: k }); }));
     }
-    return { vendors, orders, cases, partners, flags, money, rel, base, since };
+    return { vendors, orders, cases, partners, money, rel, base, since };
   }, (d) => {
     const f = overviewFigures(d);
     const live = (d.orders || []).filter((o) =>
       ['confirmed', 'preparing', 'ready', 'assigned', 'picked_up'].includes(o.state));
-    const missing = d.flags ? Object.entries(d.flags.providers)
-      .filter(([, v]) => !v.configured).map(([k]) => k) : [];
     const na = 'not in your permissions';
     d.orders ||= [];
     return `
@@ -371,15 +368,6 @@ async function scrOverview() {
           ${d.rel.checks.filter((c) => !c.ok).map((c) => `
             <div class="rowmuted"><span class="badge ${c.severity === 'error' ? 'badge-danger' : 'badge-warn'}">${
               c.severity === 'error' ? 'error' : 'warning'}</span> ${esc(c.label)}: ${esc(c.detail)}</div>`).join('')}
-        </section>` : ''}
-      ${missing.length ? `
-        <section class="card card-pad" style="margin-top:18px">
-          <h2 class="t-label">Not configured on this server</h2>
-          <p class="t-sm muted">
-            These integrations have no credentials, so the features that depend on them
-            are unavailable rather than degraded. They are not errors.
-          </p>
-          <div class="chiprow">${missing.map((m) => `<span class="chip chip-soft">${esc(m)}</span>`).join('')}</div>
         </section>` : ''}
       <section class="card card-pad" style="margin-top:18px">
         <h2 class="t-label">Recent orders</h2>
@@ -1602,6 +1590,8 @@ async function scrPlatform() {
             ${v.configured ? 'configured' : 'not configured'}</span>
         </div>`).join('')}
       <p class="t-xs faint" style="margin-top:8px">
+        An integration marked not configured has no credentials on this server, so the features
+        that depend on it are unavailable rather than degraded. It is not an error.
         Credentials live in server environment variables and never reach this page.
       </p>
     </section>
