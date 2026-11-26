@@ -3098,7 +3098,7 @@ const SiteHeader = () => {
   const count = cartCount();
   return `<header class="site-head"><div class="site-head-in">
     <button class="site-brand" data-act="go" data-route="${signedIn() ? 'home' : 'welcome'}" aria-label="${BRAND} home">
-      ${BrandLogo({ size: 40 })}</button>
+      ${BrandLogo({ size: 56 })}</button>
     <nav class="site-nav" aria-label="Main">
       <button data-act="go" data-route="home" ${at('home')}>Home</button>
       <button data-act="go" data-route="cafes" ${at('cafes', 'menu')}>Cafés</button>

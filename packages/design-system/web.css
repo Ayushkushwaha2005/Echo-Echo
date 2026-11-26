@@ -380,13 +380,17 @@ textarea.input { resize: vertical; min-height: 72px; }
 .site { min-height: 100dvh; display: flex; flex-direction: column; background: var(--bg); }
 
 /* ---------- header ------------------------------------------------------- */
+/* The header's height, shared with what sits below it (sticky asides,
+   scroll offsets). Sized for the logo: 46 px on phones, 56 px on desktop. */
+:root { --site-head-h: 64px; }
+@media (min-width: 1024px) { :root { --site-head-h: 76px; } }
 .site-head {
   position: sticky; top: 0; z-index: var(--z-nav);
   background: var(--bg);
   border-bottom: 1px solid var(--line);
 }
 .site-head-in {
-  max-width: 1180px; margin: 0 auto; height: 60px;
+  max-width: 1180px; margin: 0 auto; height: var(--site-head-h);
   display: flex; align-items: center; gap: var(--s-6);
   padding: 0 var(--s-4);
 }
@@ -468,7 +472,7 @@ textarea.input { resize: vertical; min-height: 72px; }
 }
 
 @media (min-width: 1024px) {
-  .site-head-in { height: 68px; padding: 0 var(--s-6); }
+  .site-head-in { padding: 0 var(--s-6); }
   .site-nav { display: flex; }
   .site .bottomnav { display: none; }
   .site .composer { bottom: 0; }
@@ -484,7 +488,7 @@ textarea.input { resize: vertical; min-height: 72px; }
   .menugrid { grid-template-columns: 1fr 1fr; column-gap: var(--s-7); }
   .menugrid > .item:nth-last-child(2):nth-child(odd) { border-bottom: 0; }
   .site-split { grid-template-columns: minmax(0, 1fr) 360px; gap: var(--s-6); }
-  .site-split > aside { position: sticky; top: calc(68px + var(--s-5)); }
+  .site-split > aside { position: sticky; top: calc(var(--site-head-h) + var(--s-5)); }
   .site-split > aside .actionbar { position: static; background: none; padding: 0; }
   .site .actionbar.cart-mobile { display: none; }
 
@@ -660,8 +664,28 @@ textarea.input { resize: vertical; min-height: 72px; }
    the accent as the echo of the first (brand/logo.js, wordmark). */
 .brand-name { font-family: var(--font-brand); font-weight: 800; letter-spacing: -.04em; line-height: 1; color: var(--text); white-space: nowrap; }
 .brand-name .brand-echo { color: var(--accent-text); }
+/* The navbar lockup: the logo is the hero of the header, the name sized to
+   match its weight. Square, object-fit: contain, so never stretched or cut;
+   the 320 px source keeps it sharp at 3x. */
+.site-brand .brand-lockup { gap: 11px; }
+.site-brand .brand-lockup .brand-logo-nav { width: 46px; height: 46px; border-radius: 14px; box-shadow: 0 0 0 1px var(--line); }
 .site-brand .brand-name { font-size: 1.375rem; }
-@media (max-width: 480px) { .site-brand .brand-name { font-size: 1.25rem; } }
+@media (min-width: 640px) {
+  .site-brand .brand-lockup .brand-logo-nav { width: 50px; height: 50px; }
+  .site-brand .brand-name { font-size: 1.5rem; }
+}
+@media (min-width: 1024px) {
+  .site-brand { margin-right: var(--s-4); }
+  .site-brand .brand-lockup { gap: 13px; }
+  .site-brand .brand-lockup .brand-logo-nav { width: 56px; height: 56px; border-radius: 16px; }
+  .site-brand .brand-name { font-size: 1.625rem; }
+}
+@media (max-width: 359px) {
+  .site-brand .brand-lockup .brand-logo-nav { width: 40px; height: 40px; border-radius: 12px; }
+  .site-brand .brand-name { font-size: 1.2rem; }
+}
+.site-brand .brand-logo-custom { height: 46px; }
+@media (min-width: 1024px) { .site-brand .brand-logo-custom { height: 56px; } }
 .rail-brand .brand-name { font-size: 1.125rem; }
 /* Phones: the hero, then the sign-in card. */
 .welcome-fold { display: flex; flex-direction: column; }
@@ -992,7 +1016,7 @@ textarea.input { resize: vertical; min-height: 72px; }
    dish: display face, a soft accent pill, the item count, and a rule that
    carries the eye across. Sections are separated by space and a hairline.
    Colours are theme tokens, so light and dark both work. */
-.menusec { display: flex; flex-direction: column; gap: var(--s-2); scroll-margin-top: calc(var(--nav-h, 64px) + 12px); }
+.menusec { display: flex; flex-direction: column; gap: var(--s-2); scroll-margin-top: calc(var(--site-head-h, 64px) + 12px); }
 .menusec + .menusec { border-top: 1px solid var(--line); padding-top: var(--s-5); margin-top: var(--s-1); }
 .menucat { display: flex; align-items: center; gap: 10px; margin: 0 0 var(--s-1); min-width: 0; }
 .menucat::after { content: ''; flex: 1 1 24px; height: 1px; min-width: 24px;
