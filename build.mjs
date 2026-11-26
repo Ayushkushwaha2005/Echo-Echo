@@ -77,10 +77,11 @@ for (const dir of ['packages', 'brand', ...SURFACES]) {
   cpSync(join(root, dir), join(staging, dir), {
     recursive: true,
     /* brand/qr holds the print artwork for the poster, not site assets. */
-    /* The logo's original is the 200 KB master the web sizes are made from,
-       not a site asset. */
+    /* The logo's original is the master the web sizes are made from, and
+       brand/logo/history keeps earlier approved artwork: neither is a site asset. */
     filter: (src) => !PROTOTYPE_MODULES.some((m) => src.endsWith(m)) && !/[\\/]brand[\\/]qr(?:[\\/]|$)/.test(src)
-      && !/echoecho-logo-original\.jpeg$/.test(src),
+      && !/echoecho-logo-original\.(?:jpe?g|png)$/.test(src)
+      && !/[\\/]brand[\\/]logo[\\/]history(?:[\\/]|$)/.test(src),
   });
 }
 for (const surface of SURFACES) {

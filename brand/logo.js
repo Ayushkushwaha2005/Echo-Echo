@@ -1,8 +1,9 @@
 /* ==========================================================================
    ECHO ECHO — THE LOGO
 
-   The owner-approved artwork is brand/logo/echoecho-logo-original.jpeg,
-   kept byte-for-byte. Every file this module points at was derived from it
+   The owner-approved artwork is brand/logo/echoecho-logo-original.png
+   (the v2 cyan artwork, Nov 2026), kept byte-for-byte; the v1 original is
+   kept for the record in brand/logo/history/ and is not used by the site. Every file this module points at was derived from it
    by tools/logo-assets.py: resizes of the whole logo, and resizes of ONE
    square crop of it (the chef's head and hat) for sizes where the whole
    logo cannot be read, such as favicons and a 28 px mark. Nothing is
